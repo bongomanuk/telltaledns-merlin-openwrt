@@ -139,6 +139,8 @@ pub(crate) fn device_name(src: &Sources, ip: [u8; 16]) -> Option<String> {
                     .find_map(|t| t.get(&v4).and_then(|l| l.hostname.clone()))
             })
     })
+    // Loopback is the router itself: dnsmasq's own lookups have no device and no MAC.
+    .or_else(|| ip.is_loopback().then(|| "router (dnsmasq)".to_owned()))
 }
 
 /// The API backend over the server's shared state.
@@ -1201,6 +1203,16 @@ impl Backend for ApiBackend {
                 .top_names_in_group(k, hour(h), gi, limit);
         Ok(tops
             .into_iter()
+            // The router's own lookups come from loopback and are not a device. Keep
+            // them out of "top clients"; the query log still shows them as the router.
+            .filter(|t| {
+                !matches!(kind, TopKind::Clients)
+                    || !t
+                        .key
+                        .parse::<IpAddr>()
+                        .map(|ip| ip.is_loopback())
+                        .unwrap_or(false)
+            })
             .map(|t| {
                 let (name, groups) = self.client_labels(kind, &t.key);
                 TopItem {
@@ -1231,6 +1243,16 @@ impl Backend for ApiBackend {
         };
         drop(agg);
         tops.into_iter()
+            // The router's own lookups come from loopback and are not a device. Keep
+            // them out of "top clients"; the query log still shows them as the router.
+            .filter(|t| {
+                !matches!(kind, TopKind::Clients)
+                    || !t
+                        .key
+                        .parse::<IpAddr>()
+                        .map(|ip| ip.is_loopback())
+                        .unwrap_or(false)
+            })
             .map(|t| {
                 let (name, groups) = self.client_labels(kind, &t.key);
                 TopItem {

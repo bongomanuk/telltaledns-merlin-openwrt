@@ -898,12 +898,16 @@ impl Pipeline {
         if let Some(mac) = mac
             && st.policy.clients.trusts_mac_from(peer)
         {
-            match crate::devices::ip_of_mac(&self.router_leases.load(), mac) {
-                Some(ip) => {
-                    tracing::debug!(mac = ?mac, %ip, "client MAC from dnsmasq, using its lease");
-                    peer = IpAddr::V4(ip);
-                }
-                None => tracing::debug!(mac = ?mac, "client MAC from dnsmasq has no lease"),
+            // A lease first, then the kernel neighbor table: a device with a static
+            // address has no lease, but the router still knows its MAC.
+            if let Some(ip) = crate::devices::ip_of_mac(&self.router_leases.load(), mac) {
+                tracing::debug!(mac = ?mac, %ip, "client MAC from dnsmasq, using its lease");
+                peer = IpAddr::V4(ip);
+            } else if let Some(ip) = self.neighbors.ip_of_mac(mac) {
+                tracing::debug!(mac = ?mac, %ip, "client MAC from dnsmasq, using the neighbor table");
+                peer = ip;
+            } else {
+                tracing::debug!(mac = ?mac, "client MAC from dnsmasq is in no lease and no neighbor entry");
             }
         }
         oc.client_ip = Some(peer);

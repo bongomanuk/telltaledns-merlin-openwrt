@@ -77,6 +77,7 @@ fi
 cp "$here/telltale.gz" "$dest/telltale.gz"
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
+cp "$here/telltale_icon.png" "$dest/telltale_icon.png"
 chmod 755 "$dest/ui.sh"
 chmod 644 "$dest/telltale.asp"
 

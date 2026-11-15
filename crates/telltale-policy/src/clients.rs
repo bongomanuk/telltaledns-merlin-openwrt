@@ -308,6 +308,16 @@ impl Neighbors {
         self.map.load().get(&ip).copied()
     }
 
+    /// The address this MAC had in the last kernel read. The reverse of [`get`], for a
+    /// device whose DHCP lease is gone but whose ARP entry is still there.
+    pub fn ip_of_mac(&self, mac: [u8; 6]) -> Option<IpAddr> {
+        self.map
+            .load()
+            .iter()
+            .find(|(_, m)| **m == mac)
+            .map(|(ip, _)| *ip)
+    }
+
     pub fn len(&self) -> usize {
         self.map.load().len()
     }

@@ -66,16 +66,13 @@ install_page() {
         echo "unexpected menuTree.js layout" >&2
         return 1
     fi
-    # The stock icons are one sprite; the menu code uses .menu_<index>. Give ours
-    # the AiProtection shield instead of an empty square.
+    # The menu code builds the icon class from the menu index (menu_Icon plus
+    # menu_TelltaleDNS). Give it its own 36x36 icon in the same light-blue style.
+    cp "$base/telltale_icon.png" "/www/user/telltale_icon.png" || return 1
     css=/tmp/telltale-index_style.css
-    if ! mount | grep -q " on /www/index_style.css "; then
-        cp /www/index_style.css "$css" || return 1
-    fi
-    if ! grep -q "menu_menu_TelltaleDNS" "$css"; then
-        printf '\n.menu_menu_TelltaleDNS{ background: url(images/New_ui/icon_indexes.png); background-position: 0px -180px; }\n' >> "$css"
-    fi
     umount /www/index_style.css 2>/dev/null || true
+    cp /www/index_style.css "$css" || return 1
+    printf '\n.menu_TelltaleDNS{ background: url(/user/telltale_icon.png) no-repeat center; background-size: 36px 36px; }\n' >> "$css"
     mount -o bind "$css" /www/index_style.css
 
     umount "$target" 2>/dev/null || true
@@ -98,7 +95,7 @@ remove_page() {
         mount -o bind "$tree" "$target"
     fi
     umount /www/index_style.css 2>/dev/null || true
-    rm -f /tmp/telltale-index_style.css
+    rm -f /tmp/telltale-index_style.css "/www/user/telltale_icon.png"
     rm -f "$base/ui-page"
     echo "TelltaleDNS tab removed"
 }
