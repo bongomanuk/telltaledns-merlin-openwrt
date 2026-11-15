@@ -36,14 +36,14 @@ uname -m
 | `armv7l` | `telltale-armv7-linux` |
 | `aarch64` | `telltale-aarch64-linux` |
 
-### `armv7l` — 32-bit ARM
+### `armv7l` (32-bit ARM)
 
 | Merlin firmware | Routers |
 |---|---|
 | Asuswrt-Merlin | **RT-AX95Q / ZenWiFi XT8** (this fork's reference router), RT-AX58U, RT-BE58_GO, RT-BE92U, RT-AX56U (end of support) |
 | GNUton's Merlin fork | RT-AX58U v2, RT-AX82U v1/v2, RT-AX92U, RT-AX5400, TUF-AX3000 v1/v2, TUF-AX5400 v1, DSL-AX82U, DSL-AX5400, RT-AXE95Q / ZenWiFi ET8 |
 
-### `aarch64` — 64-bit ARM
+### `aarch64` (64-bit ARM)
 
 | Merlin firmware | Routers |
 |---|---|
@@ -54,7 +54,7 @@ uname -m
 
 | Routers | Why |
 |---|---|
-| RT-N66U, RT-AC66U (original), RT-N16 | MIPS — there is no MIPS build |
+| RT-N66U, RT-AC66U (original), RT-N16 | MIPS; there is no MIPS build |
 | RT-AC56U, RT-AC66U B1, RT-AC68U, RT-AC87U, RT-AC3200, RT-AC88U, RT-AC3100, RT-AC5300 | 32-bit ARM, but the firmware runs Linux 2.6.36; this build needs Linux 3.2+ |
 | anything not running Asuswrt-Merlin | the install below uses `/jffs/scripts`, which stock Asuswrt does not run reliably |
 

@@ -1,8 +1,8 @@
 # Build the static TelltaleDNS binaries for ASUS Merlin routers, on GitHub.
 #
 # Asuswrt-Merlin runs on Broadcom HND hardware:
-#   * ARMv7 (32-bit) — e.g. ZenWiFi XT8 / RT-AX95Q, RT-AX58U, RT-AX82U, RT-AX92U
-#   * ARM64 (aarch64) — newer HND models (RT-AX86U, RT-AX88U, GT-AX11000, ...)
+#   * ARMv7 (32-bit), e.g. ZenWiFi XT8 / RT-AX95Q, RT-AX58U, RT-AX82U, RT-AX92U
+#   * ARM64 (aarch64), newer HND models (RT-AX86U, RT-AX88U, GT-AX11000, ...)
 # The binaries are static musl builds, so they need no Entware/uclibc on the router.
 #
 # Run it from Actions -> merlin-binaries -> Run workflow, or push a v* tag.
