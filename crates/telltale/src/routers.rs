@@ -155,6 +155,23 @@ pub(crate) fn dnsmasq_leases(text: &str) -> Seen {
         .collect()
 }
 
+/// Asuswrt-Merlin's static DHCP list: `<MAC>ip>dns>hostname` repeated, with no separators.
+/// Those devices have no lease entry, so without this their names are missing while the
+/// router's own client list shows them.
+pub(crate) fn static_leases(text: &str) -> Seen {
+    text.split('<')
+        .skip(1)
+        .filter_map(|chunk| {
+            let mut fields = chunk.split('>');
+            let mac = fields.next()?.trim().to_ascii_lowercase();
+            let ip: Ipv4Addr = fields.next()?.trim().parse().ok()?;
+            let _dns = fields.next()?;
+            let name = fields.next()?.trim();
+            (!mac.is_empty() && !name.is_empty()).then(|| (mac, ip, Some(name.to_owned())))
+        })
+        .collect()
+}
+
 /// One poll of a UniFi console or Network application.
 async fn poll_unifi(
     client: &telltale_filter::fetch::Client,
@@ -260,7 +277,17 @@ async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
         .strip_prefix("file://")
         .unwrap_or(c.url.as_str());
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    Ok(dnsmasq_leases(&text))
+    let mut seen = dnsmasq_leases(&text);
+    // Merlin keeps static reservations in nvram, not in the lease file. Add their names
+    // last, so a name the admin set wins over whatever the device announced.
+    if let Ok(out) = std::process::Command::new("nvram")
+        .args(["get", "dhcp_staticlist"])
+        .output()
+        && out.status.success()
+    {
+        seen.extend(static_leases(&String::from_utf8_lossy(&out.stdout)));
+    }
+    Ok(seen)
 }
 
 /// The leases view from every router's last answer.
@@ -379,6 +406,19 @@ mod tests {
     use super::*;
 
     /// REQ: T8.2 — a local dnsmasq lease file: names are used, `*` is an unnamed client.
+    #[test]
+    #[test]
+    fn static_leases_from_nvram() {
+        let text = "<00:E0:4C:68:0A:0F>192.168.1.5>>mini<DC:A6:32:1F:D6:7B>192.168.1.10>>rpi";
+        assert_eq!(
+            static_leases(text),
+            vec![
+                ("00:e0:4c:68:0a:0f".into(), Ipv4Addr::new(192, 168, 1, 5), Some("mini".into())),
+                ("dc:a6:32:1f:d6:7b".into(), Ipv4Addr::new(192, 168, 1, 10), Some("rpi".into())),
+            ]
+        );
+    }
+
     #[test]
     fn dnsmasq_leases_named() {
         let text = "64918 3C:E3:6B:05:18:39 192.168.1.16 creepy-drive 01:3c:e3:6b:05:18:39\n\
