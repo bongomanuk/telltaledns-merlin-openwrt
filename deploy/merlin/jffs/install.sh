@@ -81,12 +81,15 @@ rm -f /tmp/telltale.bin
 if [ ! -f /jffs/scripts/services-start ]; then
     printf '#!/bin/sh\n' > /jffs/scripts/services-start
 fi
-if ! grep -q '^# telltale$' /jffs/scripts/services-start; then
-    if [ -n "$usb" ]; then
-        # The data directory is on USB. At boot the disk can appear after this
-        # script, so wait for it and fall back to internal flash if it never
-        # shows up (an unplugged stick must not leave the router without DNS).
-        cat >> /jffs/scripts/services-start <<START
+# Replace an earlier block, so a re-install picks up a changed data directory.
+if grep -q '^# telltale$' /jffs/scripts/services-start; then
+    sed -i '/^# telltale$/,/^fi$/d' /jffs/scripts/services-start
+fi
+if [ -n "$usb" ]; then
+    # The data directory is on USB. At boot the disk can appear after this
+    # script, so wait for it and fall back to internal flash if it never
+    # shows up (an unplugged stick must not leave the router without DNS).
+    cat >> /jffs/scripts/services-start <<START
 # telltale
 if [ -x /jffs/telltale/telltale ]; then
     i=0
@@ -102,14 +105,13 @@ if [ -x /jffs/telltale/telltale ]; then
     fi
 fi
 START
-    else
-        cat >> /jffs/scripts/services-start <<'START'
+else
+    cat >> /jffs/scripts/services-start <<'START'
 # telltale
 if [ -x /jffs/telltale/telltale ]; then
     /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml >>/tmp/telltale.log 2>&1 &
 fi
 START
-    fi
 fi
 
 if [ "$ui" = 1 ]; then
