@@ -36,6 +36,7 @@
   import Upstreams from './pages/Upstreams.svelte';
   import LocalDns from './pages/LocalDns.svelte';
   import Schedules from './pages/Schedules.svelte';
+  import Lockdown from './pages/Lockdown.svelte';
   import Settings from './pages/Settings.svelte';
   import Alerts from './pages/Alerts.svelte';
 
@@ -56,6 +57,7 @@
     { path: '/upstreams', label: 'Upstreams', page: Upstreams, icon: 'upstreams', section: 'Filtering & DNS' },
     { path: '/local-dns', label: 'Names on my network', page: LocalDns, icon: 'names', section: 'Filtering & DNS' },
     { path: '/schedules', label: 'Schedules', page: Schedules, icon: 'rules', section: 'Filtering & DNS' },
+    { path: '/lockdown', label: 'Lockdown', page: Lockdown, icon: 'pause', section: 'Filtering & DNS' },
     { path: '/cluster', label: 'Cluster', page: Cluster, icon: 'cluster', section: 'System' },
     { path: '/alerts', label: 'Alerts', page: Alerts, icon: 'bell', section: 'System' },
     { path: '/agent-changes', label: 'Agent changes', page: AgentChanges, icon: 'inbox', section: 'System' },

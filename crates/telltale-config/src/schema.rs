@@ -44,6 +44,8 @@ pub struct Config {
     pub group: Vec<GroupConfig>,
     /// REQ: FLT-010 (T7.10) — weekly schedules that groups use (`schedules` in a group).
     pub schedule: Vec<ScheduleConfig>,
+    /// Instant lockdown: the groups a dashboard switch blocks, and for how long.
+    pub lockdown: LockdownConfig,
     /// REQ: OBS-010 (T7.12) — alert rules and where they go.
     pub alerts: AlertsConfig,
     /// REQ: T8.2 — routers whose DHCP names devices (UniFi, OPNsense).
@@ -129,6 +131,7 @@ impl Default for Config {
             list: Vec::new(),
             group: Vec::new(),
             schedule: Vec::new(),
+            lockdown: LockdownConfig::default(),
             zone: Vec::new(),
             alerts: AlertsConfig::default(),
             router: Vec::new(),
@@ -1118,6 +1121,26 @@ pub struct ScheduleWindow {
     pub start: SafeString,
     /// `HH:MM`, 24-hour (`24:00` is the end of the day).
     pub end: SafeString,
+}
+
+/// Instant lockdown: a switch on the dashboard that blocks whole groups now, for a set
+/// number of minutes. Quick allow rules still work, and it turns itself off at the deadline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, default)]
+pub struct LockdownConfig {
+    /// The groups the switch blocks. Empty: every group.
+    pub groups: Vec<SafeString>,
+    /// How long it stays on, in minutes.
+    pub minutes: u32,
+}
+
+impl Default for LockdownConfig {
+    fn default() -> Self {
+        Self {
+            groups: Vec::new(),
+            minutes: 60,
+        }
+    }
 }
 
 /// REQ: DNS-018 (T7.22) — an authoritative zone: every name under `name` is answered from

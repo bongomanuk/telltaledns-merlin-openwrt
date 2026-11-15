@@ -317,6 +317,51 @@ impl Neighbors {
     }
 }
 
+/// Instant lockdown: the groups blocked now, until a deadline. Unlike a schedule it
+/// has no weekly windows; it is a switch. Kept by name, so it survives config reloads.
+#[derive(Debug, Default)]
+pub struct Lockdown {
+    groups: ArcSwap<HashMap<Box<str>, u64>>,
+}
+
+impl Lockdown {
+    /// Locks `groups` until `until` (unix seconds). An empty list unlocks everyone.
+    pub fn set(&self, groups: &[String], until: u64) {
+        let map: HashMap<Box<str>, u64> = if until == 0 {
+            HashMap::new()
+        } else {
+            groups
+                .iter()
+                .map(|g| (g.as_str().into(), until))
+                .collect()
+        };
+        self.groups.store(Arc::new(map));
+    }
+
+    /// Unlocks every group.
+    pub fn clear(&self) {
+        self.groups.store(Arc::default());
+    }
+
+    /// Is the group locked at `now`?
+    pub fn is_locked(&self, group: &str, now: u64) -> bool {
+        let map = self.groups.load();
+        !map.is_empty() && map.get(group).is_some_and(|&u| u > now)
+    }
+
+    /// Active locks: (group, deadline). For metrics and the API.
+    pub fn active(&self, now: u64) -> Vec<(String, u64)> {
+        let map = self.groups.load();
+        let mut v: Vec<(String, u64)> = map
+            .iter()
+            .filter(|(_, until)| **until > now)
+            .map(|(g, u)| (g.to_string(), *u))
+            .collect();
+        v.sort();
+        v
+    }
+}
+
 /// Every configured group and client, indexed for identification.
 #[derive(Debug, Clone)]
 pub struct ClientTable {

@@ -90,6 +90,13 @@ export type EntryPath = 'upstreams' | 'upstream-groups' | 'lists' | 'groups' | '
 const get = <T>(path: string, query?: Query) => call<T>('GET', path, { query });
 const post = <T>(path: string, body?: unknown) => call<T>('POST', path, { body: body ?? {} });
 
+/** Instant lockdown: the dashboard switch that blocks whole groups now. */
+export interface LockdownStatus {
+  configuredGroups: string[];
+  minutes: number;
+  active: { group: string; untilUnixSeconds: number }[];
+}
+
 /** Router controls (the Merlin and OpenWrt builds). Not in the generated types yet. */
 export type RouterPlatform = 'merlin' | 'openwrt' | 'other';
 export interface RouterStatus {
@@ -125,6 +132,10 @@ export type RouterAction =
   | 'disable_service';
 
 export const api = {
+  // Instant lockdown.
+  lockdown: () => get<LockdownStatus>('/lockdown'),
+  setLockdown: (body: { enabled: boolean; groups?: string[]; minutes?: number }) =>
+    post<LockdownStatus>('/lockdown', body),
   // Router page: dnsmasq, the boot script, and the data directory.
   routerStatus: () => get<RouterStatus>('/router'),
   routerAction: (action: RouterAction) =>

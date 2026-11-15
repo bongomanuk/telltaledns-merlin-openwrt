@@ -44,6 +44,8 @@ pub enum RuleKind {
     /// REQ: FLT-015 (T7.20) — an answer address was refused (rebinding protection or a
     /// blocked range).
     AnswerIp = 7,
+    /// An instant lockdown, from the dashboard or the API.
+    Lockdown = 8,
 }
 
 impl RuleKind {
@@ -56,6 +58,7 @@ impl RuleKind {
             5 => Self::Quick,
             6 => Self::Schedule,
             7 => Self::AnswerIp,
+            8 => Self::Lockdown,
             _ => return None,
         })
     }
@@ -68,6 +71,7 @@ impl RuleKind {
             Self::Quick => "quick",
             Self::Schedule => "schedule",
             Self::AnswerIp => "answer_ip",
+            Self::Lockdown => "lockdown",
         }
     }
 }

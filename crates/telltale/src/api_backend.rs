@@ -712,6 +712,58 @@ fn bad_cursor() -> Problem {
 }
 
 impl Backend for ApiBackend {
+    fn lockdown(&self) -> telltale_api::model::LockdownStatus {
+        let cfg = self.src.config.load();
+        telltale_api::model::LockdownStatus {
+            configured_groups: cfg.lockdown.groups.iter().map(ToString::to_string).collect(),
+            minutes: cfg.lockdown.minutes,
+            active: self
+                .src
+                .pipeline
+                .lockdown
+                .active(crate::pipeline::unix_now())
+                .into_iter()
+                .map(|(group, until_unix_seconds)| telltale_api::model::LockdownGroup {
+                    group,
+                    until_unix_seconds,
+                })
+                .collect(),
+        }
+    }
+
+    fn set_lockdown(
+        &self,
+        request: telltale_api::model::LockdownRequest,
+    ) -> Result<telltale_api::model::LockdownStatus, Problem> {
+        let cfg = self.src.config.load();
+        let known: Vec<String> = cfg
+            .group
+            .iter()
+            .map(|g| g.name.to_string())
+            .chain(std::iter::once("default".to_owned()))
+            .collect();
+        if request.enabled {
+            let mut groups = request
+                .groups
+                .unwrap_or_else(|| cfg.lockdown.groups.iter().map(ToString::to_string).collect());
+            if groups.is_empty() {
+                groups = known.clone();
+            }
+            if let Some(bad) = groups.iter().find(|g| !known.contains(g)) {
+                return Err(Problem::invalid(format!("`{bad}` is not a group")));
+            }
+            let minutes = request
+                .minutes
+                .unwrap_or(cfg.lockdown.minutes)
+                .clamp(1, 1440);
+            let until = crate::pipeline::unix_now() + u64::from(minutes) * 60;
+            self.src.pipeline.lockdown.set(&groups, until);
+        } else {
+            self.src.pipeline.lockdown.clear();
+        }
+        Ok(self.lockdown())
+    }
+
     fn router_status(&self) -> telltale_api::model::RouterStatus {
         let cfg = self.src.config.load();
         crate::router_admin::status(cfg.node.data_dir.as_str())

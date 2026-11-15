@@ -134,6 +134,39 @@ pub enum RouterAction {
     DisableService,
 }
 
+/// Instant lockdown: the switch on the dashboard that blocks whole groups now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LockdownStatus {
+    /// The groups `[lockdown] groups` names; empty means every group.
+    pub configured_groups: Vec<String>,
+    /// `[lockdown] minutes`: the default length.
+    pub minutes: u32,
+    /// The groups locked right now, and until when.
+    pub active: Vec<LockdownGroup>,
+}
+
+/// One group locked right now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LockdownGroup {
+    pub group: String,
+    pub until_unix_seconds: u64,
+}
+
+/// Turn the lockdown on or off.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LockdownRequest {
+    pub enabled: bool,
+    /// Groups to lock; default: `[lockdown] groups`, or every group when that is empty.
+    #[serde(default)]
+    pub groups: Option<Vec<String>>,
+    /// Minutes; default: `[lockdown] minutes` (clamped to 1..=1440).
+    #[serde(default)]
+    pub minutes: Option<u32>,
+}
+
 /// The body of a Router page control.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

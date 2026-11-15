@@ -67,3 +67,10 @@ max_bytes = "16MiB"
 [clients]
 neighbor_table = true
 trust_edns_mac_from = ["127.0.0.1/32"]
+
+# The dashboard's Lockdown switch: blocks these groups right now for this many
+# minutes. Empty groups means every group. Quick allow rules still work, and a
+# reboot clears the switch.
+[lockdown]
+groups = []
+minutes = 60

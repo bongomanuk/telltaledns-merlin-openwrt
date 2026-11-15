@@ -510,6 +510,24 @@ pub trait Backend: Send + Sync + 'static {
     /// REQ: OPS-004 (ADR-046) — checks the signed release index now instead of waiting for the
     /// daily check, and returns the new status. At most one check a minute: sooner, the
     /// current status comes back without a fetch.
+    /// Instant lockdown state.
+    fn lockdown(&self) -> crate::model::LockdownStatus {
+        crate::model::LockdownStatus {
+            configured_groups: Vec::new(),
+            minutes: 0,
+            active: Vec::new(),
+        }
+    }
+
+    /// Turns the lockdown on or off. Admin only; the route enforces that.
+    fn set_lockdown(
+        &self,
+        request: crate::model::LockdownRequest,
+    ) -> Result<crate::model::LockdownStatus, Problem> {
+        let _ = request;
+        Err(Problem::unavailable("lockdown is not available on this node"))
+    }
+
     /// Router controls (dnsmasq, the boot script) on a Merlin or OpenWrt router. A normal host
     /// reports `platform: "other"`, and the Router page explains instead of offering controls.
     fn router_status(&self) -> crate::model::RouterStatus {
@@ -1030,6 +1048,16 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
                 .with_state(Arc::clone(&backend))
                 .route_layer(from_fn(auth::routes::require_admin)),
         )
+        // Instant lockdown: a switch on the dashboard, admin only.
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/lockdown",
+                    axum::routing::get(lockdown).post(set_lockdown),
+                )
+                .with_state(Arc::clone(&backend))
+                .route_layer(from_fn(auth::routes::require_admin)),
+        )
         // Router controls: restart dnsmasq or this service, or change how dnsmasq reaches
         // this process. They run commands on the router, so they are admin only.
         .merge(
@@ -1360,6 +1388,27 @@ async fn update_check(
     State(b): State<Shared>,
 ) -> Result<Json<crate::model::UpdateStatus>, Problem> {
     b.check_updates().await.map(Json)
+}
+
+/// The instant lockdown state.
+#[utoipa::path(get, path = "/api/v1/lockdown", tag = "config",
+    responses((status = 200, body = crate::model::LockdownStatus, description = "The groups locked now, and the configured default."),
+        (status = 403, body = Problem, description = "Needs the admin role.")))]
+async fn lockdown(State(b): State<Shared>) -> Json<crate::model::LockdownStatus> {
+    Json(b.lockdown())
+}
+
+/// Turn the lockdown on or off.
+#[utoipa::path(post, path = "/api/v1/lockdown", tag = "config",
+    request_body = crate::model::LockdownRequest,
+    responses((status = 200, body = crate::model::LockdownStatus, description = "The state after the change."),
+        (status = 403, body = Problem, description = "Needs the admin role."),
+        (status = 422, body = Problem, description = "A group name is wrong.")))]
+async fn set_lockdown(
+    State(b): State<Shared>,
+    Json(request): Json<crate::model::LockdownRequest>,
+) -> Result<Json<crate::model::LockdownStatus>, Problem> {
+    b.set_lockdown(request).map(Json)
 }
 
 /// The router this process runs on: dnsmasq, DHCP leases, USB, the service hook.

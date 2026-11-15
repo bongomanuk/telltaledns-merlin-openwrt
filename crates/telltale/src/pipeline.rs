@@ -19,7 +19,8 @@ use telltale_config::{Cidr, RateLimitAction, SpecialConfig};
 use telltale_filter::matcher::{ClientCtx, Decision, ListMask, Matcher, Scratch};
 use telltale_net::{QueryHandler, RequestMeta, Response, Transport};
 use telltale_policy::{
-    ClientTable, Group, Identity, LocalData, Neighbors, Pause, RateLimiter, RewriteTarget, Special,
+    ClientTable, Group, Identity, LocalData, Lockdown, Neighbors, Pause, RateLimiter, RewriteTarget,
+    Special,
 };
 use telltale_proto::{
     EdnsOut, NameBuf, Query, QueryError, ResponseBuilder, Section, badvers_from_raw, build_query,
@@ -569,6 +570,8 @@ pub(crate) struct Pipeline {
     pub(crate) drill: Arc<crate::drill::Gate>,
     /// Blocking paused globally or per group (FLT-009). Kept across reloads.
     pub(crate) pause: Pause,
+    /// Instant lockdown: groups blocked until a deadline, toggled from the UI.
+    pub(crate) lockdown: Lockdown,
     /// REQ: FLT-010 (T7.10) — schedules on now (the ticker in `server` updates it).
     pub(crate) schedules: arc_swap::ArcSwap<ScheduleNow>,
     /// REQ: T8.2 — the routers' DHCP clients by address (names for devices; the API).
@@ -661,6 +664,7 @@ impl Pipeline {
             kube: Arc::default(),
             drill: Arc::default(),
             pause: Pause::default(),
+            lockdown: Lockdown::default(),
             schedules: arc_swap::ArcSwap::from_pointee(ScheduleNow::default()),
             dnstap: std::sync::OnceLock::new(),
             router_leases: Arc::default(),
@@ -978,6 +982,10 @@ impl Pipeline {
             }
             // REQ: FLT-003 — the filter decision (`spec/03` §3 step 6), before the cache.
             None => {
+                // Instant lockdown, toggled from the dashboard. Quick rules above still win.
+                if let Some(len) = self.lockdown_block(&q, out, &st.policy, ident, oc) {
+                    return ready(Some(self.finish(&q, out, len, meta.transport)));
+                }
                 // REQ: FLT-010 (T7.10) — a schedule blocking everything for the group (bedtime).
                 if let Some(len) = self.schedule_block(&q, out, &st.policy, ident, oc) {
                     return ready(Some(self.finish(&q, out, len, meta.transport)));
@@ -1872,6 +1880,29 @@ impl Pipeline {
             r.authority_soa(b.ttl).ok()?;
         }
         r.finish(edns).ok()
+    }
+
+    /// Instant lockdown: the client's group is blocked until its deadline. One atomic load
+    /// when nothing is locked.
+    fn lockdown_block(
+        &self,
+        q: &Query<'_>,
+        out: &mut [u8],
+        policy: &Policy,
+        ident: Identity,
+        oc: &mut Outcome,
+    ) -> Option<usize> {
+        let group = policy.clients.primary_group(ident);
+        if !self.lockdown.is_locked(&group.name, unix_now()) {
+            return None;
+        }
+        oc.status = Status::Blocked;
+        oc.rule = Some(Rule {
+            list: 0,
+            kind: RuleKind::Lockdown,
+            allow: false,
+        });
+        self.block_answer(q, out, group, "lockdown")
     }
 
     /// REQ: FLT-010 (T7.10) — the block answer when a block-everything schedule is on for the

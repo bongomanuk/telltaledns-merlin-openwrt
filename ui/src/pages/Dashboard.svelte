@@ -1,7 +1,7 @@
 <script lang="ts">
   // REQ: API-005 — dashboard: KPI tiles, queries over time by status, where time goes, top
   // lists, upstream share and health (`spec/07` §3).
-  import { api, type S } from '../lib/api';
+  import { api, type S, type LockdownStatus } from '../lib/api';
   import { href } from '../lib/router.svelte';
   import { poll } from '../lib/poll';
   import { ms, num, pct, short } from '../lib/format';
@@ -19,6 +19,40 @@
   import LatencyHeatmap from '../lib/components/LatencyHeatmap.svelte';
   import { changes } from '../lib/annotations.svelte';
   import { currentMode } from '../lib/mode.svelte';
+
+  // Instant lockdown: the one switch a parent reaches for.
+  let lockdown = $state<LockdownStatus | null>(null);
+  let lockdownBusy = $state(false);
+  let lockdownError = $state<unknown>(null);
+  const locked = $derived((lockdown?.active.length ?? 0) > 0);
+
+  async function loadLockdown() {
+    try {
+      lockdown = await api.lockdown();
+      lockdownError = null;
+    } catch (e) {
+      lockdownError = e;
+    }
+  }
+  async function toggleLockdown() {
+    if (!lockdown) return;
+    lockdownBusy = true;
+    try {
+      lockdown = await api.setLockdown({
+        enabled: !locked,
+        groups: !locked && lockdown.configuredGroups.length ? lockdown.configuredGroups : undefined,
+        minutes: !locked ? lockdown.minutes : undefined,
+      });
+      lockdownError = null;
+    } catch (e) {
+      lockdownError = e;
+    } finally {
+      lockdownBusy = false;
+    }
+  }
+  $effect(() => {
+    void loadLockdown();
+  });
 
   const ranges = [
     { id: '15m', label: '15 min', from: '-15m', step: 'second' as const, summary: '-15m', secs: 900 },
@@ -313,6 +347,25 @@
   <ChangesControls part="body" {advanced} />
 
   <ErrorNote {error} />
+  <section class="card" class:wide={true} data-testid="lockdown">
+    <div class="row" style="justify-content: space-between; align-items: center;">
+      <div>
+        <h2 style="margin: 0;">Lockdown</h2>
+        <p class="muted small" style="margin: 4px 0 0;">
+          {#if locked}
+            Blocking {lockdown?.active.map((a) => a.group).join(', ')} until
+            {new Date((lockdown?.active[0]?.untilUnixSeconds ?? 0) * 1000).toLocaleTimeString()}.
+          {:else}
+            Block the configured groups now. Use the Lockdown page to pick them.
+          {/if}
+        </p>
+      </div>
+      <button class={locked ? 'danger' : 'primary'} disabled={lockdownBusy || !lockdown} onclick={toggleLockdown}>
+        {locked ? 'Unlock' : 'Lock down'}
+      </button>
+    </div>
+    <ErrorNote error={lockdownError} />
+  </section>
   {#if summary?.missingNodes?.length}
     <!-- REQ: CLU-002 — a node that doesn't answer leaves partial totals, said plainly. -->
     <div class="notice warn small">

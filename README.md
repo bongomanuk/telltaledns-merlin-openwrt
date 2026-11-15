@@ -130,6 +130,17 @@ without the blocked service, and use a schedule with `block_services` on the gro
 else uses. Quick rules (**Quick rules**) allow a single name for everyone; groups are the way
 to allow a whole service for one device.
 
+## Lockdown now
+
+**Filtering & DNS → Lockdown** is the switch for the moment a rule needs to change now.
+Pick the groups, set the minutes, and press **Lock these groups**. The same switch is on
+the dashboard; it uses the groups and minutes from `[lockdown]` in `telltale.toml`
+(`groups = []` means every group, `minutes = 60` is the default).
+
+While it is on, those groups are blocked whatever the lists and schedules say. Quick
+allow rules still work, local names still resolve, and it turns itself off at the
+deadline. A reboot clears it. Nothing is written to the config.
+
 ## Supported ASUS Merlin routers
 
 Your router's `uname -m` picks the binary. Run it on the router if you are unsure.

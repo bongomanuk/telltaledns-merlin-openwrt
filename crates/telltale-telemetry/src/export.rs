@@ -23,6 +23,8 @@ pub const LIST_NONE: u16 = u16::MAX;
 pub const LIST_QUICK: u16 = u16::MAX - 1;
 pub const LIST_SCHEDULE: u16 = u16::MAX - 2;
 pub const LIST_ANSWER_IP: u16 = u16::MAX - 3;
+/// An instant lockdown.
+pub const LIST_LOCKDOWN: u16 = u16::MAX - 4;
 
 /// What blocked a query, as the `list` key: a list ID, or one of the `LIST_*` keys.
 pub fn blocked_by(rule: Option<Rule>) -> u16 {
@@ -32,6 +34,7 @@ pub fn blocked_by(rule: Option<Rule>) -> u16 {
             RuleKind::Quick => LIST_QUICK,
             RuleKind::Schedule => LIST_SCHEDULE,
             RuleKind::AnswerIp => LIST_ANSWER_IP,
+            RuleKind::Lockdown => LIST_LOCKDOWN,
             RuleKind::Domain | RuleKind::Modifier | RuleKind::Regex | RuleKind::Cname => r.list,
         },
     }
@@ -44,6 +47,7 @@ pub fn blocked_label(key: u16, lists: &[String]) -> &str {
         LIST_QUICK => "quick",
         LIST_SCHEDULE => "schedule",
         LIST_ANSWER_IP => "answer_ip",
+        LIST_LOCKDOWN => "lockdown",
         id => lists.get(usize::from(id)).map_or("unknown", String::as_str),
     }
 }
