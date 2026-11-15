@@ -55,7 +55,9 @@ install_page() {
         echo "unexpected menuTree.js layout" >&2
         return 1
     fi
-    sed -i "/^list: \[$/a {menuName: \"TelltaleDNS\", index: \"menu_TelltaleDNS\", tab: [{url: \"$page\", tabName: \"TelltaleDNS\"}]}," "$tree"
+    # Every top-level entry ends its tab list with this terminator; without it
+    # the router's menu code drops the entry.
+    sed -i "/^list: \[$/a {menuName: \"TelltaleDNS\", index: \"menu_TelltaleDNS\", tab: [{url: \"$page\", tabName: \"TelltaleDNS\"}, {url: \"NULL\", tabName: \"__INHERIT__\"}]}," "$tree"
 
     umount "$target" 2>/dev/null || true
     mount -o bind "$tree" "$target"
