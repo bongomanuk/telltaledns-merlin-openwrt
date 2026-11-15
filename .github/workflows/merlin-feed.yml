@@ -217,6 +217,21 @@ jobs:
         id: deploy
         uses: actions/deploy-pages@v4
 
+      - name: Clear the previous release assets
+        # Each run uses a new package build number (r12, r13, ...). Without this,
+        # every rebuild leaves another set of packages on the release.
+        if: inputs.upstream_tag != '' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' 2>/dev/null |
+          while read -r name; do
+            [ -n "$name" ] && gh release delete-asset "$TAG" "$name" \
+              --repo "$GITHUB_REPOSITORY" -y
+          done || true
+
       - name: Publish the release for the upstream tag
         if: inputs.upstream_tag != '' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
