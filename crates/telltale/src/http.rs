@@ -237,7 +237,16 @@ async fn metrics(State(src): State<Arc<Sources>>, headers: header::HeaderMap) ->
         let body = crate::traces::openmetrics(&text, &src.traces.exemplars());
         return ([(header::CONTENT_TYPE, crate::traces::OPENMETRICS)], body).into_response();
     }
-    ([(header::CONTENT_TYPE, CONTENT_TYPE)], text).into_response()
+    // The Merlin web UI page reads this from the router's origin, so it can show
+    // status without a second sign-in.
+    (
+        [
+            (header::CONTENT_TYPE, CONTENT_TYPE),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        text,
+    )
+        .into_response()
 }
 
 /// The node's name: `[node] name`, or the host name.

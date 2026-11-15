@@ -845,7 +845,7 @@
                     disabled={routerBusy !== null}
                     onclick={() => routerRun('disable_ui', 'Remove the TelltaleDNS tab from the router web UI?')}
                   >
-                    Remove tab
+                    Unpatch web UI
                   </button>
                 {:else}
                   <button
@@ -853,7 +853,7 @@
                     disabled={routerBusy !== null}
                     onclick={() => routerRun('enable_ui', 'Add the TelltaleDNS tab to the router web UI?')}
                   >
-                    Add tab
+                    Patch web UI
                   </button>
                 {/if}
                 <button

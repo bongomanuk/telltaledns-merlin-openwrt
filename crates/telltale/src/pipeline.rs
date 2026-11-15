@@ -902,6 +902,7 @@ impl Pipeline {
                 None => tracing::debug!(mac = ?mac, "client MAC from dnsmasq has no lease"),
             }
         }
+        oc.client_ip = Some(peer);
         let who = Who {
             peer,
             mac,
@@ -1299,7 +1300,10 @@ impl Pipeline {
         let this = Arc::clone(self);
         let req = req.to_vec();
         let mut original = out[..len].to_vec();
-        let (transport, peer) = (meta.transport, meta.peer.ip());
+        let (transport, peer) = (
+            meta.transport,
+            oc.client_ip.unwrap_or_else(|| meta.peer.ip()),
+        );
         Response::Deferred(Box::pin(async move {
             let waited = Instant::now();
             let q = parse_query(&req).ok()?;
@@ -2519,6 +2523,9 @@ pub(crate) struct Outcome {
     pub(crate) rule: Option<Rule>,
     /// REQ: OBS-001 (review 04-07) — the upstream that answered a forwarded query (0: none).
     pub(crate) upstream: u16,
+    /// The device's address, after dnsmasq's `add-mac` gave a forwarded query its lease back.
+    /// Events and the query log use it instead of the forwarding peer.
+    pub(crate) client_ip: Option<std::net::IpAddr>,
 }
 
 fn rule_of(a: &telltale_filter::matcher::Attribution, allow: bool) -> Rule {
@@ -2724,8 +2731,11 @@ impl QueryHandler for Handler {
             group: 0,
             rule: None,
             upstream: 0,
+            client_ip: None,
         };
         let resp = self.0.handle_sync(req, meta, out, start, &mut oc);
+        // The device's address, not the dnsmasq peer: top clients and the query log.
+        let peer = oc.client_ip.unwrap_or_else(|| meta.peer.ip());
         // REQ: OBS-002 — counters on the hot path: lock-free, allocation-free. Deferred answers
         // are recorded when their future completes.
         match &resp {
@@ -2740,7 +2750,7 @@ impl QueryHandler for Handler {
                 );
                 let resp = Some(&out[..*len]);
                 self.0.emit(
-                    meta.peer.ip(),
+                    peer,
                     meta.transport,
                     req,
                     resp,
@@ -2758,7 +2768,7 @@ impl QueryHandler for Handler {
                     start.elapsed(),
                 );
                 self.0.emit(
-                    meta.peer.ip(),
+                    peer,
                     meta.transport,
                     req,
                     None,
@@ -5213,6 +5223,7 @@ value = "192.168.5.100"
                 group: 0,
                 rule: None,
                 upstream: 0,
+                client_ip: None,
             };
             let req = raw.unwrap_or(&buf[..len]);
             let _ = p.handle_sync(req, &meta, &mut out, Instant::now(), &mut oc);

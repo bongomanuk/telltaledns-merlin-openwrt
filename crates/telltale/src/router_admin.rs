@@ -217,13 +217,19 @@ fn nvram(key: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The Merlin web UI tab is installed (the page the menu names exists).
+/// The Merlin web UI tab is installed: the page exists and the menu names it. A firmware
+/// update wipes both until `services-start` patches them again, so check both.
 fn ui_installed() -> bool {
     let Ok(page) = std::fs::read_to_string("/jffs/telltale/ui-page") else {
         return false;
     };
     let page = page.trim();
-    !page.is_empty() && Path::new("/www/user").join(page).exists()
+    if page.is_empty() || !Path::new("/www/user").join(page).exists() {
+        return false;
+    }
+    std::fs::read_to_string("/www/require/modules/menuTree.js")
+        .map(|menu| menu.contains("menu_TelltaleDNS") && menu.contains(page))
+        .unwrap_or(false)
 }
 
 /// OpenWrt's `/etc/config/telltale` enables the service.

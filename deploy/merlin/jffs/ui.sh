@@ -61,6 +61,12 @@ install_page() {
 
     umount "$target" 2>/dev/null || true
     mount -o bind "$tree" "$target"
+    # A firmware update replaces /www; services-start runs this again. Verify the
+    # patch actually landed instead of reporting success blindly.
+    if ! grep -q "menu_TelltaleDNS" "$target" || [ ! -f "/www/user/$page" ]; then
+        echo "the menu patch did not apply" >&2
+        return 1
+    fi
     echo "TelltaleDNS tab added ($page)"
 }
 
