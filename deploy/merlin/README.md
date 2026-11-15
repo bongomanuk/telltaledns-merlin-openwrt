@@ -19,20 +19,42 @@ The `merlin-binaries` GitHub Actions workflow builds them
 ## Which routers are supported
 
 Check the router itself, because the CPU model is not the whole story (some 64-bit
-SoCs run a 32-bit userland):
+SoCs run a 32-bit userland, and some newer "BE" models use 32-bit Broadcom SoCs):
 
 ```sh
 uname -m
 ```
 
-| `uname -m` | Binary | Typical Merlin models |
-|---|---|---|
-| `armv7l` | `telltale-armv7-linux` | **RT-AX95Q / ZenWiFi XT8**, RT-AX58U, RT-AX82U, RT-AX92U, TUF-AX3000, TUF-AX5400 |
-| `aarch64` | `telltale-aarch64-linux` | RT-AX86U, RT-AX88U, GT-AX11000, RT-AX68U, GT-AX6000, GT-AXE11000, RT-AX89X, ZenWiFi Pro XT12, GT-BE98 |
+| `uname -m` | Binary |
+|---|---|
+| `armv7l` | `telltale-armv7-linux` |
+| `aarch64` | `telltale-aarch64-linux` |
 
-If your model is not listed, run `uname -m` and use the matching binary. If it prints
-anything else (`mips`, `armv6l`, ...) there is no build for it — older MIPS routers
-(RT-N66U, the original RT-AC66U) are **not supported**.
+### `armv7l` — 32-bit ARM
+
+| Merlin firmware | Routers |
+|---|---|
+| Asuswrt-Merlin | **RT-AX95Q / ZenWiFi XT8** (this fork's reference router), RT-AX58U, RT-BE58_GO, RT-BE92U, RT-AX56U (end of support) |
+| GNUton's Merlin fork | RT-AX58U v2, RT-AX82U v1/v2, RT-AX92U, RT-AX5400, TUF-AX3000 v1/v2, TUF-AX5400 v1, DSL-AX82U, DSL-AX5400, RT-AXE95Q / ZenWiFi ET8 |
+
+### `aarch64` — 64-bit ARM
+
+| Merlin firmware | Routers |
+|---|---|
+| Asuswrt-Merlin | RT-AX86U, RT-AX86U Pro, RT-AX88U, RT-AX88U Pro, RT-AX68U, GT-AX11000, GT-AX11000 Pro, GT-AXE11000, GT-AX6000, GT-AXE16000, ZenWiFi Pro XT12, RT-BE86U, RT-BE88U, RT-BE96U, GT-BE19000AI, RT-AC86U (end of support), GT-AC2900 (end of support) |
+| GNUton's Merlin fork | GT-BE98, GT-BE98 Pro, GT-BE25000 |
+
+### Not supported
+
+| Routers | Why |
+|---|---|
+| RT-N66U, RT-AC66U (original), RT-N16 | MIPS — there is no MIPS build |
+| RT-AC56U, RT-AC66U B1, RT-AC68U, RT-AC87U, RT-AC3200, RT-AC88U, RT-AC3100, RT-AC5300 | 32-bit ARM, but the firmware runs Linux 2.6.36; this build needs Linux 3.2+ |
+| anything not running Asuswrt-Merlin | the install below uses `/jffs/scripts`, which stock Asuswrt does not run reliably |
+
+If your model is missing or you are unsure, use `uname -m`: `armv7l` and `aarch64`
+are the only two answers that work. `uname -r` shows the kernel; if it starts with
+`2.6.36`, the binary will not run.
 
 Requirements:
 
@@ -71,21 +93,38 @@ is the least risky option overall; point the router's DHCP DNS at the Pi.
 
 The examples use `admin@192.168.1.1`; use your router's address and login name.
 
-### 1. Copy the binary
+### 1. Get the binary onto the router
 
-Download the workflow artifact (or the release asset if you built a tag) on your
-computer, unzip it, then copy the right file to the router:
+Download the `telltale-merlin-<run>.zip` artifact from the workflow run (or the
+release asset, if you built a `v*` tag) on your computer, unzip it, and check the
+checksums:
 
 ```sh
 unzip telltale-merlin-*.zip
+sha256sum -c SHA256SUMS
+```
+
+Pick the file for `uname -m` (above), then copy it to the router:
+
+```sh
 ssh admin@192.168.1.1 'mkdir -p /jffs/telltale'
 scp telltale-armv7-linux admin@192.168.1.1:/jffs/telltale/telltale
 ssh admin@192.168.1.1 'chmod +x /jffs/telltale/telltale && /jffs/telltale/telltale --version'
 ```
 
-If `scp` is not available on the router, copy the file to a USB stick and `cp` it,
-or use `wget` on the router from a URL you control. Verify it with
-`sha256sum /jffs/telltale/telltale` against `SHA256SUMS`.
+No `scp`? Either copy the file to a USB stick, mount it on the router, and `cp` it:
+
+```sh
+cp /tmp/mnt/<usb-label>/telltale-armv7-linux /jffs/telltale/telltale
+```
+
+or download it on the router from a URL you control:
+
+```sh
+wget -O /jffs/telltale/telltale 'http://<your-host>/telltale-armv7-linux'
+chmod +x /jffs/telltale/telltale
+sha256sum /jffs/telltale/telltale    # compare with SHA256SUMS
+```
 
 ### 2. Write the config
 

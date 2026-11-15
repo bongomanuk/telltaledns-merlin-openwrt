@@ -7,6 +7,8 @@
 
 **See every question. Answer on your terms.**
 
+> **This fork is proudly not built by Claude.** The Merlin support here — the static ARM builds, the `merlin-binaries` workflow, and the install guide — is not. See [Not built with Claude](#not-built-with-claude).
+
 Every connection on your network starts with a DNS lookup. TelltaleDNS answers it in microseconds, filters it by your rules per device, and shows you exactly who asked, what they asked, and why it answered the way it did. It runs on a Raspberry Pi, in Kubernetes, or on both as one cluster that keeps answering even when parts of it fail.
 
 > A *telltale* is the strip of yarn sailors tie to a sail to see what the wind is really doing. DNS is your network's telltale: it reveals what every device is up to.
@@ -51,7 +53,38 @@ docker compose exec telltale telltale auth setup-token     # then open http://<h
 Kubernetes (Helm), a native systemd install, clustering, and moving from Pi-hole or Technitium are covered in [`docs/running.md`](docs/running.md).
 
 ### ASUS Merlin routers
-Static ARM binaries for Asuswrt-Merlin routers are built by the [`merlin-binaries`](.github/workflows/merlin-binaries.yml) Actions workflow (32-bit ARMv7 and 64-bit ARM64, web UI embedded, no Entware needed). Your router's `uname -m` picks the file: `armv7l` for the **RT-AX95Q / ZenWiFi XT8** and other BCM675x models, `aarch64` for the newer ARM64 models. The router's `dnsmasq` already owns port 53, so read the notes before starting it: see [`deploy/merlin/README.md`](deploy/merlin/README.md) for the supported models, the port 53 / dnsmasq options, the config, and a boot-time `services-start` script.
+This fork builds static ARM binaries for Asuswrt-Merlin routers with the [`merlin-binaries`](.github/workflows/merlin-binaries.yml) Actions workflow — 32-bit ARMv7 and 64-bit ARM64, with the web UI embedded, no Entware and no extra libraries. Run it from **Actions → merlin-binaries → Run workflow** (or push a `v*` tag) and download the `telltale-merlin-<run>` artifact. **Your router's `uname -m` is the authority**: `armv7l` → `telltale-armv7-linux`, `aarch64` → `telltale-aarch64-linux`.
+
+**Supported routers** (Asuswrt-Merlin, by the binary they need; the GNUton Merlin fork adds the models marked ★):
+
+| `uname -m` | Binary | Routers |
+|---|---|---|
+| `armv7l` | `telltale-armv7-linux` | **RT-AX95Q / ZenWiFi XT8**, RT-AX58U / RT-AX58U v2 ★, RT-AX82U ★ (v1/v2), RT-AX92U ★, RT-AX5400 ★, TUF-AX3000 ★ (v1/v2), TUF-AX5400 ★ (v1), DSL-AX82U / DSL-AX5400 ★, RT-AXE95Q / ZenWiFi ET8 ★, RT-BE58_GO, RT-BE92U, RT-AX56U (end of support) |
+| `aarch64` | `telltale-aarch64-linux` | RT-AX86U / RT-AX86U Pro, RT-AX88U / RT-AX88U Pro, RT-AX68U, GT-AX11000 / GT-AX11000 Pro, GT-AXE11000, GT-AX6000, GT-AXE16000, ZenWiFi Pro XT12, RT-BE86U, RT-BE88U, RT-BE96U, GT-BE98 ★ / GT-BE98 Pro, GT-BE25000 ★, GT-BE19000AI, RT-AC86U (end of support), GT-AC2900 (end of support) |
+
+**Not supported:**
+
+| Routers | Why |
+|---|---|
+| RT-N66U, RT-AC66U (original), RT-N16 | MIPS; there is no MIPS build |
+| RT-AC56U, RT-AC66U B1, RT-AC68U, RT-AC87U, RT-AC3200, RT-AC88U, RT-AC3100, RT-AC5300 | 32-bit ARM, but the firmware runs Linux 2.6.36; this build needs Linux 3.2+ |
+| anything not running Asuswrt-Merlin | the installer uses `/jffs/scripts`, which stock Asuswrt does not run reliably |
+
+If a model is missing or you are unsure, run `uname -m` on the router and use the matching file. `armv7l` and `aarch64` are the only two answers that work.
+
+**Getting it onto the router**
+
+1. **Download** the `telltale-merlin-<run>.zip` artifact from the Actions run (or the release asset for a `v*` tag) and unzip it on your computer. Check the file against `SHA256SUMS`.
+2. **Enable** on the router: *Administration → System → Enable JFFS custom scripts and configs = Yes*, and *Enable SSH = LAN only*.
+3. **Copy** the right binary:
+   ```sh
+   ssh admin@192.168.1.1 'mkdir -p /jffs/telltale'
+   scp telltale-armv7-linux admin@192.168.1.1:/jffs/telltale/telltale
+   ssh admin@192.168.1.1 'chmod +x /jffs/telltale/telltale && /jffs/telltale/telltale --version'
+   ```
+   No `scp`? Put the file on a USB stick and `cp` it, or `wget` it on the router from a URL you control. Verify with `sha256sum /jffs/telltale/telltale` against `SHA256SUMS`.
+4. **Configure and start it** — the router's `dnsmasq` already owns port 53, so this step matters. The full guide, config and a boot-time `/jffs/scripts/services-start` script are in [`deploy/merlin/README.md`](deploy/merlin/README.md).
+
 
 **Status:** pre-1.0. Tagged [releases](https://github.com/paimonsoror/telltaledns/releases) are stable (`latest`), and `edge` is built from every commit on `main`. Releases before 1.0 can still change configuration keys and APIs, and their notes call out every such change; the [roadmap](spec/10-roadmap-and-tasks.md) shows what's next. Project site: **https://paimonsoror.github.io/telltaledns/**
 
@@ -101,10 +134,8 @@ Thank you to everyone who helps make TelltaleDNS better, whether by reporting wh
 
 This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind are welcome: [open an issue](https://github.com/paimonsoror/telltaledns/issues) or a pull request.
 
-### Built with Claude
-TelltaleDNS is developed with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent, working from this repository's specification under the maintainer's direction. Claude writes much of the code, tests, and documentation; the maintainer sets the priorities, decides what ships, and approves every release and rollout.
-
-The history shows exactly where Claude took part: every commit it worked on carries a `Co-Authored-By: Claude` trailer, naming the model. `git log --grep "Co-Authored-By: Claude"` lists them.
+### Not built with Claude
+**This fork is proudly not built by Claude.** The upstream project is developed with [Claude Code](https://claude.com/claude-code), and its history carries `Co-Authored-By: Claude` trailers. This fork's own work — the static ARMv7/ARM64 builds, the `merlin-binaries` workflow, and the Merlin install guide — was not.
 
 ## License
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
