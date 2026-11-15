@@ -224,7 +224,9 @@ jobs:
           tag_name: ${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}
           name: TelltaleDNS ${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }} for Merlin and OpenWrt
           body: |
-            Built from `${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}`.
+            Built from this fork's `main`, which tracks upstream
+            `${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}`, with the router
+            integration (dnsmasq lease names, local zones) on top.
 
             - **ASUS Merlin / Entware:** add `src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`
               to `/opt/etc/opkg/customfeeds.conf`, then `opkg update && opkg install telltale`.
