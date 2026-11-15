@@ -97,6 +97,14 @@ The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53
 - **Run it on a separate host (a Pi):** leave the router alone and point the router's DHCP DNS at the Pi. This is the least risky option.
 - **Keep dnsmasq and forward to TelltaleDNS on another port:** works, but every query reaches TelltaleDNS from the router, so per-device attribution is lost unless you use dnsmasq's `add-mac` and TelltaleDNS's `trust_edns_mac_from`.
 
+## Builds and packages
+
+- **Actions:** [all workflow runs](https://github.com/bongomanuk/telltaledns-merlin-openwrt/actions)
+- **Releases:** [releases](https://github.com/bongomanuk/telltaledns-merlin-openwrt/releases) (raw binaries, Entware `.ipk`, OpenWrt `.apk`, `SHA256SUMS`)
+- **Entware feed:** `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`
+- **OpenWrt packages:** `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`
+- **Artifacts:** the `telltale-merlin-<run>` artifact on any `merlin-binaries` or `merlin-feed` run
+
 ## Build it yourself
 
 - **Raw binaries:** Actions → **merlin-binaries** → *Run workflow* (or push a `v*` tag). The `telltale-merlin-<run>` artifact contains the three static binaries and `SHA256SUMS`.
