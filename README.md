@@ -24,6 +24,17 @@ but I have no OpenWrt hardware to test them. Treat them as untested.
 Issues and pull requests are welcome, in particular reports from OpenWrt routers:
 the model, `apk --print-arch`, and what worked or did not.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Lockdown](docs/screenshots/lockdown.png) |
+| The dashboard, with the lockdown switch at the top | Instant lockdown: pick the groups and the minutes |
+| ![Schedules](docs/screenshots/schedules.png) | ![Router settings](docs/screenshots/settings-router.png) |
+| Weekly schedules for services such as YouTube and Roblox | Settings, Router: dnsmasq, storage, restarts, the web UI patch |
+| ![Merlin page](docs/screenshots/merlin-tab.png) | |
+| The TelltaleDNS entry in the Merlin menu, with the dashboard embedded | |
+
 ## What this fork is, and why it exists
 
 This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts; routers have none of those. Many Merlin models, including the RT-AX95Q / ZenWiFi XT8, are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk, not a conventional package manager. On these routers you need a static file or a native package, not an image.
