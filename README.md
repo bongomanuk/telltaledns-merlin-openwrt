@@ -16,6 +16,7 @@ This fork adds:
 
 - **Static ARMv7 and ARM64 binaries** with the web UI compiled in: one file, no Entware, no shared libraries, no container.
 - **Flash-friendly installs:** the Merlin bundle and the OpenWrt package keep the binary gzip-compressed (about 14 MB) and unpack it to RAM at start.
+- **Router UI integration:** a **Services → TelltaleDNS** page in LuCI, and a **TelltaleDNS tab** under Network in the Merlin web UI.
 - An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
 - **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
 - A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.
@@ -57,7 +58,7 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 ### Manually, without Entware
 
-Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
+Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
 
 ### On OpenWrt 25.12+ (apk v3)
 
@@ -67,7 +68,7 @@ Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for a
 apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk
 ```
 
-Then free port 53 from dnsmasq (`uci set dhcp.@dnsmasq[0].port='0'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
+Then free port 53 from dnsmasq (`uci set dhcp.@dnsmasq[0].port='0'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
 
 ## Supported ASUS Merlin routers
 

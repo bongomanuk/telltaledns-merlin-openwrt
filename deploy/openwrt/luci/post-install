@@ -1,0 +1,5 @@
+#!/bin/sh
+# apk post-install: pick up the new menu and ACL files.
+[ -n "$IPKG_INSTROOT" ] && exit 0
+/etc/init.d/rpcd reload 2>/dev/null || true
+exit 0

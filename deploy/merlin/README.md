@@ -168,6 +168,18 @@ The installer:
 - appends a `# telltale` block to `/jffs/scripts/services-start` without overwriting other entries;
 - prints the next steps. It does not change dnsmasq or start the service.
 
+By default it also adds a **TelltaleDNS tab** under **Network** in the router's
+web UI. Asuswrt has no add-on menu API: the installer copies a small page into
+`/www/user` and bind-mounts a patched `menuTree.js`. `/www` is rebuilt at boot and
+after a firmware update, and the `services-start` hook re-applies the tab. Pass
+`--no-ui` to skip it, or remove it later with:
+
+```sh
+/jffs/telltale/ui.sh remove
+```
+
+The tab opens `http://<router>:8053/`; the dashboard works with or without it.
+
 The bundle config uses two UDP workers, a 16 MiB response cache, a 2 MB blocklist,
 and a 4 MiB query log. The binary is unpacked to `/tmp` (RAM) at start, so the
 install takes about 20 MB of the JFFS partition instead of about 34 MB.

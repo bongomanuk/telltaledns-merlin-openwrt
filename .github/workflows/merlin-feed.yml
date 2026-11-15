@@ -133,6 +133,11 @@ jobs:
           build bin/telltale-aarch64-linux aarch64_cortex-a72
           build bin/telltale-aarch64-linux aarch64_generic
           build bin/telltale-x86_64-linux  x86_64
+
+          chmod +x deploy/openwrt/build-luci-apk.sh
+          sudo env SOURCE_DATE_EPOCH=0 deploy/openwrt/build-luci-apk.sh \
+            "$apk" "$APK_VERSION" public/openwrt
+
           {
             echo '<!doctype html><meta charset="utf-8"><title>TelltaleDNS for OpenWrt</title>'
             echo '<h1>TelltaleDNS for OpenWrt 25.12+</h1><ul>'
@@ -153,6 +158,8 @@ jobs:
             stage=$(mktemp -d)
             gzip -9 -n -c "bin/telltale-${arch}-linux" > "$stage/telltale.gz"
             cp deploy/merlin/jffs/install.sh deploy/merlin/jffs/telltale.toml "$stage/"
+            cp deploy/merlin/jffs/ui.sh deploy/merlin/jffs/telltale.asp "$stage/"
+            chmod 755 "$stage/install.sh" "$stage/ui.sh"
             tar -C "$stage" -czf "public/merlin/telltale-${VERSION}-merlin-${arch}.tar.gz" .
             rm -rf "$stage"
           done
@@ -187,6 +194,7 @@ jobs:
           <p>Pick the package for <code>apk --print-arch</code>, then install it:</p>
           <pre><code>apk add --allow-untrusted ./telltale-${APK_VERSION}-&lt;arch&gt;.apk</code></pre>
           <p><a href="openwrt/">OpenWrt packages</a></p>
+          <p>Install <code>luci-app-telltale</code> too for a Services → TelltaleDNS page with status and start/stop.</p>
           <h2>ASUS Merlin without Entware</h2>
           <p>Use the bundle: a gzip-compressed binary (about 14 MB on flash) and an installer.</p>
           <p><a href="merlin/">Merlin bundles</a></p>

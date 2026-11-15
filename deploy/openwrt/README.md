@@ -101,6 +101,23 @@ Check that it is resolving:
 nslookup example.com 127.0.0.1
 ```
 
+## LuCI page
+
+Install the small noarch app as well:
+
+```sh
+apk add --allow-untrusted ./luci-app-telltale-<version>.apk
+```
+
+Then open **Services → TelltaleDNS**. The page shows whether the resolver is
+running, gives Start / Stop / Restart buttons, and links to the full dashboard at
+`http://<router>:8053/`. It uses `/etc/init.d/telltale` for the actions and
+`/etc/config/telltale` for the enabled state; enable or disable it at boot in
+**System → Startup**.
+
+The app depends on `luci-base` and `telltale`, and the same `noarch` package works
+on every architecture.
+
 ## Data and flash
 
 The starter config keeps its data in `/etc/telltale/data`, which is on the router's

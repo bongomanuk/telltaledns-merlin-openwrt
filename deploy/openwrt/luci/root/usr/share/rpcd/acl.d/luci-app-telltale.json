@@ -1,0 +1,19 @@
+{
+	"luci-app-telltale": {
+		"description": "Grant access to TelltaleDNS",
+		"read": {
+			"uci": [ "telltale" ],
+			"file": {
+				"/etc/init.d/telltale running": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "telltale" ],
+			"file": {
+				"/etc/init.d/telltale start": [ "exec" ],
+				"/etc/init.d/telltale stop": [ "exec" ],
+				"/etc/init.d/telltale restart": [ "exec" ]
+			}
+		}
+	}
+}
