@@ -46,7 +46,7 @@ mkdir -p "$dest/data" /jffs/scripts
 # database and the blocklists are written constantly, and the router's internal
 # flash is small and wears out. Falls back to /jffs when no USB volume is
 # mounted. The config is rewritten below to the chosen path.
-data_dir=/jffs/telltale/data
+data_dir=/tmp/telltale-data
 usb=""
 for m in /tmp/mnt/*; do
     [ -d "$m" ] || continue
@@ -121,7 +121,10 @@ if [ -x /jffs/telltale/telltale ]; then
         sleep 2
         i=$((i + 1))
     done
-    [ -n "$data" ] || data=/jffs/telltale/data
+    if [ -z "$data" ]; then
+        echo "$(date) no USB volume mounted: using RAM, nothing persists across a reboot" >>/tmp/telltale.log
+        data=/tmp/telltale-data
+    fi
     mkdir -p "$data"
     sed "s#^data_dir = .*#data_dir = \"$data\"#" "$cfg" > /tmp/telltale-run.toml
     /jffs/telltale/telltale run -c /tmp/telltale-run.toml >>/tmp/telltale.log 2>&1 &
@@ -166,10 +169,12 @@ fi
 echo
 echo "Installed in $dest."
 if [ -n "$usb" ]; then
-    echo "Data and query log: $data_dir (USB volume at $usb)."
+    echo "Data and query log: $data_dir (USB volume at $usb). Nothing is written"
+    echo "to the router's flash while it runs."
 else
-    echo "Data and query log: $data_dir (internal flash; mount a USB volume and"
-    echo "re-run this installer to move it off the router's flash)."
+    echo "No USB volume is mounted. The data and query log will live in RAM"
+    echo "(/tmp/telltale-data) and be lost on reboot. Mount a USB drive and run"
+    echo "this installer again to keep them, without wearing the router's flash."
 fi
 if [ "$ui" = 1 ]; then
     if "$dest/ui.sh" install; then

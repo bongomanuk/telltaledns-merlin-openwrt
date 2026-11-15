@@ -31,7 +31,7 @@ This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/tellt
 This fork adds:
 
 - **Static ARMv7 and ARM64 binaries** with the web UI compiled in: one file, no Entware, no shared libraries, no container.
-- **Flash-friendly installs:** the Merlin bundle and the OpenWrt package keep the binary gzip-compressed (about 14 MB) and unpack it to RAM at start.
+- **Flash-friendly installs:** the binary is gzip-compressed on flash (about 15 MB) and unpacked to RAM at start. The database, query log and blocklists live on the USB drive, and never on the router's flash.
 - **Router UI integration:** a **Services → TelltaleDNS** page in LuCI, and a **TelltaleDNS tab** under Network in the Merlin web UI.
 - An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
 - **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
@@ -80,7 +80,7 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 ### Manually, without Entware
 
-Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also puts `data_dir` (state database, query log, blocklists) on the first mounted USB volume, or on `/jffs/telltale/data` when there is none, and adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The drive must be ext2/3/4 or NTFS; this firmware does not read exFAT. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers dnsmasq, the first run, and the setup token.
+Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 15 MB on flash) and unpacks it to `/tmp` at start. The installer also puts `data_dir` (state database, query log, blocklists) on the first mounted USB volume. With no USB volume it uses `/tmp/telltale-data`, which is RAM, so nothing is written to the router's flash at runtime. It adds a **TelltaleDNS** entry to the router's web UI by default (`--no-ui` skips it). The drive must be ext2/3/4 or NTFS; this firmware does not read exFAT. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers dnsmasq, the first run, and the setup token.
 
 ### On OpenWrt 25.12+ (apk v3)
 
@@ -151,13 +151,33 @@ Your router's `uname -m` picks the binary. Run it on the router if you are unsur
 
 `armv7l` and `aarch64` are the only two `uname -m` answers that work. `uname -r` shows the kernel; if it starts with `2.6.36`, the binary will not run.
 
-## How it sits next to dnsmasq
+## Where the traffic goes
 
-On Merlin, dnsmasq keeps port 53: DHCP, the DHCP hostnames, `home.lan`, `router.asus.com` and the AiMesh nodes keep working even if TelltaleDNS stops. dnsmasq forwards public queries to TelltaleDNS on `127.0.0.1:5354`, which filters them and resolves over DNS over TLS. If TelltaleDNS is down, dnsmasq falls back to plain DNS and the LAN keeps working.
+The router's dnsmasq runs DHCP and DNS, and it stays on port 53. TelltaleDNS runs on
+`127.0.0.1:5354`, where only dnsmasq can reach it. A lookup takes this path:
 
-The trade-off is per-client attribution: dnsmasq is TelltaleDNS's only client, so the query log sees one source address. Device names still come from the dnsmasq lease file. The older setup (TelltaleDNS on 53, dnsmasq moved to 5354) gives per-client attribution but takes DNS away from the whole LAN, mesh included, whenever TelltaleDNS misbehaves. [`deploy/merlin/README.md`](deploy/merlin/README.md) documents both.
-- **Run it on a separate host (a Pi):** leave the router alone and point the router's DHCP DNS at the Pi. This is the least risky option.
-- **Keep dnsmasq and forward to TelltaleDNS on loopback (default):** every query reaches TelltaleDNS from the router, so dnsmasq's `add-mac` option carries the client MAC along and TelltaleDNS trusts it from `127.0.0.1`. Device rules and per-device statistics keep working.
+1. A device asks the router (`192.168.1.1:53`).
+2. dnsmasq answers its own names itself: DHCP hostnames, `home.lan`, `router.asus.com`.
+3. For everything else, dnsmasq forwards the query to TelltaleDNS on `127.0.0.1:5354`
+   and adds the device's MAC address (`add-mac`).
+4. TelltaleDNS filters the name and asks Cloudflare or Quad9 over DNS over TLS.
+5. If TelltaleDNS is not running, dnsmasq sends the query to `9.9.9.9` or `1.1.1.1`,
+   so the LAN keeps working.
+
+TelltaleDNS reads that MAC from the query and looks it up in the dnsmasq lease file, so
+the query log, top clients and per-device rules see the device, not the router.
+
+There is no port 53 conflict: dnsmasq never gives up port 53.
+
+### Flash wear
+
+Nothing is written to the router's flash while TelltaleDNS runs. The install writes the
+compressed binary, the config and the boot hook once. The database, query log and
+blocklists go to the USB drive. Without a USB drive they go to `/tmp/telltale-data`,
+which is RAM, and are lost on reboot. The router's own syslog (`/jffs/syslog.log`) is a
+firmware setting and is outside this app; turn it off under Administration, System if
+you want to cut that down too.
+
 
 ## Builds and packages
 

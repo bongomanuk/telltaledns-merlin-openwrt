@@ -9,86 +9,50 @@
 <link rel="stylesheet" href="/index_style.css">
 <link rel="stylesheet" href="/form_style.css">
 <style>
-  .tt-value { font-family: Consolas, Monaco, monospace; }
-  .tt-ok { color: #1a7f37; font-weight: bold; }
-  .tt-bad { color: #c62828; font-weight: bold; }
-  .tt-actions { margin-top: 12px; }
+  .tt-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .tt-state { font-weight: bold; }
+  .tt-ok { color: #1a7f37; }
+  .tt-bad { color: #c62828; }
+  .tt-frame { width: 100%; height: calc(100vh - 150px); min-height: 520px; border: 1px solid #ccc; background: #fff; }
+  .tt-note { margin: 6px 0 10px; }
 </style>
 </head>
 <body>
 <div class="content">
-  <div class="formfonttitle">TelltaleDNS</div>
-  <p class="formfontdesc">
-    The DNS resolver behind port 53: dnsmasq keeps DHCP and the local names and sends public
-    queries here, where they are filtered and resolved over DNS over TLS.
-  </p>
-
-  <table width="100%" cellpadding="4" cellspacing="0" class="FormTable">
-    <tr>
-      <th width="30%">Status</th>
-      <td><span id="status" class="tt-value">checking…</span></td>
-    </tr>
-    <tr>
-      <th>Version</th>
-      <td><span id="version" class="tt-value">–</span></td>
-    </tr>
-    <tr>
-      <th>Uptime</th>
-      <td><span id="uptime" class="tt-value">–</span></td>
-    </tr>
-    <tr>
-      <th>Queries</th>
-      <td><span id="queries" class="tt-value">–</span></td>
-    </tr>
-    <tr>
-      <th>Blocked</th>
-      <td><span id="blocked" class="tt-value">–</span></td>
-    </tr>
-    <tr>
-      <th>Dashboard</th>
-      <td>
-        <input type="button" class="button_gen" value="Open TelltaleDNS" onclick="openApp()">
-        <span class="formfontdesc">Sign in with your TelltaleDNS account.</span>
-      </td>
-    </tr>
-  </table>
-
-  <div class="tt-actions">
-    <input type="button" class="button_gen" value="Refresh" onclick="refresh()">
+  <div class="tt-head">
+    <div class="formfonttitle">TelltaleDNS</div>
+    <div class="tt-state"><span id="state">checking…</span></div>
+    <div class="formfontdesc">
+      <span id="summary"></span>
+      <a href="#" onclick="openApp(); return false;">Open in a new tab</a>
+    </div>
   </div>
-
-  <p class="formfontdesc">
-    Restart and forwarding controls are in the dashboard under Settings, Router. This tab is
-    re-applied by <span class="tt-value">/jffs/scripts/services-start</span> after a reboot or a
-    firmware update.
+  <p class="formfontdesc tt-note">
+    dnsmasq keeps port 53 and sends public queries here, where they are filtered and resolved
+    over DNS over TLS. The dashboard below is the full interface; sign in with your TelltaleDNS
+    account. Restart and forwarding controls are under Settings, Router.
   </p>
+  <iframe id="app" class="tt-frame" src="about:blank" title="TelltaleDNS"></iframe>
 </div>
 
 <script type="text/javascript">
+var appUrl = 'http://' + location.hostname + ':8053/';
+
 function openApp() {
-  window.open('http://' + location.hostname + ':8053/', '_blank');
+  window.open(appUrl, '_blank');
 }
 
-function setText(id, text, cls) {
-  var el = document.getElementById(id);
+document.getElementById('app').src = appUrl;
+
+function setState(text, cls) {
+  var el = document.getElementById('state');
   el.textContent = text;
-  if (cls) el.className = 'tt-value ' + cls;
-}
-
-function formatUptime(secs) {
-  var d = Math.floor(secs / 86400);
-  var h = Math.floor((secs % 86400) / 3600);
-  var m = Math.floor((secs % 3600) / 60);
-  if (d) return d + 'd ' + h + 'h';
-  if (h) return h + 'h ' + m + 'm';
-  if (m) return m + 'm';
-  return Math.floor(secs) + 's';
+  el.className = 'tt-state ' + cls;
 }
 
 function refresh() {
-  var url = 'http://' + location.hostname + ':9153/metrics';
   var req = new XMLHttpRequest();
-  req.open('GET', url, true);
+  req.open('GET', 'http://' + location.hostname + ':9153/metrics', true);
   req.timeout = 5000;
   req.onload = function () {
     if (req.status !== 200) return down();
@@ -100,12 +64,11 @@ function refresh() {
     var re = /^telltale_queries_total\{[^}]*\} ([0-9]+)/gm;
     var m;
     while ((m = re.exec(text))) total += parseInt(m[1], 10) || 0;
-
-    setText('status', 'running', 'tt-ok');
-    setText('version', version ? version[1] : '–');
-    setText('uptime', uptime ? formatUptime(parseFloat(uptime[1])) : '–');
-    setText('queries', String(total));
-    setText('blocked', blocked ? blocked[1] : '0');
+    setState('running', 'tt-ok');
+    document.getElementById('summary').textContent =
+      'version ' + (version ? version[1] : '?') +
+      ' · up ' + (uptime ? formatUptime(parseFloat(uptime[1])) : '?') +
+      ' · ' + total + ' queries · ' + (blocked ? blocked[1] : '0') + ' blocked';
   };
   req.onerror = down;
   req.ontimeout = down;
@@ -113,11 +76,19 @@ function refresh() {
 }
 
 function down() {
-  setText('status', 'not running', 'tt-bad');
-  setText('version', '–');
-  setText('uptime', '–');
-  setText('queries', '–');
-  setText('blocked', '–');
+  setState('not running', 'tt-bad');
+  document.getElementById('summary').textContent =
+    'The service is not answering. The tab still opens the dashboard once it is back.';
+}
+
+function formatUptime(secs) {
+  var d = Math.floor(secs / 86400);
+  var h = Math.floor((secs % 86400) / 3600);
+  var m = Math.floor((secs % 3600) / 60);
+  if (d) return d + 'd ' + h + 'h';
+  if (h) return h + 'h ' + m + 'm';
+  if (m) return m + 'm';
+  return Math.floor(secs) + 's';
 }
 
 refresh();

@@ -59,7 +59,7 @@ The package installs:
 | `/etc/init.d/telltale` | procd init script; reads `/etc/config/telltale` |
 | `/etc/config/telltale` | UCI enable switch and config path (a conffile) |
 | `/etc/telltale/telltale.toml` | the TOML config (a conffile; edits survive upgrades) |
-| `/etc/telltale/data` | data and query log (created by the post-install script) |
+| `/tmp/telltale-data` | data and query log (RAM; point `data_dir` at a USB mount to keep them) |
 
 The launcher unpacks the binary into `/tmp` (RAM) at start, so the package uses
 about 14 MB of flash instead of 28 MB.
@@ -90,6 +90,13 @@ dnsmasq has no `addmac` option, add `add-mac` to its configuration instead.
 
 To undo, delete the `server` list and set `noresolv` back to `0`, then restart
 dnsmasq.
+
+### Flash wear
+
+Nothing is written to the router's flash while it runs. The install writes the compressed
+binary and the two config files once. The database, query log and blocklists default to
+`/tmp/telltale-data`, which is RAM and is lost on reboot; set `data_dir` to a mounted USB
+drive to keep them. The router's own syslog is a firmware setting and is outside this app.
 
 ## Start it
 

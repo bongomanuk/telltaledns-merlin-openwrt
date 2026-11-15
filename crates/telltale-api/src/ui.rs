@@ -16,7 +16,7 @@ struct Assets;
 /// dynamic styles through the CSSOM, which CSP allows, never through `style` attributes.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
     font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; \
-    frame-ancestors 'none'";
+    frame-ancestors 'self' http://192.168.1.1:* http://router.asus.com:*";
 
 const MISSING: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>TelltaleDNS</title></head>\
     <body><h1>TelltaleDNS</h1><p>This build has no web UI. Build it with <code>npm --prefix ui ci &amp;&amp; \
@@ -43,7 +43,6 @@ fn security_headers(h: &mut HeaderMap) {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(CSP),
     );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

@@ -81,33 +81,25 @@ Requirements:
   The binary is about 30 MB; the query log writes constantly, so a USB drive is
   the better home for `data_dir` (see below).
 
-## How it sits next to dnsmasq
+## Where the traffic goes
 
-The router's `dnsmasq` owns port 53 and runs DHCP. TelltaleDNS does not take port
-53 away from it. Instead:
+The router's dnsmasq runs DHCP and DNS, and keeps port 53. TelltaleDNS listens on
+`127.0.0.1:5354`, where only dnsmasq can reach it.
 
-- dnsmasq keeps port 53, DHCP, the DHCP hostnames, `home.lan`, `router.asus.com`
-  and the AiMesh heartbeats;
-- dnsmasq forwards public queries to TelltaleDNS on `127.0.0.1:5354`;
-- TelltaleDNS filters and resolves them over DNS over TLS;
-- if TelltaleDNS is down, dnsmasq falls back to plain DNS (`9.9.9.9`, `1.1.1.1`)
-  and the LAN keeps working.
+1. A device asks the router (`192.168.1.1:53`).
+2. dnsmasq answers its own names itself: DHCP hostnames, `home.lan`, `router.asus.com`.
+3. Anything else is forwarded to TelltaleDNS on `127.0.0.1:5354`, with the device's MAC
+   address added by dnsmasq (`add-mac`).
+4. TelltaleDNS filters the name and resolves it over DNS over TLS.
+5. If TelltaleDNS is not running, dnsmasq sends the query to `9.9.9.9` or `1.1.1.1`, so
+   the LAN keeps working.
 
-Every query reaches TelltaleDNS from 127.0.0.1, so dnsmasq's `add-mac` option
-carries the client MAC in the query and TelltaleDNS trusts it from loopback
-(`[clients] trust_edns_mac_from`). That keeps per-device statistics and rules
-working. Without `add-mac` the Clients view would see one address, the router,
-and the UI would warn that client IPs look masked.
+TelltaleDNS reads the MAC from the forwarded query and looks it up in the dnsmasq lease
+file (`[clients] trust_edns_mac_from`), so per-device rules and statistics see the device,
+not the router. Without `add-mac` every query would look like it came from the router.
 
-An older setup had TelltaleDNS answer port 53 and moved dnsmasq to 5354. It gives
-per-client attribution, but the whole LAN, including the mesh nodes, loses DNS
-whenever TelltaleDNS misbehaves. That is why it is no longer the default. To use
-it anyway, set the listener in `telltale.toml` to `0.0.0.0:53`, drop the
-`127.0.0.1#5354` server line, add `port=5354`, and restart dnsmasq.
-
-The installer writes the dnsmasq lines for you and restarts dnsmasq. It is
-idempotent and removes a `port=5354` line from the older setup. Pass `--no-dns`
-to leave dnsmasq alone.
+The installer writes those dnsmasq lines and restarts dnsmasq. It is idempotent and
+removes a `port=5354` line left by an older setup. Pass `--no-dns` to leave dnsmasq alone.
 
 ## Install from the opkg feed (recommended, needs Entware)
 
@@ -187,8 +179,8 @@ The installer:
 
 - checks `uname -m` and accepts only `armv7l` and `aarch64`;
 - installs `/jffs/telltale/telltale.gz`, a `/jffs/telltale/telltale` launcher, and the config, keeping a timestamped backup of an existing config;
-- puts `data_dir` on the first mounted USB volume (`/tmp/mnt/<label>/telltale/data`), or on `/jffs/telltale/data` when no USB volume is mounted. Re-run the installer after plugging a drive in to move it;
-- waits up to a minute for that volume at boot, then falls back to `/jffs/telltale/data` if it never appears;
+- puts `data_dir` on the first mounted USB volume (`/tmp/mnt/<label>/telltale/data`). With no USB volume it uses `/tmp/telltale-data`, which is RAM, so nothing is written to the router's flash at runtime. Re-run the installer after plugging a drive in;
+- waits up to a minute for that volume at boot, then uses `/tmp/telltale-data` if it never appears;
 - appends a `# telltale` block to `/jffs/scripts/services-start` without overwriting other entries;
 - prints the next steps. It does not change dnsmasq or start the service.
 
@@ -213,8 +205,19 @@ and a 4 MiB query log. The binary is unpacked to `/tmp` (RAM) at start, so the
 install takes about 20 MB of the JFFS partition instead of about 34 MB.
 
 The installer also points dnsmasq at TelltaleDNS and restarts it (`--no-dns`
-skips that). Then follow steps 3 and 4 of the manual install below for the first
-run and the setup token.
+skips that).
+
+### Flash wear
+
+The installer writes about 16 MB to `/jffs` once: the compressed binary, the config, the
+web UI page and the boot hook. After that the process writes only to `data_dir`: the
+database, the query log and the blocklists. On a USB drive that is the stick. With no USB
+drive it is `/tmp/telltale-data`, which is RAM, and it is lost on reboot. The router's own
+syslog (`/jffs/syslog.log`) is a firmware setting; turn it off under
+Administration, System if you want to cut that down too.
+
+Then follow steps 3 and 4 of the manual install below for the first run and the setup
+token.
 
 ## Manual install (no Entware)
 
@@ -261,8 +264,10 @@ sha256sum /jffs/telltale/telltale    # compare with SHA256SUMS
 config_version = 1
 
 [node]
-# On the router's flash. Use e.g. /tmp/mnt/<usb-label>/telltale for a USB drive.
-data_dir = "/jffs/telltale/data"
+# The database, query log and blocklists. Point this at a USB drive
+# (/tmp/mnt/<label>/telltale/data). /tmp is RAM: nothing persists, and the
+# router's flash is never written.
+data_dir = "/tmp/telltale-data"
 
 # The web UI and API (the UI is embedded in the binary).
 [api]
@@ -368,7 +373,7 @@ executable:
 # TelltaleDNS
 if [ -x /jffs/telltale/telltale ]; then
     /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml \
-        >>/jffs/telltale/telltale.log 2>&1 &
+        >>/tmp/telltale.log 2>&1 &
 fi
 ```
 
@@ -424,8 +429,9 @@ service restart_dnsmasq
 
 - dnsmasq stays on port 53 and owns DHCP; TelltaleDNS listens on loopback 5354.
 - About 15 MB idle memory; blocklists are held in a compact in-memory index.
-- Writing the query log to `/jffs` wears the router's flash. Keep
-  `retention_days` low, set `enabled = false`, or put `data_dir` on a USB drive.
+- Nothing is written to the router's flash while it runs: `data_dir` is on the USB
+  drive, or in `/tmp` (RAM) without one. Install writes the compressed binary, the config
+  and the boot hook once.
 - The web UI is plain HTTP on `:8053`. It is LAN-only unless you expose it; do not
   forward that port from the WAN.
 - These binaries are this fork's own builds. They are not minisign-signed like the
