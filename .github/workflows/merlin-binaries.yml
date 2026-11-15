@@ -64,7 +64,7 @@ jobs:
           tar -xJf "$RUNNER_TEMP/zb.tar.xz" -C "$HOME/.cargo/bin" --strip-components=1
 
           "$HOME/.local/zig/zig" version
-          cargo zigbuild --version
+          cargo-zigbuild --version
 
       - name: Build the static binaries
         shell: bash
