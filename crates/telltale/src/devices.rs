@@ -22,6 +22,25 @@ pub(crate) struct Lease {
 /// Devices by address.
 pub(crate) type Leases = HashMap<Ipv4Addr, Lease>;
 
+/// The address a MAC had in the last router read, if any. dnsmasq forwards queries from
+/// loopback with `add-mac`, so this is how the device gets its address back.
+pub(crate) fn ip_of_mac(leases: &Leases, mac: [u8; 6]) -> Option<Ipv4Addr> {
+    leases
+        .values()
+        .find(|l| parse_mac(&l.mac) == Some(mac))
+        .map(|l| l.ip)
+}
+
+/// `aa:bb:cc:dd:ee:ff` or `aa-bb-cc-dd-ee-ff`.
+fn parse_mac(text: &str) -> Option<[u8; 6]> {
+    let mut mac = [0u8; 6];
+    let mut parts = text.split([':', '-']);
+    for byte in &mut mac {
+        *byte = u8::from_str_radix(parts.next()?, 16).ok()?;
+    }
+    parts.next().is_none().then_some(mac)
+}
+
 /// REQ: CLU-002, API-010 (ADR-125) — the device names other nodes know: the ones their
 /// routers and mDNS saw. Only one node usually reads the router (the one holding its API
 /// key), and a pod can't hear the LAN's mDNS, so without these a resolver pod's query-log
@@ -127,6 +146,19 @@ mod tests {
             routers: routers.iter().map(|l| (l.ip, l.clone())).collect(),
             mdns: mdns.iter().map(|l| (l.ip, l.clone())).collect(),
         }
+    }
+
+    // dnsmasq's add-mac gives the device back its leased address.
+    #[test]
+    fn flt_006_lease_address_for_a_mac() {
+        let mut l = lease([192, 168, 1, 41], "kid-tablet");
+        l.mac = "3C:E3:6B:05:18:39".into();
+        let table: Leases = [(l.ip, l)].into_iter().collect();
+        assert_eq!(
+            ip_of_mac(&table, [0x3c, 0xe3, 0x6b, 0x05, 0x18, 0x39]),
+            Some(Ipv4Addr::new(192, 168, 1, 41))
+        );
+        assert_eq!(ip_of_mac(&table, [0; 6]), None);
     }
 
     // REQ: CLU-002, API-010 — the primary's names win; others fill in what it doesn't know.

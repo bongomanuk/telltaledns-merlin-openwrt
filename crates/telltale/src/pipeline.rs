@@ -885,9 +885,21 @@ impl Pipeline {
         // the DoT SNI or the DoH path. First, so every answer below (refusals, local records)
         // is logged with the device and its group (owner report 2026-10-07: local names were
         // logged under the first configured group).
+        // REQ: FLT-006 — behind dnsmasq every query arrives from loopback with the device
+        // MAC in `add-mac`. Use the address the router leased to that MAC, so the log,
+        // statistics and groups see the device rather than the router. The ACLs and rate
+        // limits above still use the real peer.
+        let mac = q.edns.as_ref().and_then(telltale_proto::Edns::client_mac);
+        let mut peer = meta.peer.ip();
+        if let Some(mac) = mac
+            && st.policy.clients.trusts_mac_from(peer)
+            && let Some(ip) = crate::devices::ip_of_mac(&self.router_leases.load(), mac)
+        {
+            peer = IpAddr::V4(ip);
+        }
         let who = Who {
-            peer: meta.peer.ip(),
-            mac: q.edns.as_ref().and_then(telltale_proto::Edns::client_mac),
+            peer,
+            mac,
             client_id: meta.client_id,
         };
         let ident = st.policy.clients.identify(

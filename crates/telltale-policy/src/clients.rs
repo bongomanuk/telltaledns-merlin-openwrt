@@ -520,6 +520,13 @@ impl ClientTable {
         t
     }
 
+    /// True when this source may set the EDNS MAC (a forwarder we trust).
+    pub fn trusts_mac_from(&self, peer: IpAddr) -> bool {
+        self.trust_mac
+            .iter()
+            .any(|n| n.contains(peer.to_canonical()))
+    }
+
     /// True if some client is identified by MAC, so the neighbor table is worth reading.
     pub fn uses_macs(&self) -> bool {
         !self.by_mac.is_empty()
