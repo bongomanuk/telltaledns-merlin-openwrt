@@ -8,6 +8,10 @@ Static, self-contained builds of [TelltaleDNS](https://github.com/paimonsoror/te
 
 > **This fork is proudly not built by Claude.**
 
+These are unofficial builds. There is no guarantee that they work on your router,
+and a resolver that owns port 53 can take the LAN offline while it is broken.
+Keep SSH access and the undo steps in the install guide. Use at your own risk.
+
 ## What this fork is, and why it exists
 
 This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts; routers have none of those. Many Merlin models, including the RT-AX95Q / ZenWiFi XT8, are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk, not a conventional package manager. On these routers you need a static file or a native package, not an image.
@@ -60,7 +64,7 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 ### Manually, without Entware
 
-Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
+Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also puts `data_dir` (state database, query log, blocklists) on the first mounted USB volume, or on `/jffs/telltale/data` when there is none, and adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The drive must be ext2/3/4 or NTFS; this firmware does not read exFAT. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
 
 ### On OpenWrt 25.12+ (apk v3)
 

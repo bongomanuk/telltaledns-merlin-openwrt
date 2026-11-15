@@ -5,9 +5,11 @@ config_version = 1
 [node]
 # Two UDP workers are enough for a home network and keep the RSS down.
 workers = 2
-# The data lives on the router's JFFS partition. The binary in this bundle is
-# gzip-compressed (about 14 MB instead of 28 MB) and is unpacked to /tmp at
-# start, which keeps the flash use down on a 47 MB JFFS.
+# The data lives in data_dir. The installer points it at a mounted USB volume
+# when there is one, and at /jffs/telltale/data otherwise: the query log and the
+# state database are written constantly and the internal flash wears out. The
+# binary in this bundle is gzip-compressed (about 15 MB instead of 35 MB) and is
+# unpacked to /tmp at start.
 data_dir = "/jffs/telltale/data"
 
 # The web UI and API (the UI is embedded in the binary).

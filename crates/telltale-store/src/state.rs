@@ -236,12 +236,41 @@ fn i(v: u64) -> i64 {
 
 /// Sets the journal mode, falling back to the rollback journal where WAL is not
 /// available. JFFS2 (the `/jffs` partition on Asus routers) cannot back the WAL
-/// shared-memory file and fails the pragma with "disk I/O error".
+/// shared-memory file and answers "disk I/O error" on the first write.
 pub(crate) fn set_journal(conn: &Connection) -> Result<()> {
-    if conn.pragma_update(None, "journal_mode", "WAL").is_err() {
+    let no_wal = conn.path().map(is_jffs2).unwrap_or(false);
+    if no_wal || conn.pragma_update(None, "journal_mode", "WAL").is_err() {
         conn.pragma_update(None, "journal_mode", "DELETE")?;
     }
     Ok(())
+}
+
+/// True when the file at `path` lives on JFFS2.
+fn is_jffs2(path: &str) -> bool {
+    use std::path::{Path, PathBuf};
+    let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
+        return false;
+    };
+    let path: PathBuf = Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path));
+    let mut best: Option<(usize, &str)> = None;
+    for line in mounts.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(_dev) = fields.next() else { continue };
+        let Some(mnt) = fields.next() else { continue };
+        let Some(fstype) = fields.next() else { continue };
+        let mnt = Path::new(mnt);
+        // `Path::starts_with` compares whole components, so /jffs2 does not
+        // match /jffs. The longest matching mount point wins.
+        if path.starts_with(mnt) {
+            let len = mnt.to_string_lossy().len();
+            if best.map(|(l, _)| len > l).unwrap_or(true) {
+                best = Some((len, fstype));
+            }
+        }
+    }
+    best.map(|(_, fstype)| fstype == "jffs2").unwrap_or(false)
 }
 
 impl State {
@@ -794,6 +823,14 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jffs2_is_recognised_from_the_mount_table() {
+        // The CI and dev machines have neither /jffs nor JFFS2, so every path
+        // here takes the WAL branch; the test only proves the lookup is safe.
+        assert!(!is_jffs2("/tmp"));
+        assert!(!is_jffs2("/"));
+    }
 
     // REQ: OPS-001, ADR-124 — no temp files: the image's root filesystem is read-only.
     #[test]

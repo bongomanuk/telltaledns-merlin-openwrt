@@ -62,6 +62,14 @@ If your model is missing or you are unsure, use `uname -m`: `armv7l` and `aarch6
 are the only two answers that work. `uname -r` shows the kernel; if it starts with
 `2.6.36`, the binary will not run.
 
+## No guarantee
+
+These are this fork's own builds. There is no guarantee that they work on your
+router, that they survive a firmware update, or that they are free of bugs. A
+resolver that owns port 53 can take the whole LAN offline while it is broken.
+Keep an SSH session open, know the undo steps, and do not install this on a
+router you cannot reach physically.
+
 Requirements:
 
 - **Asuswrt-Merlin**, not stock Asuswrt. The installer below uses `/jffs/scripts`,
@@ -70,8 +78,8 @@ Requirements:
   *Administration → System → Enable JFFS custom scripts and configs = Yes*.
 - **SSH** enabled (*Administration → System → Enable SSH = LAN only*).
 - Enough space in `/jffs` (or on a mounted USB drive). Check with `df -h /jffs`.
-  The binary is about 30 MB; the query log grows over time, so either keep the
-  retention short (see below) or put `data_dir` on a USB drive.
+  The binary is about 30 MB; the query log writes constantly, so a USB drive is
+  the better home for `data_dir` (see below).
 
 ## The port 53 problem (read this first)
 
@@ -79,9 +87,9 @@ The router's `dnsmasq` owns UDP/TCP port 53 and also runs DHCP. TelltaleDNS need
 port 53 to be your LAN resolver. You have three choices:
 
 **A. TelltaleDNS answers port 53, dnsmasq keeps the local zones (runs on the
-router; recommended).** Keep dnsmasq for DHCP and move its DNS to 5353
-(`port=5353`). TelltaleDNS binds port 53 and forwards `home.lan`, `lan`,
-`router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5353, so the router's
+router; recommended).** Keep dnsmasq for DHCP and move its DNS to 5354
+(`port=5354`). TelltaleDNS binds port 53 and forwards `home.lan`, `lan`,
+`router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5354, so the router's
 DHCP hostnames and local names keep working. It also reads the dnsmasq lease file
 for device names. This is the method below.
 
@@ -95,8 +103,8 @@ is the least risky option overall; point the router's DHCP DNS at the Pi.
 
 > **Warning for option A:** clients use the router (192.168.1.1:53), so the LAN
 > has no DNS unless TelltaleDNS is running. dnsmasq still answers the local zones
-> on 5353. Keep an SSH session open while you test, so you can undo it if
-> TelltaleDNS does not start. To undo, remove the `port=5353` line and run
+> on 5354. Keep an SSH session open while you test, so you can undo it if
+> TelltaleDNS does not start. To undo, remove the `port=5354` line and run
 > `service restart_dnsmasq`.
 
 ## Install from the opkg feed (recommended, needs Entware)
@@ -122,16 +130,16 @@ The package installs:
 | `/opt/etc/init.d/S99telltale` | Entware start/stop script |
 | `/opt/var/lib/telltale` | data and query log (created by `postinst`) |
 
-Move dnsmasq's DNS to 5353 before starting the service (and keep an SSH session
+Move dnsmasq's DNS to 5354 before starting the service (and keep an SSH session
 open; see the warning above):
 
 ```sh
-grep -qx 'port=5353' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5353' >> /jffs/configs/dnsmasq.conf.add
+grep -qx 'port=5354' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5354' >> /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 /opt/etc/init.d/S99telltale start
 ```
 
-The starter config forwards local zones to dnsmasq on 5353 and reads
+The starter config forwards local zones to dnsmasq on 5354 and reads
 `/var/lib/misc/dnsmasq.leases` for device names.
 
 Then create the first admin and open the UI:
@@ -172,8 +180,14 @@ The installer:
 
 - checks `uname -m` and accepts only `armv7l` and `aarch64`;
 - installs `/jffs/telltale/telltale.gz`, a `/jffs/telltale/telltale` launcher, and the config, keeping a timestamped backup of an existing config;
+- puts `data_dir` on the first mounted USB volume (`/tmp/mnt/<label>/telltale/data`), or on `/jffs/telltale/data` when no USB volume is mounted. Re-run the installer after plugging a drive in to move it;
+- waits up to a minute for that volume at boot, then falls back to `/jffs/telltale/data` if it never appears;
 - appends a `# telltale` block to `/jffs/scripts/services-start` without overwriting other entries;
 - prints the next steps. It does not change dnsmasq or start the service.
+
+The USB drive must be a filesystem the router can mount. Asuswrt-Merlin 388 reads
+ext2/ext3/ext4 and NTFS; it does not read exFAT. Check the mount with `df -h`
+before running the installer.
 
 By default it also adds a **TelltaleDNS tab** under **Network** in the router's
 web UI. Asuswrt has no add-on menu API: the installer copies a small page into
@@ -263,11 +277,11 @@ name = "default"
 members = ["cloudflare", "quad9"]
 strategy = "fastest"
 
-# The router's dnsmasq stays on 127.0.0.1:5353; local names and reverse lookups
+# The router's dnsmasq stays on 127.0.0.1:5354; local names and reverse lookups
 # go there, and its lease file names the devices.
 [[upstream]]
 name = "router-dns"
-url = "udp://127.0.0.1:5353"
+url = "udp://127.0.0.1:5354"
 
 [[upstream_group]]
 name = "router"
@@ -311,15 +325,15 @@ Check the file before starting:
 /jffs/telltale/telltale config check /jffs/telltale/telltale.toml
 ```
 
-### 3. Move dnsmasq's DNS to 5353 (option A)
+### 3. Move dnsmasq's DNS to 5354 (option A)
 
 ```sh
 mkdir -p /jffs/configs
-grep -qx 'port=5353' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5353' >> /jffs/configs/dnsmasq.conf.add
+grep -qx 'port=5354' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5354' >> /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 
-`port=5353` keeps dnsmasq's DNS and DHCP running, on 5353. TelltaleDNS takes port
+`port=5354` keeps dnsmasq's DNS and DHCP running, on 5354. TelltaleDNS takes port
 53 and forwards the local zones to it.
 
 ### 4. First run and the admin account
@@ -400,7 +414,7 @@ killall telltale
 rm -f /jffs/scripts/services-start
 rm -rf /jffs/telltale
 # restore dnsmasq's DNS on port 53:
-sed -i '/^port=5353$/d' /jffs/configs/dnsmasq.conf.add
+sed -i '/^port=5354$/d' /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 

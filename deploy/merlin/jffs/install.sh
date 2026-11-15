@@ -37,6 +37,21 @@ uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/self/status)
 dest=/jffs/telltale
 mkdir -p "$dest/data" /jffs/scripts
 
+# Prefer a mounted USB volume for the data directory. The query log, the state
+# database and the blocklists are written constantly, and the router's internal
+# flash is small and wears out. Falls back to /jffs when no USB volume is
+# mounted. The config is rewritten below to the chosen path.
+data_dir=/jffs/telltale/data
+usb=""
+for m in /tmp/mnt/*; do
+    [ -d "$m" ] || continue
+    mount | grep -q " on $m type " || continue
+    data_dir="$m/telltale/data"
+    usb="$m"
+    break
+done
+mkdir -p "$data_dir"
+
 if [ -f "$dest/telltale.toml" ]; then
     backup="$dest/telltale.toml.bak-$(date +%Y%m%d%H%M%S)"
     cp -p "$dest/telltale.toml" "$backup"
@@ -44,6 +59,7 @@ if [ -f "$dest/telltale.toml" ]; then
 fi
 
 cp "$here/telltale.toml" "$dest/telltale.toml"
+sed -i "s#^data_dir = .*#data_dir = \"$data_dir\"#" "$dest/telltale.toml"
 cp "$here/telltale.gz" "$dest/telltale.gz"
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
@@ -66,12 +82,34 @@ if [ ! -f /jffs/scripts/services-start ]; then
     printf '#!/bin/sh\n' > /jffs/scripts/services-start
 fi
 if ! grep -q '^# telltale$' /jffs/scripts/services-start; then
-    cat >> /jffs/scripts/services-start <<'START'
+    if [ -n "$usb" ]; then
+        # The data directory is on USB. At boot the disk can appear after this
+        # script, so wait for it and fall back to internal flash if it never
+        # shows up (an unplugged stick must not leave the router without DNS).
+        cat >> /jffs/scripts/services-start <<START
+# telltale
+if [ -x /jffs/telltale/telltale ]; then
+    i=0
+    while [ \$i -lt 30 ] && [ ! -d "$data_dir" ]; do
+        sleep 2
+        i=\$((i + 1))
+    done
+    if [ -d "$data_dir" ]; then
+        /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml >>/tmp/telltale.log 2>&1 &
+    else
+        sed 's#^data_dir = .*#data_dir = "/jffs/telltale/data"#' /jffs/telltale/telltale.toml > /tmp/telltale-flash.toml
+        /jffs/telltale/telltale run -c /tmp/telltale-flash.toml >>/tmp/telltale.log 2>&1 &
+    fi
+fi
+START
+    else
+        cat >> /jffs/scripts/services-start <<'START'
 # telltale
 if [ -x /jffs/telltale/telltale ]; then
     /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml >>/tmp/telltale.log 2>&1 &
 fi
 START
+    fi
 fi
 
 if [ "$ui" = 1 ]; then
@@ -95,6 +133,12 @@ chmod 755 /jffs/scripts/services-start
 "$dest/telltale" --version
 echo
 echo "Installed in $dest."
+if [ -n "$usb" ]; then
+    echo "Data and query log: $data_dir (USB volume at $usb)."
+else
+    echo "Data and query log: $data_dir (internal flash; mount a USB volume and"
+    echo "re-run this installer to move it off the router's flash)."
+fi
 if [ "$ui" = 1 ]; then
     if "$dest/ui.sh" install; then
         echo "Added a TelltaleDNS tab under Network in the router's web UI."
