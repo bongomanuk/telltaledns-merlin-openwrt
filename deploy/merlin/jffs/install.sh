@@ -85,34 +85,34 @@ fi
 if grep -q '^# telltale$' /jffs/scripts/services-start; then
     sed -i '/^# telltale$/,/^fi$/d' /jffs/scripts/services-start
 fi
-if [ -n "$usb" ]; then
-    # The data directory is on USB. At boot the disk can appear after this
-    # script, so wait for it and fall back to internal flash if it never
-    # shows up (an unplugged stick must not leave the router without DNS).
-    cat >> /jffs/scripts/services-start <<START
+# The USB volume is mounted by the firmware under a name that can change (the
+# label, or sda1). Find it at start, wait for it, and fall back to internal
+# flash when it never appears: an unplugged stick must not leave the router
+# without DNS.
+cat >> /jffs/scripts/services-start <<'START'
 # telltale
 if [ -x /jffs/telltale/telltale ]; then
+    cfg=/jffs/telltale/telltale.toml
+    data=""
     i=0
-    while [ \$i -lt 30 ] && [ ! -d "$data_dir" ]; do
+    while [ $i -lt 30 ]; do
+        for m in /tmp/mnt/*; do
+            [ -d "$m" ] || continue
+            mount | grep -q " on $m type " || continue
+            mkdir -p "$m/telltale" 2>/dev/null || continue
+            data="$m/telltale/data"
+            break
+        done
+        [ -n "$data" ] && break
         sleep 2
-        i=\$((i + 1))
+        i=$((i + 1))
     done
-    if [ -d "$data_dir" ]; then
-        /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml >>/tmp/telltale.log 2>&1 &
-    else
-        sed 's#^data_dir = .*#data_dir = "/jffs/telltale/data"#' /jffs/telltale/telltale.toml > /tmp/telltale-flash.toml
-        /jffs/telltale/telltale run -c /tmp/telltale-flash.toml >>/tmp/telltale.log 2>&1 &
-    fi
+    [ -n "$data" ] || data=/jffs/telltale/data
+    mkdir -p "$data"
+    sed "s#^data_dir = .*#data_dir = \"$data\"#" "$cfg" > /tmp/telltale-run.toml
+    /jffs/telltale/telltale run -c /tmp/telltale-run.toml >>/tmp/telltale.log 2>&1 &
 fi
 START
-else
-    cat >> /jffs/scripts/services-start <<'START'
-# telltale
-if [ -x /jffs/telltale/telltale ]; then
-    /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml >>/tmp/telltale.log 2>&1 &
-fi
-START
-fi
 
 if [ "$ui" = 1 ]; then
     : > "$dest/ui-enabled"
