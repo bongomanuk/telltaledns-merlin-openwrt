@@ -47,17 +47,36 @@ install_page() {
     cp "$base/telltale.asp" "/www/user/$page"
     printf '%s\n' "$page" > "$base/ui-page"
 
-    # A top-level menu entry, not a tab buried under Network. The entry is one
-    # line, inserted first in the list; the menu renders it like AiMesh.
+    # A top-level entry, placed after AiProtection rather than first in the
+    # list. Every stock entry ends its tab list with the NULL/__INHERIT__
+    # terminator; without it the router's menu code drops the entry.
     sed -i "/url: \"$page\", tabName: \"TelltaleDNS\"/d" "$tree"
     sed -i '/index: "menu_TelltaleDNS"/d' "$tree"
-    if ! grep -q '^list: \[$' "$tree"; then
+    entry="{menuName: \"TelltaleDNS\", index: \"menu_TelltaleDNS\", tab: [{url: \"$page\", tabName: \"TelltaleDNS\"}, {url: \"NULL\", tabName: \"__INHERIT__\"}]},"
+    if grep -q 'index: "menu_AiProtection"' "$tree"; then
+        awk -v entry="$entry" '
+            { print }
+            /index: "menu_AiProtection"/ { seen = 1 }
+            seen && /^},$/ { print entry; seen = 0 }
+        ' "$tree" > "$tree.new" && mv "$tree.new" "$tree"
+    elif grep -q '^list: \[$' "$tree"; then
+        # Fallback for a firmware whose menu no longer has AiProtection.
+        sed -i "/^list: \[$/a $entry" "$tree"
+    else
         echo "unexpected menuTree.js layout" >&2
         return 1
     fi
-    # Every top-level entry ends its tab list with this terminator; without it
-    # the router's menu code drops the entry.
-    sed -i "/^list: \[$/a {menuName: \"TelltaleDNS\", index: \"menu_TelltaleDNS\", tab: [{url: \"$page\", tabName: \"TelltaleDNS\"}, {url: \"NULL\", tabName: \"__INHERIT__\"}]}," "$tree"
+    # The stock icons are one sprite; the menu code uses .menu_<index>. Give ours
+    # the AiProtection shield instead of an empty square.
+    css=/tmp/telltale-index_style.css
+    if ! mount | grep -q " on /www/index_style.css "; then
+        cp /www/index_style.css "$css" || return 1
+    fi
+    if ! grep -q "menu_menu_TelltaleDNS" "$css"; then
+        printf '\n.menu_menu_TelltaleDNS{ background: url(images/New_ui/icon_indexes.png); background-position: 0px -180px; }\n' >> "$css"
+    fi
+    umount /www/index_style.css 2>/dev/null || true
+    mount -o bind "$css" /www/index_style.css
 
     umount "$target" 2>/dev/null || true
     mount -o bind "$tree" "$target"
@@ -78,6 +97,8 @@ remove_page() {
         umount "$target" 2>/dev/null || true
         mount -o bind "$tree" "$target"
     fi
+    umount /www/index_style.css 2>/dev/null || true
+    rm -f /tmp/telltale-index_style.css
     rm -f "$base/ui-page"
     echo "TelltaleDNS tab removed"
 }
