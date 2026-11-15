@@ -35,12 +35,18 @@ install_page() {
             break
         fi
     done
+    # Remove an older TelltaleDNS entry and page first: a re-install can pick a
+    # different userN.asp, and leaving the old one would add a second tab.
+    old=$(cat "$base/ui-page" 2>/dev/null || true)
+    [ -n "$old" ] && rm -f "/www/user/$old"
+    [ -f "$tree" ] || cp "$target" "$tree"
+    sed -i '/tabName: "TelltaleDNS"/d' "$tree"
+
     [ -n "$page" ] || { echo "no free user page slot" >&2; return 1; }
 
     cp "$base/telltale.asp" "/www/user/$page"
     printf '%s\n' "$page" > "$base/ui-page"
 
-    [ -f "$tree" ] || cp "$target" "$tree"
     sed -i "/url: \"$page\", tabName: \"TelltaleDNS\"/d" "$tree"
     if ! grep -q 'url: "Guest_network.asp", tabName:' "$tree"; then
         echo "no Guest Network tab to insert after" >&2
@@ -57,7 +63,7 @@ remove_page() {
     page=$(cat "$base/ui-page" 2>/dev/null || true)
     [ -n "$page" ] && rm -f "/www/user/$page"
     if [ -f "$tree" ]; then
-        [ -n "$page" ] && sed -i "/url: \"$page\", tabName: \"TelltaleDNS\"/d" "$tree"
+        sed -i '/tabName: "TelltaleDNS"/d' "$tree"
         umount "$target" 2>/dev/null || true
         mount -o bind "$tree" "$target"
     fi
