@@ -236,17 +236,22 @@ fn i(v: u64) -> i64 {
 
 /// Sets the journal mode, falling back to the rollback journal where WAL is not
 /// available. JFFS2 (the `/jffs` partition on Asus routers) cannot back the WAL
-/// shared-memory file and answers "disk I/O error" on the first write.
+/// shared-memory file and answers "disk I/O error" on the first write. The NTFS
+/// drivers routers use (Asus's `tntfs`, `ntfs3`, FUSE) do not give SQLite the
+/// locks and mmap WAL needs either, so they get the rollback journal too.
 pub(crate) fn set_journal(conn: &Connection) -> Result<()> {
-    let no_wal = conn.path().map(is_jffs2).unwrap_or(false);
+    let no_wal = conn.path().map(needs_rollback_journal).unwrap_or(false);
     if no_wal || conn.pragma_update(None, "journal_mode", "WAL").is_err() {
         conn.pragma_update(None, "journal_mode", "DELETE")?;
     }
     Ok(())
 }
 
-/// True when the file at `path` lives on JFFS2.
-fn is_jffs2(path: &str) -> bool {
+/// File systems where SQLite must use the rollback journal.
+const ROLLBACK_ONLY: [&str; 5] = ["jffs2", "tntfs", "ntfs", "ntfs3", "fuseblk"];
+
+/// True when the file at `path` lives on a file system without WAL support.
+fn needs_rollback_journal(path: &str) -> bool {
     use std::path::{Path, PathBuf};
     let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else {
         return false;
@@ -270,7 +275,8 @@ fn is_jffs2(path: &str) -> bool {
             }
         }
     }
-    best.map(|(_, fstype)| fstype == "jffs2").unwrap_or(false)
+    best.map(|(_, fstype)| ROLLBACK_ONLY.contains(&fstype))
+        .unwrap_or(false)
 }
 
 impl State {
@@ -825,11 +831,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jffs2_is_recognised_from_the_mount_table() {
-        // The CI and dev machines have neither /jffs nor JFFS2, so every path
+    fn rollback_journal_is_recognised_from_the_mount_table() {
+        // The CI and dev machines have neither /jffs nor NTFS, so every path
         // here takes the WAL branch; the test only proves the lookup is safe.
-        assert!(!is_jffs2("/tmp"));
-        assert!(!is_jffs2("/"));
+        assert!(!needs_rollback_journal("/tmp"));
+        assert!(!needs_rollback_journal("/"));
     }
 
     // REQ: OPS-001, ADR-124 — no temp files: the image's root filesystem is read-only.

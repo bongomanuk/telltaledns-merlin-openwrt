@@ -47,12 +47,15 @@ install_page() {
     cp "$base/telltale.asp" "/www/user/$page"
     printf '%s\n' "$page" > "$base/ui-page"
 
+    # A top-level menu entry, not a tab buried under Network. The entry is one
+    # line, inserted first in the list; the menu renders it like AiMesh.
     sed -i "/url: \"$page\", tabName: \"TelltaleDNS\"/d" "$tree"
-    if ! grep -q 'url: "Guest_network.asp", tabName:' "$tree"; then
-        echo "no Guest Network tab to insert after" >&2
+    sed -i '/index: "menu_TelltaleDNS"/d' "$tree"
+    if ! grep -q '^list: \[$' "$tree"; then
+        echo "unexpected menuTree.js layout" >&2
         return 1
     fi
-    sed -i "/url: \"Guest_network.asp\", tabName:/a {url: \"$page\", tabName: \"TelltaleDNS\"}," "$tree"
+    sed -i "/^list: \[$/a {menuName: \"TelltaleDNS\", index: \"menu_TelltaleDNS\", tab: [{url: \"$page\", tabName: \"TelltaleDNS\"}]}," "$tree"
 
     umount "$target" 2>/dev/null || true
     mount -o bind "$tree" "$target"
@@ -63,7 +66,7 @@ remove_page() {
     page=$(cat "$base/ui-page" 2>/dev/null || true)
     [ -n "$page" ] && rm -f "/www/user/$page"
     if [ -f "$tree" ]; then
-        sed -i '/tabName: "TelltaleDNS"/d' "$tree"
+        sed -i '/tabName: "TelltaleDNS"/d;/index: "menu_TelltaleDNS"/d' "$tree"
         umount "$target" 2>/dev/null || true
         mount -o bind "$tree" "$target"
     fi
