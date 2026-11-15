@@ -50,6 +50,9 @@ docker compose exec telltale telltale auth setup-token     # then open http://<h
 ```
 Kubernetes (Helm), a native systemd install, clustering, and moving from Pi-hole or Technitium are covered in [`docs/running.md`](docs/running.md).
 
+### ASUS Merlin routers
+Static ARM binaries for Asuswrt-Merlin routers are built by the [`merlin-binaries`](.github/workflows/merlin-binaries.yml) Actions workflow (32-bit ARMv7 and 64-bit ARM64, web UI embedded, no Entware needed). Your router's `uname -m` picks the file: `armv7l` for the **RT-AX95Q / ZenWiFi XT8** and other BCM675x models, `aarch64` for the newer ARM64 models. The router's `dnsmasq` already owns port 53, so read the notes before starting it: see [`deploy/merlin/README.md`](deploy/merlin/README.md) for the supported models, the port 53 / dnsmasq options, the config, and a boot-time `services-start` script.
+
 **Status:** pre-1.0. Tagged [releases](https://github.com/paimonsoror/telltaledns/releases) are stable (`latest`), and `edge` is built from every commit on `main`. Releases before 1.0 can still change configuration keys and APIs, and their notes call out every such change; the [roadmap](spec/10-roadmap-and-tasks.md) shows what's next. Project site: **https://paimonsoror.github.io/telltaledns/**
 
 | Read this | If you want |
