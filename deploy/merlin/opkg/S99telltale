@@ -1,0 +1,9 @@
+#!/bin/sh
+ENABLED=yes
+PROCS=telltale
+ARGS="run -c /opt/etc/telltale/telltale.toml"
+PREARGS=""
+DESC="TelltaleDNS"
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+. /opt/etc/init.d/rc.func

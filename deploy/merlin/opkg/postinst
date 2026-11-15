@@ -1,0 +1,6 @@
+#!/bin/sh
+# Entware/opkg post-install: the writable data directory lives on /opt (the USB
+# drive), not on the router's flash.
+[ -n "$IPKG_INSTROOT" ] && exit 0
+mkdir -p /opt/var/lib/telltale
+exit 0

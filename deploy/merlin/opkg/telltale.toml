@@ -1,0 +1,37 @@
+# TelltaleDNS starter config for Entware/Asuswrt-Merlin.
+# Check edits with: /opt/sbin/telltale config check /opt/etc/telltale/telltale.toml
+config_version = 1
+
+[node]
+# On the Entware USB drive, not the router's flash.
+data_dir = "/opt/var/lib/telltale"
+
+# The web UI and API (the UI is embedded in the binary).
+[api]
+listen = "0.0.0.0:8053"
+
+# Encrypted (DNS over TLS) upstreams. The Mozilla roots are built into the
+# binary, so no CA bundle is needed on the router.
+[[upstream]]
+name = "cloudflare"
+url = "tls://1.1.1.1:853"
+tls_server_name = "cloudflare-dns.com"
+
+[[upstream]]
+name = "quad9"
+url = "tls://9.9.9.9:853"
+tls_server_name = "dns.quad9.net"
+
+[[upstream_group]]
+name = "default"
+members = ["cloudflare", "quad9"]
+strategy = "fastest"
+
+# A balanced ad and tracker blocklist (about 150k names), refreshed daily.
+[[list]]
+name = "hagezi-pro"
+url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"
+
+# Keep the query log small on a router.
+[telemetry.qlog]
+retention_days = 7

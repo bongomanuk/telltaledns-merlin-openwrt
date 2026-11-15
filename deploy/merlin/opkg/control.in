@@ -1,0 +1,11 @@
+Package: telltale
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: @ARCH@
+Installed-Size: @SIZE@
+Maintainer: bongomanuk <bongomanuk@users.noreply.github.com>
+Description: TelltaleDNS - a fast, per-device filtering DNS resolver with a web UI
+ Static ARM build for Asuswrt-Merlin/Entware. The web UI is embedded and
+ there are no shared-library dependencies. Free port 53 (dnsmasq) before
+ starting the service.

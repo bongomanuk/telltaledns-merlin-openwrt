@@ -1,0 +1,7 @@
+#!/bin/sh
+# Entware/opkg pre-remove: stop the service before its files go away.
+[ -n "$IPKG_INSTROOT" ] && exit 0
+if [ -x /opt/etc/init.d/S99telltale ]; then
+    /opt/etc/init.d/S99telltale stop >/dev/null 2>&1
+fi
+exit 0

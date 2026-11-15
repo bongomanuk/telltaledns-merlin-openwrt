@@ -1,0 +1,97 @@
+# Build the Entware/opkg feed for Asuswrt-Merlin and publish it to GitHub Pages.
+#
+# The feed is a normal opkg repository:
+#
+#   src/gz telltale https://bongomanuk.github.io/telltaledns/entware
+#
+# It contains telltale_<version>_armv7-3.2.ipk and telltale_<version>_aarch64-3.10.ipk
+# (static binaries, web UI embedded), Packages and Packages.gz.
+#
+# The binaries come from the reusable merlin-binaries workflow; this workflow
+# only packages them and publishes the index. Run it from Actions ->
+# merlin-feed -> Run workflow, or push a v* tag.
+name: merlin-feed
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/merlin-binaries.yml
+
+  feed:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: telltale-merlin-${{ github.run_number }}
+          path: bin
+
+      - name: Build the .ipk packages and the index
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${pkg}-merlin.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+          mkdir -p public/entware
+          chmod +x deploy/merlin/opkg/build-ipk.sh
+          deploy/merlin/opkg/build-ipk.sh \
+            bin/telltale-armv7-linux armv7-3.2 "$version" public/entware
+          deploy/merlin/opkg/build-ipk.sh \
+            bin/telltale-aarch64-linux aarch64-3.10 "$version" public/entware
+          cp bin/SHA256SUMS public/entware/SHA256SUMS
+          python3 deploy/merlin/opkg/make_index.py public/entware
+          cat public/entware/Packages
+
+          cat > public/index.html <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>TelltaleDNS for ASUS Merlin</title>
+          <style>body{font:16px/1.5 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem}code{background:#eee;padding:.1em .3em;border-radius:3px}pre{background:#f4f4f4;padding:1rem;overflow:auto}</style>
+          <h1>TelltaleDNS for ASUS Merlin</h1>
+          <p>Static ARM builds of <a href="https://github.com/paimonsoror/telltaledns">TelltaleDNS</a>
+          for Asuswrt-Merlin routers. Latest build: <strong>${version}</strong>.</p>
+          <h2>opkg feed</h2>
+          <pre><code>echo 'src/gz telltale https://bongomanuk.github.io/telltaledns/entware' &gt;&gt; /opt/etc/opkg/customfeeds.conf
+          opkg update
+          opkg install telltale</code></pre>
+          <p>Free port 53 from dnsmasq before starting the service. The install guide is at
+          <a href="https://github.com/bongomanuk/telltaledns/blob/main/deploy/merlin/README.md">deploy/merlin/README.md</a>.</p>
+          <p>Feed files: <a href="entware/Packages">Packages</a>,
+          <a href="entware/Packages.gz">Packages.gz</a>.</p>
+          HTML
+          sed -i 's/^          //' public/index.html
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

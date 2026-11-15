@@ -16,6 +16,12 @@ The `merlin-binaries` GitHub Actions workflow builds them
 | `telltale-x86_64-linux` | a normal Linux PC, for testing |
 | `SHA256SUMS` | checksums for the three files |
 
+The same binaries are also published as an **Entware/opkg feed** by the
+[`merlin-feed`](../.github/workflows/merlin-feed.yml) workflow:
+`https://bongomanuk.github.io/telltaledns/entware` (packages for `armv7-3.2` and
+`aarch64-3.10`). See [Install from the opkg feed](#install-from-the-opkg-feed-recommended-needs-entware)
+below.
+
 ## Which routers are supported
 
 Check the router itself, because the CPU model is not the whole story (some 64-bit
@@ -89,9 +95,62 @@ is the least risky option overall; point the router's DHCP DNS at the Pi.
 > test, so you can undo it if TelltaleDNS does not start. To undo, remove the
 > `port=0` line and run `service restart_dnsmasq`.
 
-## Install (option A, on the router)
+## Install from the opkg feed (recommended, needs Entware)
 
-The examples use `admin@192.168.1.1`; use your router's address and login name.
+If Entware is already installed (typically by `amtm` on a USB drive), this is the
+cleanest route: the binary goes to `/opt`, the data and query log stay on the USB
+drive, and updates come through `opkg`.
+
+Add the feed once and install:
+
+```sh
+echo 'src/gz telltale https://bongomanuk.github.io/telltaledns/entware' >> /opt/etc/opkg/customfeeds.conf
+opkg update
+opkg install telltale
+```
+
+The package installs:
+
+| Path | What |
+|---|---|
+| `/opt/sbin/telltale` | the static binary |
+| `/opt/etc/telltale/telltale.toml` | starter config (a conffile, so your edits survive upgrades) |
+| `/opt/etc/init.d/S99telltale` | Entware start/stop script |
+| `/opt/var/lib/telltale` | data and query log (created by `postinst`) |
+
+`dnsmasq` still owns port 53. Free it **before** starting the service (and keep an
+SSH session open; see the warning above):
+
+```sh
+grep -qx 'port=0' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=0' >> /jffs/configs/dnsmasq.conf.add
+service restart_dnsmasq
+/opt/etc/init.d/S99telltale start
+```
+
+Then create the first admin and open the UI:
+
+```sh
+/opt/sbin/telltale auth setup-token -c /opt/etc/telltale/telltale.toml
+# http://192.168.1.1:8053/
+```
+
+Update and remove:
+
+```sh
+opkg update && opkg upgrade telltale
+# ...
+/opt/etc/init.d/S99telltale stop
+opkg remove telltale        # config and data are kept
+```
+
+The feed is unsigned, and it carries only `armv7-3.2` and `aarch64-3.10` packages.
+If `opkg` says the architecture is unsupported, your Entware is on the old 2.6.36
+feed; this build cannot run on that kernel anyway.
+
+## Manual install (no Entware)
+
+Use this if you do not want Entware. The examples use `admin@192.168.1.1`; use your
+router's address and login name.
 
 ### 1. Get the binary onto the router
 
@@ -252,12 +311,21 @@ and reservations are unchanged.
 
 ## Updating and uninstalling
 
-**Update:** download the new binary, `killall telltale`, replace
+**opkg install:**
+
+```sh
+opkg update && opkg upgrade telltale
+# remove (config and data are kept):
+/opt/etc/init.d/S99telltale stop
+opkg remove telltale
+```
+
+**Manual install:** download the new binary, `killall telltale`, replace
 `/jffs/telltale/telltale`, and run `/jffs/scripts/services-start` again. Keep the
 config and `data/` directory. `telltale self-update` is not wired to this fork's
 builds (and they are unsigned), so update manually.
 
-**Uninstall:**
+**Manual uninstall:**
 
 ```sh
 killall telltale
