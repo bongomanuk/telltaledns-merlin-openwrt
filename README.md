@@ -124,4 +124,4 @@ This fork only changes packaging. The full documentation lives upstream:
 
 Apache-2.0 OR MIT, the same as upstream. See [LICENSE-APACHE](LICENSE-APACHE) and [LICENSE-MIT](LICENSE-MIT).
 
-TelltaleDNS is by [paimonsoror](https://github.com/paimonsoror/telltaledns). Upstream is developed with Claude Code; the Merlin packaging in this fork is not.
+TelltaleDNS is by [paimonsoror](https://github.com/paimonsoror/telltaledns).
