@@ -32,7 +32,7 @@ This fork adds:
 
 - **Static ARMv7 and ARM64 binaries** with the web UI compiled in: one file, no Entware, no shared libraries, no container.
 - **Flash-friendly installs:** the binary is gzip-compressed on flash (about 15 MB) and unpacked to RAM at start. The database, query log and blocklists live on the USB drive, and never on the router's flash.
-- **Router UI integration:** a **Services → TelltaleDNS** page in LuCI, and a **TelltaleDNS tab** under Network in the Merlin web UI.
+- **Router UI integration:** a **Services → TelltaleDNS** page in LuCI, and a **TelltaleDNS** entry in the Merlin web UI's main menu.
 - An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
 - **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
 - A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.

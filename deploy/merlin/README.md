@@ -188,8 +188,8 @@ The USB drive must be a filesystem the router can mount. Asuswrt-Merlin 388 read
 ext2/ext3/ext4 and NTFS; it does not read exFAT. Check the mount with `df -h`
 before running the installer.
 
-By default it also adds a **TelltaleDNS tab** under **Network** in the router's
-web UI. Asuswrt has no add-on menu API: the installer copies a small page into
+By default it also adds a **TelltaleDNS entry** to the router's main menu.
+Asuswrt has no add-on menu API: the installer copies a small page into
 `/www/user` and bind-mounts a patched `menuTree.js`. `/www` is rebuilt at boot and
 after a firmware update, and the `services-start` hook re-applies the tab. Pass
 `--no-ui` to skip it, or remove it later with:
