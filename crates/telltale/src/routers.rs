@@ -160,7 +160,6 @@ pub(crate) fn dnsmasq_leases(text: &str) -> Seen {
 /// router's own client list shows them.
 pub(crate) fn static_leases(text: &str) -> Seen {
     text.split('<')
-        .skip(1)
         .filter_map(|chunk| {
             let mut fields = chunk.split('>');
             let mac = fields.next()?.trim().to_ascii_lowercase();
@@ -168,6 +167,19 @@ pub(crate) fn static_leases(text: &str) -> Seen {
             let _dns = fields.next()?;
             let name = fields.next()?.trim();
             (!mac.is_empty() && !name.is_empty()).then(|| (mac, ip, Some(name.to_owned())))
+        })
+        .collect()
+}
+
+/// Asuswrt-Merlin's `custom_clientlist`: the names and icons set in the router UI, as
+/// `name>MAC>...` repeated. These name devices whose DHCP request carried no hostname.
+pub(crate) fn custom_client_names(text: &str) -> Vec<(String, String)> {
+    text.split('<')
+        .filter_map(|chunk| {
+            let mut fields = chunk.split('>');
+            let name = fields.next()?.trim();
+            let mac = fields.next()?.trim().to_ascii_lowercase();
+            (!name.is_empty() && mac.split(':').count() == 6).then(|| (mac, name.to_owned()))
         })
         .collect()
 }
@@ -286,6 +298,18 @@ async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
         && out.status.success()
     {
         seen.extend(static_leases(&String::from_utf8_lossy(&out.stdout)));
+    }
+    // The names set in the router UI win over everything the device or the lease says.
+    if let Ok(out) = std::process::Command::new("nvram")
+        .args(["get", "custom_clientlist"])
+        .output()
+        && out.status.success()
+    {
+        for (mac, name) in custom_client_names(&String::from_utf8_lossy(&out.stdout)) {
+            if let Some(entry) = seen.iter_mut().find(|(m, _, _)| *m == mac) {
+                entry.2 = Some(name);
+            }
+        }
     }
     Ok(seen)
 }
@@ -407,6 +431,18 @@ mod tests {
 
     /// REQ: T8.2 — a local dnsmasq lease file: names are used, `*` is an unnamed client.
     #[test]
+    #[test]
+    fn custom_client_names_from_nvram() {
+        let text = "mini>00:E0:4C:68:0A:0F>0>0>>>>><Kitchen-display>DC:E5:5B:67:33:46>0>0>>>>>";
+        assert_eq!(
+            custom_client_names(text),
+            vec![
+                ("00:e0:4c:68:0a:0f".into(), "mini".into()),
+                ("dc:e5:5b:67:33:46".into(), "Kitchen-display".into())
+            ]
+        );
+    }
+
     #[test]
     fn static_leases_from_nvram() {
         let text = "<00:E0:4C:68:0A:0F>192.168.1.5>>mini<DC:A6:32:1F:D6:7B>192.168.1.10>>rpi";
