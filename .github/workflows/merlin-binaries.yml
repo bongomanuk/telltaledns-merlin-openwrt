@@ -136,7 +136,13 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/telltale" "dist/telltale-${{ matrix.name }}-linux"
           chmod 755 dist/*
-          ./dist/telltale-${{ matrix.name }}-linux --version
+
+      - name: Smoke test ${{ matrix.name }}
+        # The ARM binaries cannot run on the x86_64 runner. Verify them on the
+        # router, or compile-check only here. x86_64 and i686 run natively.
+        if: matrix.name == 'x86_64' || matrix.name == 'i686'
+        shell: bash
+        run: ./dist/telltale-${{ matrix.name }}-linux --version
 
       - name: Upload ${{ matrix.name }}
         uses: actions/upload-artifact@v4
