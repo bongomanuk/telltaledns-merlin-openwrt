@@ -64,7 +64,7 @@ Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz`
 
 ### On OpenWrt 25.12+ (apk v3)
 
-Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for armv7, aarch64 and x86_64. The package keeps the binary gzip-compressed (about 14 MB on flash), unpacks it to `/tmp` at start, and installs a UCI config at `/etc/config/telltale`. Install the one matching `apk --print-arch`:
+Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for armv7, aarch64, x86_64 and x86 (i686). The package keeps the binary gzip-compressed (about 14 MB on flash), unpacks it to `/tmp` at start, and installs a UCI config at `/etc/config/telltale`. Install the one matching `apk --print-arch`:
 
 ```sh
 apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk

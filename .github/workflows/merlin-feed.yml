@@ -129,10 +129,17 @@ jobs:
           }
           build bin/telltale-armv7-linux  arm_cortex-a7_neon-vfpv4
           build bin/telltale-armv7-linux  arm_cortex-a15_neon-vfpv4
+          build bin/telltale-armv7-linux  arm_cortex-a9_neon
+          build bin/telltale-armv7-linux  arm_cortex-a9_vfpv3-d16
+          build bin/telltale-armv7-linux  arm_cortex-a5_vfpv4
+          build bin/telltale-aarch64-linux aarch64_cortex-a35
           build bin/telltale-aarch64-linux aarch64_cortex-a53
+          build bin/telltale-aarch64-linux aarch64_cortex-a55
           build bin/telltale-aarch64-linux aarch64_cortex-a72
+          build bin/telltale-aarch64-linux aarch64_cortex-a76
           build bin/telltale-aarch64-linux aarch64_generic
           build bin/telltale-x86_64-linux  x86_64
+          build bin/telltale-i686-linux    i386_pentium4
 
           chmod +x deploy/openwrt/build-luci-apk.sh
           sudo env SOURCE_DATE_EPOCH=0 deploy/openwrt/build-luci-apk.sh \
@@ -235,5 +242,6 @@ jobs:
             bin/telltale-armv7-linux
             bin/telltale-aarch64-linux
             bin/telltale-x86_64-linux
+            bin/telltale-i686-linux
             bin/SHA256SUMS
           fail_on_unmatched_files: true

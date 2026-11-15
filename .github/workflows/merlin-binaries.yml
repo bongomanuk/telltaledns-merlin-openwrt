@@ -48,7 +48,7 @@ jobs:
       - name: Rust 1.99.0 with the musl targets
         uses: dtolnay/rust-toolchain@1.99.0
         with:
-          targets: armv7-unknown-linux-musleabihf,aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
+          targets: armv7-unknown-linux-musleabihf,aarch64-unknown-linux-musl,x86_64-unknown-linux-musl,i686-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -112,7 +112,8 @@ jobs:
           for target in \
             armv7-unknown-linux-musleabihf \
             aarch64-unknown-linux-musl \
-            x86_64-unknown-linux-musl
+            x86_64-unknown-linux-musl \
+            i686-unknown-linux-musl
           do
             echo "::group::zigbuild $target"
             cargo +1.99.0 zigbuild --locked --release -p telltale --target "$target"
@@ -123,6 +124,7 @@ jobs:
           cp "target/armv7-unknown-linux-musleabihf/release/telltale" dist/telltale-armv7-linux
           cp "target/aarch64-unknown-linux-musl/release/telltale"     dist/telltale-aarch64-linux
           cp "target/x86_64-unknown-linux-musl/release/telltale"      dist/telltale-x86_64-linux
+          cp "target/i686-unknown-linux-musl/release/telltale"        dist/telltale-i686-linux
           chmod 755 dist/*
 
           # The runner can execute the x86_64 build, so smoke-test it here.

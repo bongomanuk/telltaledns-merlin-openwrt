@@ -20,16 +20,27 @@ The package arch must match `apk --print-arch` on the router:
 
 | `apk --print-arch` | Binary | Typical targets |
 |---|---|---|
-| `aarch64_cortex-a53` | aarch64 | bcm27xx, mediatek/filogic, many arm64 boards |
-| `aarch64_cortex-a72` | aarch64 | Raspberry Pi 4/5, ipq807x |
-| `aarch64_generic` | aarch64 | armsr/armv8, generic arm64 VMs |
-| `arm_cortex-a7_neon-vfpv4` | armv7 | ipq40xx and other Cortex-A7 boards |
+| `arm_cortex-a7_neon-vfpv4` | armv7 | ipq40xx, sunxi, imx and other Cortex-A7 boards |
 | `arm_cortex-a15_neon-vfpv4` | armv7 | ipq806x |
+| `arm_cortex-a9_neon` | armv7 | mvebu |
+| `arm_cortex-a9_vfpv3-d16` | armv7 | mvebu (VFPv3-D16) |
+| `arm_cortex-a5_vfpv4` | armv7 | Cortex-A5 boards |
+| `aarch64_cortex-a35` | aarch64 | newer low-power arm64 boards |
+| `aarch64_cortex-a53` | aarch64 | bcm27xx, mediatek/filogic, qualcommax, rockchip, many arm64 boards |
+| `aarch64_cortex-a55` | aarch64 | newer arm64 boards |
+| `aarch64_cortex-a72` | aarch64 | Raspberry Pi 4/5, ipq807x |
+| `aarch64_cortex-a76` | aarch64 | newer arm64 boards |
+| `aarch64_generic` | aarch64 | armsr/armv8, generic arm64 VMs |
+| `i386_pentium4` | i686 | x86/generic (32-bit) |
 | `x86_64` | x86_64 | x86/64 |
 
 The binary itself is static, so no OpenWrt libraries are needed. If your arch is not
 listed, take the package for the closest one and add `--arch <package-arch>` when
 installing (or build it yourself with `build-apk.sh`).
+
+Not built: `mipsel`/`mips` and `riscv64` (the TLS stack, ring, has no backend for
+them), and ARMv6 (not supported upstream). ASUS Merlin is armv7/aarch64 only; the
+old MIPS and 2.6.36 models are end of life and cannot run this build.
 
 ## Install
 
