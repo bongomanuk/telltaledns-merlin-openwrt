@@ -81,31 +81,32 @@ Requirements:
   The binary is about 30 MB; the query log writes constantly, so a USB drive is
   the better home for `data_dir` (see below).
 
-## The port 53 problem (read this first)
+## How it sits next to dnsmasq
 
-The router's `dnsmasq` owns UDP/TCP port 53 and also runs DHCP. TelltaleDNS needs
-port 53 to be your LAN resolver. You have three choices:
+The router's `dnsmasq` owns port 53 and runs DHCP. TelltaleDNS does not take port
+53 away from it. Instead:
 
-**A. TelltaleDNS answers port 53, dnsmasq keeps the local zones (runs on the
-router; recommended).** Keep dnsmasq for DHCP and move its DNS to 5354
-(`port=5354`). TelltaleDNS binds port 53 and forwards `home.lan`, `lan`,
-`router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5354, so the router's
-DHCP hostnames and local names keep working. It also reads the dnsmasq lease file
-for device names. This is the method below.
+- dnsmasq keeps port 53, DHCP, the DHCP hostnames, `home.lan`, `router.asus.com`
+  and the AiMesh heartbeats;
+- dnsmasq forwards public queries to TelltaleDNS on `127.0.0.1:5354`;
+- TelltaleDNS filters and resolves them over DNS over TLS;
+- if TelltaleDNS is down, dnsmasq falls back to plain DNS (`9.9.9.9`, `1.1.1.1`)
+  and the LAN keeps working.
 
-**B. Keep dnsmasq and forward to TelltaleDNS on another port.** TelltaleDNS loses
-per-device attribution, because every query now arrives from the router. It can be
-made to work with dnsmasq's `add-mac` and TelltaleDNS's `[clients]
-trust_edns_mac_from`, but that is a more advanced setup.
+This costs per-client attribution in the query log: dnsmasq is the only client
+TelltaleDNS sees. Device names still come from the dnsmasq lease file, so the
+Clients view is populated by IP. dnsmasq's `add-mac` and TelltaleDNS's
+`[clients] trust_edns_mac_from` bring the client MAC back if you need it.
 
-**C. Run TelltaleDNS on a separate Raspberry Pi** and leave the router alone. This
-is the least risky option overall; point the router's DHCP DNS at the Pi.
+An older setup had TelltaleDNS answer port 53 and moved dnsmasq to 5354. It gives
+per-client attribution, but the whole LAN, including the mesh nodes, loses DNS
+whenever TelltaleDNS misbehaves. That is why it is no longer the default. To use
+it anyway, set the listener in `telltale.toml` to `0.0.0.0:53`, drop the
+`127.0.0.1#5354` server line, add `port=5354`, and restart dnsmasq.
 
-> **Warning for option A:** clients use the router (192.168.1.1:53), so the LAN
-> has no DNS unless TelltaleDNS is running. dnsmasq still answers the local zones
-> on 5354. Keep an SSH session open while you test, so you can undo it if
-> TelltaleDNS does not start. To undo, remove the `port=5354` line and run
-> `service restart_dnsmasq`.
+The installer writes the dnsmasq lines for you and restarts dnsmasq. It is
+idempotent and removes a `port=5354` line from the older setup. Pass `--no-dns`
+to leave dnsmasq alone.
 
 ## Install from the opkg feed (recommended, needs Entware)
 
@@ -130,17 +131,22 @@ The package installs:
 | `/opt/etc/init.d/S99telltale` | Entware start/stop script |
 | `/opt/var/lib/telltale` | data and query log (created by `postinst`) |
 
-Move dnsmasq's DNS to 5354 before starting the service (and keep an SSH session
-open; see the warning above):
+Point dnsmasq at it, then start the service:
 
 ```sh
-grep -qx 'port=5354' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5354' >> /jffs/configs/dnsmasq.conf.add
+add=/jffs/configs/dnsmasq.conf.add
+touch "$add"
+for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+    grep -qx "$line" "$add" || echo "$line" >> "$add"
+done
 service restart_dnsmasq
 /opt/etc/init.d/S99telltale start
 ```
 
-The starter config forwards local zones to dnsmasq on 5354 and reads
-`/var/lib/misc/dnsmasq.leases` for device names.
+The starter config listens on `127.0.0.1:5354` and reads
+`/var/lib/misc/dnsmasq.leases` for device names. dnsmasq keeps port 53 and its
+local names; if TelltaleDNS is down, dnsmasq falls back to `9.9.9.9` and
+`1.1.1.1`.
 
 Then create the first admin and open the UI:
 
@@ -205,8 +211,9 @@ The bundle config uses two UDP workers, a 16 MiB response cache, a 2 MB blocklis
 and a 4 MiB query log. The binary is unpacked to `/tmp` (RAM) at start, so the
 install takes about 20 MB of the JFFS partition instead of about 34 MB.
 
-Then follow steps 3 to 6 of the manual install below for port 53, the first run,
-and the setup token.
+The installer also points dnsmasq at TelltaleDNS and restarts it (`--no-dns`
+skips that). Then follow steps 3 and 4 of the manual install below for the first
+run and the setup token.
 
 ## Manual install (no Entware)
 
@@ -260,6 +267,15 @@ data_dir = "/jffs/telltale/data"
 [api]
 listen = "0.0.0.0:8053"
 
+# Only dnsmasq talks to this listener; dnsmasq keeps port 53 for the LAN.
+[[listen]]
+proto = "udp"
+addr = "127.0.0.1:5354"
+
+[[listen]]
+proto = "tcp"
+addr = "127.0.0.1:5354"
+
 # Encrypted (DNS over TLS) upstreams; the Mozilla roots are built into the binary,
 # so no CA bundle is needed on the router.
 [[upstream]]
@@ -277,21 +293,7 @@ name = "default"
 members = ["cloudflare", "quad9"]
 strategy = "fastest"
 
-# The router's dnsmasq stays on 127.0.0.1:5354; local names and reverse lookups
-# go there, and its lease file names the devices.
-[[upstream]]
-name = "router-dns"
-url = "udp://127.0.0.1:5354"
-
-[[upstream_group]]
-name = "router"
-members = ["router-dns"]
-
-[[route]]
-match_suffix = ["home.lan", "lan", "router.asus.com", "168.192.in-addr.arpa"]
-upstream_group = "router"
-dnssec_nta = true
-
+# Device names from the router's DHCP leases.
 [[router]]
 name = "dnsmasq"
 type = "dnsmasq"
@@ -305,19 +307,8 @@ retention_days = 7
 # fsync = false            # fewer flash syncs (default is false)
 ```
 
-The default DNS listeners are UDP and TCP on port 53, IPv4 and IPv6. If IPv6 is
-disabled on the router and TelltaleDNS complains about binding `[::]:53`, replace
-that default with explicit IPv4 listeners:
-
-```toml
-[[listen]]
-proto = "udp"
-addr = "0.0.0.0:53"
-
-[[listen]]
-proto = "tcp"
-addr = "0.0.0.0:53"
-```
+The `[[listen]]` entries above keep TelltaleDNS on loopback port 5354, behind
+dnsmasq. Do not change them to port 53 unless you also move dnsmasq off 53.
 
 Check the file before starting:
 
@@ -325,16 +316,21 @@ Check the file before starting:
 /jffs/telltale/telltale config check /jffs/telltale/telltale.toml
 ```
 
-### 3. Move dnsmasq's DNS to 5354 (option A)
+### 3. Point dnsmasq at TelltaleDNS
 
 ```sh
 mkdir -p /jffs/configs
-grep -qx 'port=5354' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5354' >> /jffs/configs/dnsmasq.conf.add
+add=/jffs/configs/dnsmasq.conf.add
+touch "$add"
+for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+    grep -qx "$line" "$add" || echo "$line" >> "$add"
+done
 service restart_dnsmasq
 ```
 
-`port=5354` keeps dnsmasq's DNS and DHCP running, on 5354. TelltaleDNS takes port
-53 and forwards the local zones to it.
+dnsmasq keeps port 53, DHCP and the local names. Public queries go to
+TelltaleDNS first; the plain servers answer when it is down. Remove those lines
+and restart dnsmasq to go back to the firmware's DNS.
 
 ### 4. First run and the admin account
 
@@ -413,14 +409,14 @@ builds (and they are unsigned), so update manually.
 killall telltale
 rm -f /jffs/scripts/services-start
 rm -rf /jffs/telltale
-# restore dnsmasq's DNS on port 53:
-sed -i '/^port=5354$/d' /jffs/configs/dnsmasq.conf.add
+# stop using TelltaleDNS for public queries:
+sed -i '/^no-resolv$/d;/^strict-order$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 
 ## Notes and limits
 
-- Runs as root because it binds port 53; the router's boot scripts are root anyway.
+- dnsmasq stays on port 53 and owns DHCP; TelltaleDNS listens on loopback 5354.
 - About 15 MB idle memory; blocklists are held in a compact in-memory index.
 - Writing the query log to `/jffs` wears the router's flash. Keep
   `retention_days` low, set `enabled = false`, or put `data_dir` on a USB drive.

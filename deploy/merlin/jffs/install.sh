@@ -6,21 +6,26 @@
 #   cd telltale-*merlin-armv7
 #   ./install.sh
 #
-# It installs a gzip-compressed binary (about 14 MB instead of 28 MB) and a
+# It installs a gzip-compressed binary (about 15 MB instead of 35 MB) and a
 # small launcher that unpacks it into /tmp at start, which keeps the flash use
-# down. It does not change dnsmasq or start the service; see the install guide
-# for the port 53 step.
+# down. It points dnsmasq at TelltaleDNS and restarts dnsmasq: dnsmasq keeps
+# port 53 and its local names, so the LAN keeps resolving when TelltaleDNS is
+# down. Pass --no-dns to leave dnsmasq alone.
 #
 # The router web UI tab is added by default. Pass --no-ui to skip it; the
 # TelltaleDNS dashboard is always at http://<router>:8053/.
 set -eu
 
 ui=1
-case "${1:-}" in
-    --no-ui) ui=0 ;;
-    "") ;;
-    *) echo "usage: $0 [--no-ui]" >&2; exit 2 ;;
-esac
+dns=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-ui) ui=0 ;;
+        --no-dns) dns=0 ;;
+        "") ;;
+        *) echo "usage: $0 [--no-ui] [--no-dns]" >&2; exit 2 ;;
+    esac
+done
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 arch=$(uname -m)
@@ -132,6 +137,22 @@ else
 fi
 chmod 755 /jffs/scripts/services-start
 
+# Safe mode: dnsmasq keeps port 53 and its local names, and sends public
+# queries to TelltaleDNS on 5354. The plain servers after it are the fallback
+# when TelltaleDNS is not running. `port=5354` is left over from the older
+# "TelltaleDNS on 53" install and must go, or dnsmasq and TelltaleDNS fight for
+# the same port.
+if [ "$dns" = 1 ]; then
+    mkdir -p /jffs/configs
+    add=/jffs/configs/dnsmasq.conf.add
+    touch "$add"
+    sed -i '/^port=5354$/d' "$add"
+    for line in 'no-resolv' 'strict-order' 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+        grep -qx "$line" "$add" || echo "$line" >> "$add"
+    done
+    service restart_dnsmasq >/dev/null 2>&1 || true
+fi
+
 "$dest/telltale" --version
 echo
 echo "Installed in $dest."
@@ -148,6 +169,13 @@ if [ "$ui" = 1 ]; then
         echo "Could not add the web UI tab; the dashboard is still at http://<router>:8053/."
     fi
 fi
-echo "Free port 53 from dnsmasq first (see deploy/merlin/README.md), then start it:"
-echo "  /jffs/telltale/telltale run -c /jffs/telltale/telltale.toml"
+if [ "$dns" = 1 ]; then
+    echo "dnsmasq now forwards public queries to TelltaleDNS on 127.0.0.1:5354 and"
+    echo "keeps port 53 for DHCP and local names. Undo with:"
+    echo "  sed -i '/^no-resolv$/d;/^strict-order$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add"
+    echo "  service restart_dnsmasq"
+fi
+echo "Start it now (or reboot):"
+echo "  /jffs/scripts/services-start"
+echo "First admin token:"
 echo "  /jffs/telltale/telltale auth setup-token -c /jffs/telltale/telltale.toml"

@@ -64,31 +64,28 @@ The package installs:
 The launcher unpacks the binary into `/tmp` (RAM) at start, so the package uses
 about 14 MB of flash instead of 28 MB.
 
-## Move dnsmasq's DNS to 5354 (read this first)
+## Keep dnsmasq on port 53
 
-OpenWrt's `dnsmasq` serves DHCP and DNS. TelltaleDNS needs port 53, so keep
-dnsmasq for DHCP and move its DNS to 5354:
+OpenWrt's `dnsmasq` serves DHCP and DNS. Leave it on port 53 and point it at
+TelltaleDNS, which listens on `127.0.0.1:5354`:
 
 ```sh
-uci set dhcp.@dnsmasq[0].port='5354'
+uci set dhcp.@dnsmasq[0].noresolv='1'
+uci set dhcp.@dnsmasq[0].strictorder='1'
+uci -q delete dhcp.@dnsmasq[0].server
+uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5354'
+uci add_list dhcp.@dnsmasq[0].server='9.9.9.9'
+uci add_list dhcp.@dnsmasq[0].server='1.1.1.1'
 uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-The starter config forwards `lan` and `192.168.x` reverse lookups to
-`127.0.0.1:5354`, so DHCP hostnames and `*.lan` keep working, and it reads
-`/tmp/dhcp.leases` for device names. Everything else goes to the encrypted
-upstreams.
+dnsmasq keeps port 53, DHCP, `*.lan` and the router's own names. Public queries go
+to TelltaleDNS first; `strictorder` makes dnsmasq use the plain servers only when
+it does not answer. It reads `/tmp/dhcp.leases` for device names.
 
-Keep an SSH session open: clients use the router's port 53, so the LAN has no DNS
-unless TelltaleDNS is running. dnsmasq still answers the local zones on 5354. To
-undo:
-
-```sh
-uci set dhcp.@dnsmasq[0].port='53'
-uci commit dhcp
-/etc/init.d/dnsmasq restart
-```
+To undo, delete the `server` list and set `noresolv` back to `0`, then restart
+dnsmasq.
 
 ## Start it
 

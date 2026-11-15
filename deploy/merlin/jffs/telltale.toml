@@ -1,5 +1,9 @@
 # TelltaleDNS config for a manual install under /jffs (no Entware).
 # Check edits with: /jffs/telltale/telltale config check /jffs/telltale/telltale.toml
+#
+# Safe mode: dnsmasq keeps port 53, so DHCP, local names, router.asus.com and the
+# AiMesh nodes keep working even if TelltaleDNS stops. dnsmasq forwards public
+# queries here on 127.0.0.1:5354 (see install.sh).
 config_version = 1
 
 [node]
@@ -15,6 +19,16 @@ data_dir = "/jffs/telltale/data"
 # The web UI and API (the UI is embedded in the binary).
 [api]
 listen = "0.0.0.0:8053"
+
+# Only dnsmasq talks to this listener. Never bind port 53 here: dnsmasq keeps
+# port 53 so the LAN keeps resolving when this process is down.
+[[listen]]
+proto = "udp"
+addr = "127.0.0.1:5354"
+
+[[listen]]
+proto = "tcp"
+addr = "127.0.0.1:5354"
 
 # Encrypted (DNS over TLS) upstreams. The Mozilla roots are built into the
 # binary, so no CA bundle is needed on the router.
@@ -33,24 +47,6 @@ name = "default"
 members = ["cloudflare", "quad9"]
 strategy = "fastest"
 
-# A compact blocklist (about 2 MB) rather than the 150k-name list, to leave
-# room for the binary and the data directory on a small JFFS partition.
-# The router's own dnsmasq stays on 127.0.0.1:5354 (see the install guide). Local names
-# and reverse lookups go there, so DHCP hostnames, home.lan and router.asus.com keep
-# working; everything else uses the encrypted upstreams above.
-[[upstream]]
-name = "router-dns"
-url = "udp://127.0.0.1:5354"
-
-[[upstream_group]]
-name = "router"
-members = ["router-dns"]
-
-[[route]]
-match_suffix = ["home.lan", "lan", "router.asus.com", "168.192.in-addr.arpa"]
-upstream_group = "router"
-dnssec_nta = true
-
 # Device names from the router's DHCP leases. Asuswrt-Merlin keeps the file at
 # /var/lib/misc/dnsmasq.leases; OpenWrt at /tmp/dhcp.leases.
 [[router]]
@@ -59,6 +55,8 @@ type = "dnsmasq"
 url = "file:///var/lib/misc/dnsmasq.leases"
 interval_secs = 60
 
+# A compact blocklist (about 2 MB) rather than the 150k-name list, to leave
+# room for the binary and the data directory on a small JFFS partition.
 [[list]]
 name = "hagezi-light"
 url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt"

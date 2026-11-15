@@ -12,6 +12,16 @@ data_dir = "/etc/telltale/data"
 [api]
 listen = "0.0.0.0:8053"
 
+# Only dnsmasq talks to this listener. dnsmasq keeps port 53 and the local
+# names, so the LAN keeps resolving when this process is down.
+[[listen]]
+proto = "udp"
+addr = "127.0.0.1:5354"
+
+[[listen]]
+proto = "tcp"
+addr = "127.0.0.1:5354"
+
 # Encrypted (DNS over TLS) upstreams. The Mozilla roots are built into the
 # binary, so no CA bundle is needed on the router.
 [[upstream]]
@@ -28,22 +38,6 @@ tls_server_name = "dns.quad9.net"
 name = "default"
 members = ["cloudflare", "quad9"]
 strategy = "fastest"
-
-# The router's own dnsmasq stays on 127.0.0.1:5354 (see the install guide). Local names
-# and reverse lookups go there, so DHCP hostnames, home.lan and router.asus.com keep
-# working; everything else uses the encrypted upstreams above.
-[[upstream]]
-name = "router-dns"
-url = "udp://127.0.0.1:5354"
-
-[[upstream_group]]
-name = "router"
-members = ["router-dns"]
-
-[[route]]
-match_suffix = ["home.lan", "lan", "router.asus.com", "168.192.in-addr.arpa"]
-upstream_group = "router"
-dnssec_nta = true
 
 # Device names from the router's DHCP leases. Asuswrt-Merlin keeps the file at
 # /var/lib/misc/dnsmasq.leases; OpenWrt at /tmp/dhcp.leases.

@@ -25,7 +25,7 @@ This fork adds:
 - **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
 - A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.
 - An [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow that rebuilds the packages for each new upstream release.
-- A [Merlin install guide](deploy/merlin/README.md) with the full model list, the port-53/dnsmasq conflict, the config, and a boot-time `/jffs/scripts/services-start` script.
+- A [Merlin install guide](deploy/merlin/README.md) with the full model list, the dnsmasq setup, the config, and a boot-time `/jffs/scripts/services-start` script.
 
 The resolver source is upstream's. This fork adds only the router packaging.
 
@@ -43,15 +43,19 @@ opkg install telltale
 
 The package installs the static binary to `/opt/sbin/telltale`, the config to `/opt/etc/telltale/telltale.toml` (a conffile), an init script at `/opt/etc/init.d/S99telltale`, and keeps its data and query log on the USB at `/opt/var/lib/telltale`, away from the router's flash.
 
-Move dnsmasq's DNS to port 5354 so TelltaleDNS can take port 53, then start it:
+Point dnsmasq at it, then start the service:
 
 ```sh
-grep -qx 'port=5354' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5354' >> /jffs/configs/dnsmasq.conf.add
+add=/jffs/configs/dnsmasq.conf.add
+touch "$add"
+for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+    grep -qx "$line" "$add" || echo "$line" >> "$add"
+done
 service restart_dnsmasq
 /opt/etc/init.d/S99telltale start
 ```
 
-TelltaleDNS forwards `home.lan`, `lan`, `router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5354, so the router's DHCP hostnames and local names keep working. It also reads `/var/lib/misc/dnsmasq.leases` for device names.
+dnsmasq keeps port 53, DHCP, `home.lan`, `router.asus.com` and the mesh nodes working. It sends public queries to TelltaleDNS on `127.0.0.1:5354`, and falls back to `9.9.9.9`/`1.1.1.1` when TelltaleDNS is down. Device names come from `/var/lib/misc/dnsmasq.leases`.
 
 Then create the first admin and open the UI:
 
@@ -64,7 +68,7 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 ### Manually, without Entware
 
-Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also puts `data_dir` (state database, query log, blocklists) on the first mounted USB volume, or on `/jffs/telltale/data` when there is none, and adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The drive must be ext2/3/4 or NTFS; this firmware does not read exFAT. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
+Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The installer also puts `data_dir` (state database, query log, blocklists) on the first mounted USB volume, or on `/jffs/telltale/data` when there is none, and adds a **TelltaleDNS tab** under Network in the router's web UI by default (`--no-ui` skips it). The drive must be ext2/3/4 or NTFS; this firmware does not read exFAT. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers dnsmasq, the first run, and the setup token.
 
 ### On OpenWrt 25.12+ (apk v3)
 
@@ -74,7 +78,7 @@ Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for a
 apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk
 ```
 
-Then move dnsmasq's DNS to 5354 (`uci set dhcp.@dnsmasq[0].port='5354'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. TelltaleDNS forwards `lan` and `192.168.x` reverse lookups to dnsmasq on 5354, so DHCP hostnames and `*.lan` keep working, and it reads `/tmp/dhcp.leases` for device names. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
+Leave dnsmasq on port 53 and point it at TelltaleDNS on `127.0.0.1:5354` (`noresolv`, `strictorder`, servers `127.0.0.1#5354`, `9.9.9.9`, `1.1.1.1`), then start `/etc/init.d/telltale`. dnsmasq keeps DHCP and `*.lan`; TelltaleDNS filters public queries and reads `/tmp/dhcp.leases` for device names. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact uci commands, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
 
 ## Supported ASUS Merlin routers
 
@@ -97,11 +101,11 @@ Your router's `uname -m` picks the binary. Run it on the router if you are unsur
 
 `armv7l` and `aarch64` are the only two `uname -m` answers that work. `uname -r` shows the kernel; if it starts with `2.6.36`, the binary will not run.
 
-## The port 53 problem
+## How it sits next to dnsmasq
 
-The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53 to be the LAN resolver, so you have to choose:
+On Merlin, dnsmasq keeps port 53: DHCP, the DHCP hostnames, `home.lan`, `router.asus.com` and the AiMesh nodes keep working even if TelltaleDNS stops. dnsmasq forwards public queries to TelltaleDNS on `127.0.0.1:5354`, which filters them and resolves over DNS over TLS. If TelltaleDNS is down, dnsmasq falls back to plain DNS and the LAN keeps working.
 
-- **Run it on the router (the feed/manual installs above):** keep dnsmasq for DHCP, but move its DNS to 5354 (`port=5354`) and let TelltaleDNS answer port 53. Local zones (`home.lan`, `lan`, `router.asus.com`, reverse) are forwarded to dnsmasq, and its lease file supplies the device names. While TelltaleDNS is down, clients using the router (192.168.1.1:53) have no DNS; keep an SSH session open and test before rebooting.
+The trade-off is per-client attribution: dnsmasq is TelltaleDNS's only client, so the query log sees one source address. Device names still come from the dnsmasq lease file. The older setup (TelltaleDNS on 53, dnsmasq moved to 5354) gives per-client attribution but takes DNS away from the whole LAN, mesh included, whenever TelltaleDNS misbehaves. [`deploy/merlin/README.md`](deploy/merlin/README.md) documents both.
 - **Run it on a separate host (a Pi):** leave the router alone and point the router's DHCP DNS at the Pi. This is the least risky option.
 - **Keep dnsmasq and forward to TelltaleDNS on another port:** works, but every query reaches TelltaleDNS from the router, so per-device attribution is lost unless you use dnsmasq's `add-mac` and TelltaleDNS's `trust_edns_mac_from`.
 
@@ -134,7 +138,7 @@ This fork only changes packaging. The full documentation lives upstream:
 | [`spec/`](https://github.com/paimonsoror/telltaledns/tree/main/spec) | the build specification and decisions |
 | [Project site](https://paimonsoror.github.io/telltaledns/) | FAQ, guides, release notes |
 | [Upstream releases](https://github.com/paimonsoror/telltaledns/releases) | upstream binaries and images |
-| [`deploy/merlin/`](deploy/merlin/README.md) | **this fork:** ASUS Merlin install, models, port 53, boot script |
+| [`deploy/merlin/`](deploy/merlin/README.md) | **this fork:** ASUS Merlin install, models, dnsmasq, boot script |
 | [`deploy/openwrt/`](deploy/openwrt/README.md) | **this fork:** OpenWrt 25.12+ apk packages, archs, port 53 |
 
 ## License
