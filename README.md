@@ -95,7 +95,10 @@ Leave dnsmasq on port 53 and point it at TelltaleDNS on `127.0.0.1:5354` (`nores
 ## Parental controls
 
 Everything below is in the web UI (`http://<router>:8053/`). The router-specific parts are in
-**Settings → Router**; the rest works the same on any host.
+**Settings → Router**: dnsmasq state and port, forwarding on/off, DHCP leases, the data and USB
+mounts with free space, model, firmware, uptime, load and memory, the TelltaleDNS tab in the
+router UI, start-at-boot (OpenWrt), and restarts for dnsmasq, TelltaleDNS, or the router. The
+rest works the same on any host.
 
 **Block a service for the whole network except one or two devices.** Services are bundles of
 domains (`youtube`, `roblox`, `tiktok`, `discord`, …):

@@ -36,6 +36,10 @@ pub(crate) fn platform() -> &'static str {
 /// The Router page's status.
 pub(crate) fn status(data_dir: &str) -> RouterStatus {
     let platform = platform();
+    let (uptime_secs, load1) = uptime_and_load();
+    let (mem_total_kb, mem_free_kb) = memory_kb();
+    let (data_free_kb, data_total_kb) = df_kb(Path::new(data_dir));
+    let usb = usb_mount();
     RouterStatus {
         platform: platform.to_owned(),
         dnsmasq_running: process_running("dnsmasq"),
@@ -43,12 +47,23 @@ pub(crate) fn status(data_dir: &str) -> RouterStatus {
         dhcp_leases: lease_count(platform),
         forwarding: forwarding(platform),
         data_dir: data_dir.to_owned(),
-        usb_mount: usb_mount(),
+        usb_mount: usb.clone(),
         service: match platform {
             "merlin" => MERLIN_SERVICES.to_owned(),
             "openwrt" => "procd (/etc/init.d/telltale)".to_owned(),
             _ => String::new(),
         },
+        device: device(platform),
+        firmware: firmware(platform),
+        uptime_secs,
+        load1,
+        mem_total_kb,
+        mem_free_kb,
+        data_free_kb,
+        data_total_kb,
+        usb_free_kb: usb.as_deref().map(|m| df_kb(Path::new(m)).0),
+        ui_installed: (platform == "merlin").then(ui_installed),
+        service_enabled: (platform == "openwrt").then(service_enabled),
     }
 }
 
@@ -75,7 +90,147 @@ pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<Router
             restart_dnsmasq()?;
             Ok(done("dnsmasq no longer forwards to TelltaleDNS"))
         }
+        RouterAction::EnableUi => {
+            if platform() != "merlin" {
+                return Err(failed("only the Merlin web UI has this tab".into()));
+            }
+            run("/jffs/telltale/ui.sh", &["install"])?;
+            Ok(done("TelltaleDNS tab added to the router web UI"))
+        }
+        RouterAction::DisableUi => {
+            if platform() != "merlin" {
+                return Err(failed("only the Merlin web UI has this tab".into()));
+            }
+            run("/jffs/telltale/ui.sh", &["remove"])?;
+            Ok(done("TelltaleDNS tab removed from the router web UI"))
+        }
+        RouterAction::RebootRouter => {
+            match platform() {
+                "merlin" => run("service", &["reboot"]),
+                "openwrt" => run("reboot", &[]),
+                _ => Err(failed("no router controls on this host".into())),
+            }?;
+            Ok(done("the router is rebooting"))
+        }
+        RouterAction::EnableService => {
+            if platform() != "openwrt" {
+                return Err(failed("the boot script is /jffs/scripts/services-start here".into()));
+            }
+            uci("set", &["telltale.main.enabled=1"])?;
+            let _ = uci("commit", &["telltale"]);
+            run(OPENWRT_INIT, &["enable"])?;
+            Ok(done("TelltaleDNS starts at boot"))
+        }
+        RouterAction::DisableService => {
+            if platform() != "openwrt" {
+                return Err(failed("the boot script is /jffs/scripts/services-start here".into()));
+            }
+            uci("set", &["telltale.main.enabled=0"])?;
+            let _ = uci("commit", &["telltale"]);
+            run(OPENWRT_INIT, &["disable"])?;
+            Ok(done("TelltaleDNS no longer starts at boot"))
+        }
     }
+}
+
+/// Uptime in seconds and the one-minute load average.
+fn uptime_and_load() -> (u64, f32) {
+    let uptime = std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    (uptime as u64, load)
+}
+
+/// Total and available memory in kilobytes.
+fn memory_kb() -> (u64, u64) {
+    let Ok(text) = std::fs::read_to_string("/proc/meminfo") else {
+        return (0, 0);
+    };
+    let field = |name: &str| {
+        text.lines()
+            .find(|l| l.starts_with(name))
+            .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    (field("MemTotal:"), field("MemAvailable:"))
+}
+
+/// Free and total kilobytes of the file system holding `path`.
+fn df_kb(path: &Path) -> (u64, u64) {
+    let Ok(out) = Command::new("df").arg("-k").arg(path).output() else {
+        return (0, 0);
+    };
+    if !out.status.success() {
+        return (0, 0);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let Some(line) = text.lines().nth(1) else {
+        return (0, 0);
+    };
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    let free = fields.get(3).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let total = fields.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+    (free, total)
+}
+
+fn device(platform: &str) -> String {
+    match platform {
+        "merlin" => nvram("productid"),
+        "openwrt" => std::fs::read_to_string("/tmp/sysinfo/model")
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_else(|_| "OpenWrt".to_owned()),
+        _ => String::new(),
+    }
+}
+
+fn firmware(platform: &str) -> String {
+    match platform {
+        "merlin" => {
+            let build = nvram("buildno");
+            let ext = nvram("extendno");
+            if ext.is_empty() {
+                build
+            } else {
+                format!("{build}-{ext}")
+            }
+        }
+        "openwrt" => std::fs::read_to_string("/etc/openwrt_release")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("DISTRIB_RELEASE="))
+                    .map(|l| l.trim_start_matches("DISTRIB_RELEASE=").trim_matches('\'').to_owned())
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn nvram(key: &str) -> String {
+    run_capture("nvram", &["get", key])
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// The Merlin web UI tab is installed (the page the menu names exists).
+fn ui_installed() -> bool {
+    let Ok(page) = std::fs::read_to_string("/jffs/telltale/ui-page") else {
+        return false;
+    };
+    let page = page.trim();
+    !page.is_empty() && Path::new("/www/user").join(page).exists()
+}
+
+/// OpenWrt's `/etc/config/telltale` enables the service.
+fn service_enabled() -> bool {
+    uci("get", &["telltale.main.enabled"])
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
 }
 
 fn done(message: &str) -> RouterActionResult {

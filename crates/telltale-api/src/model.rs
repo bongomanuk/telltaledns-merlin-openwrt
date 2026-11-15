@@ -85,6 +85,29 @@ pub struct RouterStatus {
     pub usb_mount: Option<String>,
     /// How the service is started (`/jffs/scripts/services-start`, procd, or nothing).
     pub service: String,
+    /// The router model, as the firmware names it (`RT-AX95Q`, `OpenWrt`, ...).
+    pub device: String,
+    /// The firmware build (`388.11`, `25.12.6`).
+    pub firmware: String,
+    /// Seconds since boot.
+    pub uptime_secs: u64,
+    /// One-minute load average.
+    pub load1: f32,
+    /// Memory in kilobytes.
+    pub mem_total_kb: u64,
+    pub mem_free_kb: u64,
+    /// Free and total kilobytes of the file system under `data_dir`.
+    pub data_free_kb: u64,
+    pub data_total_kb: u64,
+    /// Free kilobytes on the USB volume, when one is mounted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usb_free_kb: Option<u64>,
+    /// Merlin: the router web UI tab names a page in `/www/user`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_installed: Option<bool>,
+    /// OpenWrt: `/etc/config/telltale` enables the service at boot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_enabled: Option<bool>,
 }
 
 /// A control on the Router page.
@@ -99,6 +122,16 @@ pub enum RouterAction {
     EnableForwarding,
     /// Stop sending public queries to this process.
     DisableForwarding,
+    /// Merlin: add the TelltaleDNS tab to the router web UI.
+    EnableUi,
+    /// Merlin: remove the TelltaleDNS tab.
+    DisableUi,
+    /// Reboot the router.
+    RebootRouter,
+    /// OpenWrt: start the service at boot.
+    EnableService,
+    /// OpenWrt: do not start the service at boot.
+    DisableService,
 }
 
 /// The body of a Router page control.

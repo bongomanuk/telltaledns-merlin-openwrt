@@ -522,6 +522,17 @@ pub trait Backend: Send + Sync + 'static {
             data_dir: String::new(),
             usb_mount: None,
             service: String::new(),
+            device: String::new(),
+            firmware: String::new(),
+            uptime_secs: 0,
+            load1: 0.0,
+            mem_total_kb: 0,
+            mem_free_kb: 0,
+            data_free_kb: 0,
+            data_total_kb: 0,
+            usb_free_kb: None,
+            ui_installed: None,
+            service_enabled: None,
         }
     }
 

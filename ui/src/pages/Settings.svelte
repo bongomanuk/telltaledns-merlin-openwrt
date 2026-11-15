@@ -3,7 +3,7 @@
   // and system information.
   import { api, type S, type RouterStatus, type RouterAction } from '../lib/api';
   import { can, session, refreshSession } from '../lib/session.svelte';
-  import { ago, dateTime, duration } from '../lib/format';
+  import { ago, bytes, dateTime, duration } from '../lib/format';
   import { poll } from '../lib/poll';
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import HelpButton from '../lib/components/HelpButton.svelte';
@@ -798,16 +798,26 @@
             </div>
           </section>
           <section class="card">
-            <h2>TelltaleDNS</h2>
-            <p>Started by <span class="mono">{router.service}</span>.</p>
-            <p class="muted">Data and query log: <span class="mono">{router.dataDir}</span></p>
-            <p class="muted">
-              {#if router.usbMount}
-                USB volume: <span class="mono">{router.usbMount}</span>
-              {:else}
-                No USB volume mounted; the data is on the router's flash.
-              {/if}
-            </p>
+            <h2>This router</h2>
+            <dl class="sys">
+              <dt>Model</dt><dd>{router.device || 'unknown'}</dd>
+              <dt>Firmware</dt><dd>{router.firmware || 'unknown'}</dd>
+              <dt>Uptime</dt><dd>{duration(router.uptimeSecs)}</dd>
+              <dt>Load</dt><dd>{router.load1.toFixed(2)} (1 min)</dd>
+              <dt>Memory</dt><dd>{bytes(router.memFreeKb * 1024)} free of {bytes(router.memTotalKb * 1024)}</dd>
+              <dt>Data</dt><dd class="mono">{router.dataDir}</dd>
+              <dt>Data space</dt><dd>{bytes(router.dataFreeKb * 1024)} free of {bytes(router.dataTotalKb * 1024)}</dd>
+              <dt>USB</dt>
+              <dd>
+                {#if router.usbMount}
+                  <span class="mono">{router.usbMount}</span>
+                  {#if router.usbFreeKb} · {bytes(router.usbFreeKb * 1024)} free{/if}
+                {:else}
+                  none mounted
+                {/if}
+              </dd>
+              <dt>Started by</dt><dd class="mono">{router.service}</dd>
+            </dl>
             <div class="row">
               <button
                 class="danger"
@@ -817,6 +827,82 @@
                 {routerBusy === 'restart_self' ? 'Restarting…' : 'Restart TelltaleDNS'}
               </button>
             </div>
+          </section>
+
+          <section class="card">
+            <h2>Router integration</h2>
+            {#if router.platform === 'merlin'}
+              <p>
+                {#if router.uiInstalled}
+                  <span class="badge ok">installed</span> TelltaleDNS tab in the router web UI.
+                {:else}
+                  <span class="badge">not installed</span> The web UI has no TelltaleDNS tab.
+                {/if}
+              </p>
+              <div class="row">
+                {#if router.uiInstalled}
+                  <button
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('disable_ui', 'Remove the TelltaleDNS tab from the router web UI?')}
+                  >
+                    Remove tab
+                  </button>
+                {:else}
+                  <button
+                    class="primary"
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('enable_ui', 'Add the TelltaleDNS tab to the router web UI?')}
+                  >
+                    Add tab
+                  </button>
+                {/if}
+                <button
+                  class="danger"
+                  disabled={routerBusy !== null}
+                  onclick={() =>
+                    routerRun('reboot_router', 'Reboot the router? The whole network drops for a minute.')}
+                >
+                  Reboot router
+                </button>
+              </div>
+              <p class="muted small">
+                The tab re-opens this dashboard after every boot. Reboot asks dnsmasq and the mesh to
+                start over, which is the reliable way out of a stuck wireless driver.
+              </p>
+            {:else if router.platform === 'openwrt'}
+              <p>
+                {#if router.serviceEnabled}
+                  <span class="badge ok">enabled</span> TelltaleDNS starts at boot.
+                {:else}
+                  <span class="badge">disabled</span> TelltaleDNS does not start at boot.
+                {/if}
+              </p>
+              <div class="row">
+                {#if router.serviceEnabled}
+                  <button
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('disable_service', 'Stop starting TelltaleDNS at boot?')}
+                  >
+                    Disable at boot
+                  </button>
+                {:else}
+                  <button
+                    class="primary"
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('enable_service', 'Start TelltaleDNS at boot?')}
+                  >
+                    Enable at boot
+                  </button>
+                {/if}
+                <button
+                  class="danger"
+                  disabled={routerBusy !== null}
+                  onclick={() => routerRun('reboot_router', 'Reboot the router? The whole network drops for a minute.')}
+                >
+                  Reboot router
+                </button>
+              </div>
+            {/if}
           </section>
         </div>
         {#if routerMessage}<div class="notice ok">{routerMessage}</div>{/if}

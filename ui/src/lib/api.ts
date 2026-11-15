@@ -101,12 +101,28 @@ export interface RouterStatus {
   dataDir: string;
   usbMount?: string | null;
   service: string;
+  device: string;
+  firmware: string;
+  uptimeSecs: number;
+  load1: number;
+  memTotalKb: number;
+  memFreeKb: number;
+  dataFreeKb: number;
+  dataTotalKb: number;
+  usbFreeKb?: number | null;
+  uiInstalled?: boolean | null;
+  serviceEnabled?: boolean | null;
 }
 export type RouterAction =
   | 'restart_dnsmasq'
   | 'restart_self'
   | 'enable_forwarding'
-  | 'disable_forwarding';
+  | 'disable_forwarding'
+  | 'enable_ui'
+  | 'disable_ui'
+  | 'reboot_router'
+  | 'enable_service'
+  | 'disable_service';
 
 export const api = {
   // Router page: dnsmasq, the boot script, and the data directory.
