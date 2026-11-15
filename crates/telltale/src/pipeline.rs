@@ -893,9 +893,14 @@ impl Pipeline {
         let mut peer = meta.peer.ip();
         if let Some(mac) = mac
             && st.policy.clients.trusts_mac_from(peer)
-            && let Some(ip) = crate::devices::ip_of_mac(&self.router_leases.load(), mac)
         {
-            peer = IpAddr::V4(ip);
+            match crate::devices::ip_of_mac(&self.router_leases.load(), mac) {
+                Some(ip) => {
+                    tracing::debug!(mac = ?mac, %ip, "client MAC from dnsmasq, using its lease");
+                    peer = IpAddr::V4(ip);
+                }
+                None => tracing::debug!(mac = ?mac, "client MAC from dnsmasq has no lease"),
+            }
         }
         let who = Who {
             peer,
@@ -2122,7 +2127,9 @@ impl Pipeline {
         let this = Arc::clone(self);
         let req = req.to_vec();
         let transport = meta.transport;
-        let peer = meta.peer.ip();
+        // The device's address (a dnsmasq-forwarded query got its lease back), so the
+        // query log and the per-client statistics name the device, not the router.
+        let peer = who.peer;
         Response::Deferred(Box::pin(async move {
             let waited = Instant::now();
             let mut answer = Arc::clone(&this)

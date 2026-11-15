@@ -92,6 +92,41 @@ apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwr
 
 Leave dnsmasq on port 53 and point it at TelltaleDNS on `127.0.0.1:5354` (`noresolv`, `strictorder`, servers `127.0.0.1#5354`, `9.9.9.9`, `1.1.1.1`), then start `/etc/init.d/telltale`. dnsmasq keeps DHCP and `*.lan`; TelltaleDNS filters public queries and reads `/tmp/dhcp.leases` for device names. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact uci commands, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
 
+## Parental controls
+
+Everything below is in the web UI (`http://<router>:8053/`). The router-specific parts are in
+**Settings → Router**; the rest works the same on any host.
+
+**Block a service for the whole network except one or two devices.** Services are bundles of
+domains (`youtube`, `roblox`, `tiktok`, `discord`, …):
+
+1. **Groups** → make a group for the family, say `family`, and tick YouTube and Roblox under
+   *Blocked services*. Leave its *Schedules* empty.
+2. Make a second group, say `exempt`, with the same lists but no blocked services.
+3. **Clients** → put the devices that must keep access in `exempt` (by name, IP, or MAC).
+4. Every device that matches no client uses the default group, so it gets `family`. If the
+   default group is not the one you want, assign the other devices to `family` explicitly.
+
+A device matches a client by name, IP address, MAC, or a network; the highest group priority
+wins when more than one matches.
+
+**Block it only at certain times.** **Schedules** → make a schedule:
+
+- *During the windows*: `block_services` (extra services) or `block_all` (a bedtime where
+  everything except quick allow rules and local names is blocked).
+- *Services*: YouTube, Roblox, anything else.
+- *Windows*: one per line, `weekdays 21:00-07:00`, `sat,sun 23:00-08:00`. An end before the
+  start runs past midnight.
+- *Time zone*: an IANA name such as `Europe/London` (default: the router's).
+
+Then open **Groups**, edit the group, and tick the schedule under *Schedules*. The group's
+devices follow it; other groups do not. The same schedule can be attached to several groups.
+
+**Only let one device through a blocked service at a time.** Put the device in its own group
+without the blocked service, and use a schedule with `block_services` on the group everyone
+else uses. Quick rules (**Quick rules**) allow a single name for everyone; groups are the way
+to allow a whole service for one device.
+
 ## Supported ASUS Merlin routers
 
 Your router's `uname -m` picks the binary. Run it on the router if you are unsure.

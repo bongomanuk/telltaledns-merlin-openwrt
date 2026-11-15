@@ -1,7 +1,7 @@
 <script lang="ts">
   // REQ: API-003, API-005 — my account (password, two-factor), API tokens, users (admin),
   // and system information.
-  import { api, type S } from '../lib/api';
+  import { api, type S, type RouterStatus, type RouterAction } from '../lib/api';
   import { can, session, refreshSession } from '../lib/session.svelte';
   import { ago, dateTime, duration } from '../lib/format';
   import { poll } from '../lib/poll';
@@ -18,6 +18,7 @@
       { id: 'tokens', label: 'API tokens' },
       ...(can('admin') ? [{ id: 'users', label: 'Users' }, { id: 'audit', label: 'Audit log' }] : []),
       { id: 'system', label: 'System' },
+      ...(can('admin') ? [{ id: 'router', label: 'Router' }] : []),
       // REQ: API-005 (ADR-121) — how queries are handled (cache, rate limit, what's kept out of
       // the log, simulation), apart from the node's own housekeeping.
       { id: 'queries', label: 'Query handling' },
@@ -399,6 +400,38 @@
   // REQ: OPS-004 — check the release index now instead of at the daily check.
   let checking = $state(false);
   let checkError = $state<unknown>(null);
+  // Router page: dnsmasq, the boot script, and the data directory. Admin only; the API
+  // refuses the actions without that role.
+  let router = $state<RouterStatus | null>(null);
+  let routerError = $state<unknown>(null);
+  let routerBusy = $state<RouterAction | null>(null);
+  let routerMessage = $state('');
+  async function loadRouter() {
+    try {
+      router = await api.routerStatus();
+      routerError = null;
+    } catch (e) {
+      routerError = e;
+    }
+  }
+  async function routerRun(action: RouterAction, question: string) {
+    if (!confirm(question)) return;
+    routerBusy = action;
+    routerMessage = '';
+    try {
+      routerMessage = (await api.routerAction(action)).message;
+      routerError = null;
+      if (action !== 'restart_self') await loadRouter();
+    } catch (e) {
+      routerError = e;
+    } finally {
+      routerBusy = null;
+    }
+  }
+  $effect(() => {
+    if (tab === 'router') void loadRouter();
+  });
+
   async function checkNow() {
     if (!info) return;
     checking = true;
@@ -709,6 +742,87 @@
         A change to these settings reaches every node at once (it's never staged itself). The Cluster page shows the version
         baking, the guard's readings, and the versions you can pin back to.
       </p>
+    {/if}
+  {:else if tab === 'router'}
+    <ErrorNote error={routerError} />
+    {#if router}
+      {#if router.platform === 'other'}
+        <div class="notice warn">
+          This host is not a Merlin or OpenWrt router, so there are no router controls.
+        </div>
+      {:else}
+        <p class="muted">
+          TelltaleDNS runs on {router.platform === 'merlin' ? 'ASUS Merlin' : 'OpenWrt'}. dnsmasq keeps port 53 for
+          DHCP and the local names, so the LAN keeps resolving when this process is down.
+        </p>
+        <div class="grid-2">
+          <section class="card">
+            <h2>dnsmasq</h2>
+            <p>
+              {#if router.dnsmasqRunning}<span class="badge ok">running</span>{:else}<span class="badge bad">not running</span>{/if}
+              on port <span class="mono">{router.dnsmasqPort}</span>
+            </p>
+            <p>
+              {#if router.forwarding}
+                <span class="badge ok">forwarding</span> public queries to TelltaleDNS
+              {:else}
+                <span class="badge">not forwarding</span> public queries to TelltaleDNS
+              {/if}
+            </p>
+            <p class="muted">{router.dhcpLeases} DHCP leases read from the router.</p>
+            <div class="row">
+              <button
+                class="primary"
+                disabled={routerBusy !== null}
+                onclick={() => routerRun('restart_dnsmasq', 'Restart dnsmasq? DNS stops for a few seconds.')}
+              >
+                {routerBusy === 'restart_dnsmasq' ? 'Restarting…' : 'Restart dnsmasq'}
+              </button>
+              {#if router.forwarding}
+                <button
+                  class="danger"
+                  disabled={routerBusy !== null}
+                  onclick={() => routerRun('disable_forwarding', 'Stop sending public queries to TelltaleDNS?')}
+                >
+                  Stop forwarding
+                </button>
+              {:else}
+                <button
+                  class="primary"
+                  disabled={routerBusy !== null}
+                  onclick={() => routerRun('enable_forwarding', 'Send dnsmasq\'s public queries to TelltaleDNS?')}
+                >
+                  Start forwarding
+                </button>
+              {/if}
+            </div>
+          </section>
+          <section class="card">
+            <h2>TelltaleDNS</h2>
+            <p>Started by <span class="mono">{router.service}</span>.</p>
+            <p class="muted">Data and query log: <span class="mono">{router.dataDir}</span></p>
+            <p class="muted">
+              {#if router.usbMount}
+                USB volume: <span class="mono">{router.usbMount}</span>
+              {:else}
+                No USB volume mounted; the data is on the router's flash.
+              {/if}
+            </p>
+            <div class="row">
+              <button
+                class="danger"
+                disabled={routerBusy !== null}
+                onclick={() => routerRun('restart_self', 'Restart TelltaleDNS? The dashboard reconnects in a moment.')}
+              >
+                {routerBusy === 'restart_self' ? 'Restarting…' : 'Restart TelltaleDNS'}
+              </button>
+            </div>
+          </section>
+        </div>
+        {#if routerMessage}<div class="notice ok">{routerMessage}</div>{/if}
+      {/if}
+    {:else if !routerError}
+      <p class="muted">Reading the router…</p>
     {/if}
   {:else if tab === 'system'}
     <section class="card">
