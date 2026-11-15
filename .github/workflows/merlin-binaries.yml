@@ -108,6 +108,10 @@ jobs:
         shell: bash
         env:
           VERSION_INPUT: ${{ inputs.version }}
+          # Thin LTO and 16 codegen units make the final link fast. The binary is a
+          # little larger; the Merlin bundle and OpenWrt package are gzip-compressed.
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: |
           set -euo pipefail
           pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
