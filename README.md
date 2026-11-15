@@ -39,13 +39,15 @@ opkg install telltale
 
 The package installs the static binary to `/opt/sbin/telltale`, the config to `/opt/etc/telltale/telltale.toml` (a conffile), an init script at `/opt/etc/init.d/S99telltale`, and keeps its data and query log on the USB at `/opt/var/lib/telltale`, away from the router's flash.
 
-`dnsmasq` still owns port 53. Free it before starting the service:
+Move dnsmasq's DNS to port 5353 so TelltaleDNS can take port 53, then start it:
 
 ```sh
-grep -qx 'port=0' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=0' >> /jffs/configs/dnsmasq.conf.add
+grep -qx 'port=5353' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5353' >> /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 /opt/etc/init.d/S99telltale start
 ```
+
+TelltaleDNS forwards `home.lan`, `lan`, `router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5353, so the router's DHCP hostnames and local names keep working. It also reads `/var/lib/misc/dnsmasq.leases` for device names.
 
 Then create the first admin and open the UI:
 
@@ -68,7 +70,7 @@ Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for a
 apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk
 ```
 
-Then free port 53 from dnsmasq (`uci set dhcp.@dnsmasq[0].port='0'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
+Then move dnsmasq's DNS to 5353 (`uci set dhcp.@dnsmasq[0].port='5353'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. TelltaleDNS forwards `lan` and `192.168.x` reverse lookups to dnsmasq on 5353, so DHCP hostnames and `*.lan` keep working, and it reads `/tmp/dhcp.leases` for device names. Install `luci-app-telltale` too for the **Services → TelltaleDNS** page. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
 
 ## Supported ASUS Merlin routers
 
@@ -95,7 +97,7 @@ Your router's `uname -m` picks the binary. Run it on the router if you are unsur
 
 The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53 to be the LAN resolver, so you have to choose:
 
-- **Run it on the router (the feed/manual installs above):** keep dnsmasq for DHCP but turn its DNS off with `port=0` (see the install step). While TelltaleDNS is down, the LAN has no DNS, so keep a way in and test before rebooting.
+- **Run it on the router (the feed/manual installs above):** keep dnsmasq for DHCP, but move its DNS to 5353 (`port=5353`) and let TelltaleDNS answer port 53. Local zones (`home.lan`, `lan`, `router.asus.com`, reverse) are forwarded to dnsmasq, and its lease file supplies the device names. While TelltaleDNS is down, clients using the router (192.168.1.1:53) have no DNS; keep an SSH session open and test before rebooting.
 - **Run it on a separate host (a Pi):** leave the router alone and point the router's DHCP DNS at the Pi. This is the least risky option.
 - **Keep dnsmasq and forward to TelltaleDNS on another port:** works, but every query reaches TelltaleDNS from the router, so per-device attribution is lost unless you use dnsmasq's `add-mac` and TelltaleDNS's `trust_edns_mac_from`.
 

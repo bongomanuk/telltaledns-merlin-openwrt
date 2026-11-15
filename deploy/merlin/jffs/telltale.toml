@@ -33,6 +33,30 @@ strategy = "fastest"
 
 # A compact blocklist (about 2 MB) rather than the 150k-name list, to leave
 # room for the binary and the data directory on a small JFFS partition.
+# The router's own dnsmasq stays on 127.0.0.1:5353 (see the install guide). Local names
+# and reverse lookups go there, so DHCP hostnames, home.lan and router.asus.com keep
+# working; everything else uses the encrypted upstreams above.
+[[upstream]]
+name = "router-dns"
+url = "udp://127.0.0.1:5353"
+
+[[upstream_group]]
+name = "router"
+members = ["router-dns"]
+
+[[route]]
+match_suffix = ["home.lan", "lan", "router.asus.com", "168.192.in-addr.arpa"]
+upstream_group = "router"
+dnssec_nta = true
+
+# Device names from the router's DHCP leases. Asuswrt-Merlin keeps the file at
+# /var/lib/misc/dnsmasq.leases; OpenWrt at /tmp/dhcp.leases.
+[[router]]
+name = "dnsmasq"
+type = "dnsmasq"
+url = "file:///var/lib/misc/dnsmasq.leases"
+interval_secs = 60
+
 [[list]]
 name = "hagezi-light"
 url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt"

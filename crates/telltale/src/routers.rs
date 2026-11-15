@@ -138,6 +138,23 @@ pub(crate) fn opnsense_leases(v: &Value) -> Seen {
         .collect()
 }
 
+/// dnsmasq's lease file: `expiry mac ip hostname clientid` per line. `hostname` is `*` when
+/// the client sent no name. Asuswrt-Merlin keeps it at `/var/lib/misc/dnsmasq.leases`;
+/// OpenWrt at `/tmp/dhcp.leases`.
+pub(crate) fn dnsmasq_leases(text: &str) -> Seen {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let _expiry = fields.next()?;
+            let mac = fields.next()?.to_ascii_lowercase();
+            let ip: Ipv4Addr = fields.next()?.parse().ok()?;
+            let host = fields.next()?;
+            let name = (host != "*").then(|| host.to_owned());
+            Some((mac, ip, name))
+        })
+        .collect()
+}
+
 /// One poll of a UniFi console or Network application.
 async fn poll_unifi(
     client: &telltale_filter::fetch::Client,
@@ -235,6 +252,17 @@ async fn poll_opnsense(
     Err(format!("no DHCP lease API answered ({last})"))
 }
 
+/// One read of the local dnsmasq lease file.
+async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
+    let path = c
+        .url
+        .as_str()
+        .strip_prefix("file://")
+        .unwrap_or(c.url.as_str());
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    Ok(dnsmasq_leases(&text))
+}
+
 /// The leases view from every router's last answer.
 fn rebuild(parts: &HashMap<String, Seen>, view: &ArcSwap<Leases>) {
     let mut m = Leases::new();
@@ -309,6 +337,7 @@ pub(crate) async fn run(
             let result = match r.kind {
                 RouterKind::Unifi => poll_unifi(&client, r).await,
                 RouterKind::Opnsense => poll_opnsense(&client, r).await,
+                RouterKind::Dnsmasq => poll_dnsmasq(r).await,
             };
             let was_failing = failing.get(r.name.as_str()).copied().unwrap_or(false);
             match result {
@@ -348,6 +377,24 @@ pub(crate) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// REQ: T8.2 — a local dnsmasq lease file: names are used, `*` is an unnamed client.
+    #[test]
+    fn dnsmasq_leases_named() {
+        let text = "64918 3C:E3:6B:05:18:39 192.168.1.16 creepy-drive 01:3c:e3:6b:05:18:39\n\
+                    85914 ac:fa:e4:89:7e:6c 192.168.1.188 * *\n";
+        assert_eq!(
+            dnsmasq_leases(text),
+            vec![
+                (
+                    "3c:e3:6b:05:18:39".into(),
+                    Ipv4Addr::new(192, 168, 1, 16),
+                    Some("creepy-drive".into())
+                ),
+                ("ac:fa:e4:89:7e:6c".into(), Ipv4Addr::new(192, 168, 1, 188), None),
+            ]
+        );
+    }
 
     /// REQ: T8.2 — UniFi's client list: the alias wins over the host name; clients without
     /// an IPv4 address are skipped.

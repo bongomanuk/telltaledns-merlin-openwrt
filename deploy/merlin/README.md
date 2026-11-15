@@ -78,9 +78,12 @@ Requirements:
 The router's `dnsmasq` owns UDP/TCP port 53 and also runs DHCP. TelltaleDNS needs
 port 53 to be your LAN resolver. You have three choices:
 
-**A. Replace dnsmasq's DNS with TelltaleDNS (runs on the router, recommended if you
-want it on the router).** Keep dnsmasq for DHCP, but turn its DNS off with
-`port=0`. TelltaleDNS then binds port 53. This is the method below.
+**A. TelltaleDNS answers port 53, dnsmasq keeps the local zones (runs on the
+router; recommended).** Keep dnsmasq for DHCP and move its DNS to 5353
+(`port=5353`). TelltaleDNS binds port 53 and forwards `home.lan`, `lan`,
+`router.asus.com` and `192.168.x` reverse lookups to dnsmasq on 5353, so the router's
+DHCP hostnames and local names keep working. It also reads the dnsmasq lease file
+for device names. This is the method below.
 
 **B. Keep dnsmasq and forward to TelltaleDNS on another port.** TelltaleDNS loses
 per-device attribution, because every query now arrives from the router. It can be
@@ -90,10 +93,11 @@ trust_edns_mac_from`, but that is a more advanced setup.
 **C. Run TelltaleDNS on a separate Raspberry Pi** and leave the router alone. This
 is the least risky option overall; point the router's DHCP DNS at the Pi.
 
-> **Warning for option A:** while dnsmasq's DNS is off, the LAN has no DNS unless
-> TelltaleDNS is running. Keep an SSH session open (to the router's IP) while you
-> test, so you can undo it if TelltaleDNS does not start. To undo, remove the
-> `port=0` line and run `service restart_dnsmasq`.
+> **Warning for option A:** clients use the router (192.168.1.1:53), so the LAN
+> has no DNS unless TelltaleDNS is running. dnsmasq still answers the local zones
+> on 5353. Keep an SSH session open while you test, so you can undo it if
+> TelltaleDNS does not start. To undo, remove the `port=5353` line and run
+> `service restart_dnsmasq`.
 
 ## Install from the opkg feed (recommended, needs Entware)
 
@@ -118,14 +122,17 @@ The package installs:
 | `/opt/etc/init.d/S99telltale` | Entware start/stop script |
 | `/opt/var/lib/telltale` | data and query log (created by `postinst`) |
 
-`dnsmasq` still owns port 53. Free it **before** starting the service (and keep an
-SSH session open; see the warning above):
+Move dnsmasq's DNS to 5353 before starting the service (and keep an SSH session
+open; see the warning above):
 
 ```sh
-grep -qx 'port=0' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=0' >> /jffs/configs/dnsmasq.conf.add
+grep -qx 'port=5353' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5353' >> /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 /opt/etc/init.d/S99telltale start
 ```
+
+The starter config forwards local zones to dnsmasq on 5353 and reads
+`/var/lib/misc/dnsmasq.leases` for device names.
 
 Then create the first admin and open the UI:
 
@@ -256,6 +263,27 @@ name = "default"
 members = ["cloudflare", "quad9"]
 strategy = "fastest"
 
+# The router's dnsmasq stays on 127.0.0.1:5353; local names and reverse lookups
+# go there, and its lease file names the devices.
+[[upstream]]
+name = "router-dns"
+url = "udp://127.0.0.1:5353"
+
+[[upstream_group]]
+name = "router"
+members = ["router-dns"]
+
+[[route]]
+match_suffix = ["home.lan", "lan", "router.asus.com", "168.192.in-addr.arpa"]
+upstream_group = "router"
+dnssec_nta = true
+
+[[router]]
+name = "dnsmasq"
+type = "dnsmasq"
+url = "file:///var/lib/misc/dnsmasq.leases"
+interval_secs = 60
+
 # Optional: keep the query log small and reduce flash writes.
 [telemetry.qlog]
 retention_days = 7
@@ -283,15 +311,16 @@ Check the file before starting:
 /jffs/telltale/telltale config check /jffs/telltale/telltale.toml
 ```
 
-### 3. Free port 53 (option A)
+### 3. Move dnsmasq's DNS to 5353 (option A)
 
 ```sh
 mkdir -p /jffs/configs
-grep -qx 'port=0' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=0' >> /jffs/configs/dnsmasq.conf.add
+grep -qx 'port=5353' /jffs/configs/dnsmasq.conf.add 2>/dev/null || echo 'port=5353' >> /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 
-`port=0` disables dnsmasq's DNS server but keeps DHCP running.
+`port=5353` keeps dnsmasq's DNS and DHCP running, on 5353. TelltaleDNS takes port
+53 and forwards the local zones to it.
 
 ### 4. First run and the admin account
 
@@ -370,8 +399,8 @@ builds (and they are unsigned), so update manually.
 killall telltale
 rm -f /jffs/scripts/services-start
 rm -rf /jffs/telltale
-# restore dnsmasq's DNS:
-sed -i '/^port=0$/d' /jffs/configs/dnsmasq.conf.add
+# restore dnsmasq's DNS on port 53:
+sed -i '/^port=5353$/d' /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 

@@ -1151,11 +1151,14 @@ const fn default_zone_negative_ttl() -> u32 {
 pub struct RouterConfig {
     /// Unique name (logs, the leases' source).
     pub name: SafeString,
-    /// `unifi` (UniFi OS consoles and the Network application) or `opnsense`.
+    /// `unifi` (UniFi OS consoles and the Network application), `opnsense`, or `dnsmasq`
+    /// (a local dnsmasq lease file, as on Asuswrt-Merlin and OpenWrt).
     #[serde(rename = "type")]
     pub kind: RouterKind,
     /// The console or controller: `https://192.168.1.1` (UniFi OS), `https://controller:8443`
-    /// (Network application), `https://opnsense.lan`.
+    /// (Network application), `https://opnsense.lan`. For `dnsmasq`, the lease file:
+    /// `file:///var/lib/misc/dnsmasq.leases` (Asuswrt-Merlin) or `file:///tmp/dhcp.leases`
+    /// (OpenWrt).
     pub url: SafeString,
     /// UniFi: the site (default `default`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1198,6 +1201,7 @@ const fn default_router_interval() -> u32 {
 pub enum RouterKind {
     Unifi,
     Opnsense,
+    Dnsmasq,
 }
 
 /// REQ: OBS-010 (T7.12, `spec/06` §8) — alerts: rules checked on the primary (or a standalone

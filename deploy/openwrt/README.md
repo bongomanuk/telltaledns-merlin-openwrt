@@ -53,19 +53,25 @@ The package installs:
 The launcher unpacks the binary into `/tmp` (RAM) at start, so the package uses
 about 14 MB of flash instead of 28 MB.
 
-## Free port 53 (read this first)
+## Move dnsmasq's DNS to 5353 (read this first)
 
-OpenWrt's `dnsmasq` serves DHCP and DNS. TelltaleDNS needs port 53, so keep dnsmasq
-for DHCP but turn its DNS off:
+OpenWrt's `dnsmasq` serves DHCP and DNS. TelltaleDNS needs port 53, so keep
+dnsmasq for DHCP and move its DNS to 5353:
 
 ```sh
-uci set dhcp.@dnsmasq[0].port='0'
+uci set dhcp.@dnsmasq[0].port='5353'
 uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-Keep an SSH session open: while dnsmasq's DNS is off, the LAN has no DNS unless
-TelltaleDNS is running. To undo:
+The starter config forwards `lan` and `192.168.x` reverse lookups to
+`127.0.0.1:5353`, so DHCP hostnames and `*.lan` keep working, and it reads
+`/tmp/dhcp.leases` for device names. Everything else goes to the encrypted
+upstreams.
+
+Keep an SSH session open: clients use the router's port 53, so the LAN has no DNS
+unless TelltaleDNS is running. dnsmasq still answers the local zones on 5353. To
+undo:
 
 ```sh
 uci set dhcp.@dnsmasq[0].port='53'
