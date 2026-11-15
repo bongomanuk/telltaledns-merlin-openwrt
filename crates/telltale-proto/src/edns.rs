@@ -51,16 +51,70 @@ impl<'a> Edns<'a> {
         self.option(opt::COOKIE)
     }
 
-    /// Client MAC from dnsmasq's `add-mac` option (6 bytes), for client identification (FLT-006).
+    /// Client MAC from dnsmasq's `add-mac` option, for client identification (FLT-006).
+    ///
+    /// dnsmasq never sends the MAC as raw bytes: `add-mac` (the default) sends base64 and
+    /// `add-mac=text` sends `aa:bb:cc:dd:ee:ff`. Accept raw bytes too, for other forwarders.
     pub fn client_mac(&self) -> Option<[u8; 6]> {
-        self.option(opt::DNSMASQ_MAC)
-            .and_then(|v| <[u8; 6]>::try_from(v).ok())
+        let value = self.option(opt::DNSMASQ_MAC)?;
+        if let Ok(raw) = <[u8; 6]>::try_from(value) {
+            return Some(raw);
+        }
+        if value.len() == 17 {
+            return text_mac(value);
+        }
+        base64_mac(value)
     }
 
     /// TelltaleDNS loop-detection tag, if present (`spec/04` §7).
     pub fn loop_tag(&self) -> Option<&'a [u8]> {
         self.option(opt::TELLTALE_LOOP)
     }
+}
+
+/// `aa:bb:cc:dd:ee:ff` (`add-mac=text`).
+fn text_mac(value: &[u8]) -> Option<[u8; 6]> {
+    if value.iter().skip(2).step_by(3).any(|b| *b != b':') {
+        return None;
+    }
+    let mut mac = [0u8; 6];
+    for (i, byte) in mac.iter_mut().enumerate() {
+        let pair = std::str::from_utf8(&value[i * 3..i * 3 + 2]).ok()?;
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(mac)
+}
+
+/// Standard base64 without padding (`add-mac`): 6 bytes are always 8 characters.
+fn base64_mac(value: &[u8]) -> Option<[u8; 6]> {
+    if value.len() != 8 {
+        return None;
+    }
+    let mut out = [0u8; 6];
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    let mut written = 0usize;
+    for c in value {
+        let digit = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(digit);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            let Some(slot) = out.get_mut(written) else {
+                return None;
+            };
+            *slot = ((acc >> bits) & 0xff) as u8;
+            written += 1;
+        }
+    }
+    (written == 6).then_some(out)
 }
 
 impl<'a> IntoIterator for &Edns<'a> {
@@ -128,6 +182,27 @@ impl EdnsOut<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_005_dnsmasq_mac_encodings() {
+        // `add-mac` (base64) and `add-mac=text`, as dnsmasq 2.91 sends them.
+        let b64 = b"AQIDBAUG";
+        let text = b"0a:0B:0c:0D:0e:0F";
+        for (value, want) in [
+            (&b64[..], [1, 2, 3, 4, 5, 6]),
+            (&text[..], [10, 11, 12, 13, 14, 15]),
+        ] {
+            let mut rdata = vec![0xFD, 0xE9, 0x00, u8::try_from(value.len()).unwrap()];
+            rdata.extend_from_slice(value);
+            let e = Edns::from_parts(4096, 0, &rdata).unwrap();
+            assert_eq!(e.client_mac(), Some(want));
+        }
+        for bad in [&b"not base64"[..], &b"aa:bb:cc:dd:ee"[..]] {
+            let mut rdata = vec![0xFD, 0xE9, 0x00, u8::try_from(bad.len()).unwrap()];
+            rdata.extend_from_slice(bad);
+            assert_eq!(Edns::from_parts(4096, 0, &rdata).unwrap().client_mac(), None);
+        }
+    }
 
     #[test]
     fn dns_005_option_iteration_and_validation() {

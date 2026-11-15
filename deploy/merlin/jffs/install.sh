@@ -147,7 +147,7 @@ if [ "$dns" = 1 ]; then
     add=/jffs/configs/dnsmasq.conf.add
     touch "$add"
     sed -i '/^port=5354$/d' "$add"
-    for line in 'no-resolv' 'strict-order' 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+    for line in 'no-resolv' 'strict-order' 'add-mac' 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
         grep -qx "$line" "$add" || echo "$line" >> "$add"
     done
     service restart_dnsmasq >/dev/null 2>&1 || true
@@ -172,7 +172,7 @@ fi
 if [ "$dns" = 1 ]; then
     echo "dnsmasq now forwards public queries to TelltaleDNS on 127.0.0.1:5354 and"
     echo "keeps port 53 for DHCP and local names. Undo with:"
-    echo "  sed -i '/^no-resolv$/d;/^strict-order$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add"
+    echo "  sed -i '/^no-resolv$/d;/^strict-order$/d;/^add-mac$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add"
     echo "  service restart_dnsmasq"
 fi
 echo "Start it now (or reboot):"

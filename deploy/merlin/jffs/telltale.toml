@@ -69,3 +69,11 @@ retention_bytes = "4MiB"
 # Keep the response cache bounded on a 512 MB router.
 [cache]
 max_bytes = "16MiB"
+
+
+# Recover the client from dnsmasq's EDNS MAC option. Without it every query
+# arrives from 127.0.0.1, and per-device statistics and rules see the router
+# instead of the device. dnsmasq needs `add-mac` (the installer adds it).
+[clients]
+neighbor_table = true
+trust_edns_mac_from = ["127.0.0.1/32"]

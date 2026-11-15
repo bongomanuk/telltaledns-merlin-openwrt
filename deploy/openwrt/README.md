@@ -72,6 +72,8 @@ TelltaleDNS, which listens on `127.0.0.1:5354`:
 ```sh
 uci set dhcp.@dnsmasq[0].noresolv='1'
 uci set dhcp.@dnsmasq[0].strictorder='1'
+# client MAC in the query, so device rules keep working (--add-mac)
+uci set dhcp.@dnsmasq[0].addmac='1'
 uci -q delete dhcp.@dnsmasq[0].server
 uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5354'
 uci add_list dhcp.@dnsmasq[0].server='9.9.9.9'
@@ -82,7 +84,9 @@ uci commit dhcp
 
 dnsmasq keeps port 53, DHCP, `*.lan` and the router's own names. Public queries go
 to TelltaleDNS first; `strictorder` makes dnsmasq use the plain servers only when
-it does not answer. It reads `/tmp/dhcp.leases` for device names.
+it does not answer. `addmac` carries the client MAC, so per-device rules and
+statistics still work, and the lease file supplies the device names. If your
+dnsmasq has no `addmac` option, add `add-mac` to its configuration instead.
 
 To undo, delete the `server` list and set `noresolv` back to `0`, then restart
 dnsmasq.

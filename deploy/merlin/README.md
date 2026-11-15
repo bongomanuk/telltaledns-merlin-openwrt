@@ -93,10 +93,11 @@ The router's `dnsmasq` owns port 53 and runs DHCP. TelltaleDNS does not take por
 - if TelltaleDNS is down, dnsmasq falls back to plain DNS (`9.9.9.9`, `1.1.1.1`)
   and the LAN keeps working.
 
-This costs per-client attribution in the query log: dnsmasq is the only client
-TelltaleDNS sees. Device names still come from the dnsmasq lease file, so the
-Clients view is populated by IP. dnsmasq's `add-mac` and TelltaleDNS's
-`[clients] trust_edns_mac_from` bring the client MAC back if you need it.
+Every query reaches TelltaleDNS from 127.0.0.1, so dnsmasq's `add-mac` option
+carries the client MAC in the query and TelltaleDNS trusts it from loopback
+(`[clients] trust_edns_mac_from`). That keeps per-device statistics and rules
+working. Without `add-mac` the Clients view would see one address, the router,
+and the UI would warn that client IPs look masked.
 
 An older setup had TelltaleDNS answer port 53 and moved dnsmasq to 5354. It gives
 per-client attribution, but the whole LAN, including the mesh nodes, loses DNS
@@ -136,7 +137,7 @@ Point dnsmasq at it, then start the service:
 ```sh
 add=/jffs/configs/dnsmasq.conf.add
 touch "$add"
-for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+for line in no-resolv strict-order add-mac 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
     grep -qx "$line" "$add" || echo "$line" >> "$add"
 done
 service restart_dnsmasq
@@ -300,6 +301,11 @@ type = "dnsmasq"
 url = "file:///var/lib/misc/dnsmasq.leases"
 interval_secs = 60
 
+# Device names from dnsmasq's EDNS MAC option (dnsmasq needs `add-mac`).
+[clients]
+neighbor_table = true
+trust_edns_mac_from = ["127.0.0.1/32"]
+
 # Optional: keep the query log small and reduce flash writes.
 [telemetry.qlog]
 retention_days = 7
@@ -322,7 +328,7 @@ Check the file before starting:
 mkdir -p /jffs/configs
 add=/jffs/configs/dnsmasq.conf.add
 touch "$add"
-for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+for line in no-resolv strict-order add-mac 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
     grep -qx "$line" "$add" || echo "$line" >> "$add"
 done
 service restart_dnsmasq
@@ -410,7 +416,7 @@ killall telltale
 rm -f /jffs/scripts/services-start
 rm -rf /jffs/telltale
 # stop using TelltaleDNS for public queries:
-sed -i '/^no-resolv$/d;/^strict-order$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add
+sed -i '/^no-resolv$/d;/^strict-order$/d;/^add-mac$/d;/^server=127.0.0.1#5354$/d' /jffs/configs/dnsmasq.conf.add
 service restart_dnsmasq
 ```
 

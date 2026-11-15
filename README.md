@@ -12,6 +12,18 @@ These are unofficial builds. There is no guarantee that they work on your router
 and a resolver that owns port 53 can take the LAN offline while it is broken.
 Keep SSH access and the undo steps in the install guide. Use at your own risk.
 
+## Status, and what I can test
+
+The Merlin build is the one I run at home, on an RT-AX95Q, and it is what this
+fork is for: per-device filtering and query history for a family LAN with kids
+on it. That is where my time goes.
+
+The OpenWrt packages are built from the same source and packaged the same way,
+but I have no OpenWrt hardware to test them. Treat them as untested.
+
+Issues and pull requests are welcome, in particular reports from OpenWrt routers:
+the model, `apk --print-arch`, and what worked or did not.
+
 ## What this fork is, and why it exists
 
 This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts; routers have none of those. Many Merlin models, including the RT-AX95Q / ZenWiFi XT8, are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk, not a conventional package manager. On these routers you need a static file or a native package, not an image.
@@ -48,7 +60,7 @@ Point dnsmasq at it, then start the service:
 ```sh
 add=/jffs/configs/dnsmasq.conf.add
 touch "$add"
-for line in no-resolv strict-order 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
+for line in no-resolv strict-order add-mac 'server=127.0.0.1#5354' 'server=9.9.9.9' 'server=1.1.1.1'; do
     grep -qx "$line" "$add" || echo "$line" >> "$add"
 done
 service restart_dnsmasq
@@ -107,7 +119,7 @@ On Merlin, dnsmasq keeps port 53: DHCP, the DHCP hostnames, `home.lan`, `router.
 
 The trade-off is per-client attribution: dnsmasq is TelltaleDNS's only client, so the query log sees one source address. Device names still come from the dnsmasq lease file. The older setup (TelltaleDNS on 53, dnsmasq moved to 5354) gives per-client attribution but takes DNS away from the whole LAN, mesh included, whenever TelltaleDNS misbehaves. [`deploy/merlin/README.md`](deploy/merlin/README.md) documents both.
 - **Run it on a separate host (a Pi):** leave the router alone and point the router's DHCP DNS at the Pi. This is the least risky option.
-- **Keep dnsmasq and forward to TelltaleDNS on another port:** works, but every query reaches TelltaleDNS from the router, so per-device attribution is lost unless you use dnsmasq's `add-mac` and TelltaleDNS's `trust_edns_mac_from`.
+- **Keep dnsmasq and forward to TelltaleDNS on loopback (default):** every query reaches TelltaleDNS from the router, so dnsmasq's `add-mac` option carries the client MAC along and TelltaleDNS trusts it from `127.0.0.1`. Device rules and per-device statistics keep working.
 
 ## Builds and packages
 

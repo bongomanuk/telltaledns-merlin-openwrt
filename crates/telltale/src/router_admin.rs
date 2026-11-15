@@ -236,7 +236,10 @@ fn set_forwarding_openwrt(on: bool) -> Result<(), Problem> {
             uci("add_list", &[&format!("dhcp.@dnsmasq[0].server={s}")])?;
         }
     } else {
-        uci("delete", &["dhcp.@dnsmasq[0].server"])?;
+        // Only our entries: other `server` lines belong to the user.
+        for server in [LISTEN].iter().chain(FALLBACK.iter()) {
+            let _ = uci("del_list", &[&format!("dhcp.@dnsmasq[0].server={server}")]);
+        }
         uci("set", &["dhcp.@dnsmasq[0].noresolv=0"])?;
     }
     let _ = uci("commit", &["dhcp"]);
