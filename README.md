@@ -101,7 +101,7 @@ The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53
 
 - **Raw binaries:** Actions → **merlin-binaries** → *Run workflow* (or push a `v*` tag). The `telltale-merlin-<run>` artifact contains the three static binaries and `SHA256SUMS`.
 - **The packages:** Actions → **merlin-feed** → *Run workflow* (or push a `v*` tag). It builds the binaries, makes the Entware `armv7-3.2`/`aarch64-3.10` packages, makes the OpenWrt 25.12 apk packages, writes the indexes, and deploys them to GitHub Pages.
-- **Upstream releases:** the [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow runs daily, finds the latest `paimonsoror/telltaledns` release, and dispatches `merlin-feed` for its tag if this fork has not built it yet. The build uses the upstream tag's source; the packaging is from this fork.
+- **Upstream tracking:** the [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow runs daily. It merges `paimonsoror/telltaledns` `main` into this fork (keeping this fork's README, packaging and workflows on conflicts), then dispatches `merlin-feed` for the latest upstream release if this fork has not built it yet. The source stays current and every release gets packages and a GitHub release.
 - **Locally:** the Entware scripts are in [`deploy/merlin/opkg/`](deploy/merlin/opkg/) and the OpenWrt scripts in [`deploy/openwrt/`](deploy/openwrt/); the builds use the project's usual `cargo zigbuild` targets.
 
 ## Documentation

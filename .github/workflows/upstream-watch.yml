@@ -1,9 +1,11 @@
-# Track upstream TelltaleDNS releases and build them automatically.
+# Keep this fork current and build each upstream release.
 #
-# Once a day, ask GitHub for the latest release of paimonsoror/telltaledns. If
-# this fork has no release for that tag yet, dispatch merlin-feed with the tag;
-# that builds the upstream source at the tag and publishes the Merlin/Entware
-# and OpenWrt packages, then creates the fork release that marks it as built.
+# Daily (or on demand):
+#   1. merge paimonsoror/telltaledns main into this fork's main, keeping this
+#      fork's README, workflows and packaging files on conflicts;
+#   2. look at the latest upstream release; if this fork has no release for that
+#      tag yet, dispatch merlin-feed for the tag, which builds the upstream tag,
+#      publishes the Merlin/Entware and OpenWrt packages, and creates the release.
 name: upstream-watch
 
 on:
@@ -12,13 +14,43 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
 jobs:
-  check:
+  sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Check out this fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "upstream-sync[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/paimonsoror/telltaledns.git
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main is already up to date with upstream"
+            exit 0
+          fi
+          # -X ours: where upstream and this fork disagree (README, the Merlin and
+          # OpenWrt packaging, the fork's workflows), keep this fork's version.
+          # Everything else, including new upstream files and source changes, is
+          # taken as upstream has it.
+          git merge --no-edit -X ours upstream/main
+          git push origin main
+          echo "Merged upstream main into this fork"
+
       - name: Latest upstream release
         id: latest
         env:
@@ -47,7 +79,7 @@ jobs:
             echo "Not built yet: ${{ steps.latest.outputs.tag }}"
           fi
 
-      - name: Build the new upstream release
+      - name: Build the release
         if: steps.built.outputs.built == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
