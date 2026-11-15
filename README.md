@@ -12,17 +12,24 @@ These are unofficial builds. There is no guarantee that they work on your router
 and a resolver that owns port 53 can take the LAN offline while it is broken.
 Keep SSH access and the undo steps in the install guide. Use at your own risk.
 
-## Status, and what I can test
+## Why this fork exists
 
-The Merlin build is the one I run at home, on an RT-AX95Q, and it is what this
-fork is for: per-device filtering and query history for a family LAN with kids
-on it. That is where my time goes.
+I needed one thing: a way to manage my kids' internet access on a schedule, per
+device, without buying new hardware or moving DNS off the router. I did not find
+anything that did it well on Merlin, so I adapted TelltaleDNS, which already had
+the filtering and the per-device rules.
 
-The OpenWrt packages are built from the same source and packaged the same way,
-but I have no OpenWrt hardware to test them. Treat them as untested.
+Everything here follows from that: schedules that block whole services such as
+YouTube and Roblox, groups that leave one or two devices out, a lockdown button
+for the moment a rule has to change now, and packaging that leaves the router's
+flash and its port 53 alone.
 
-Issues and pull requests are welcome, in particular reports from OpenWrt routers:
-the model, `apk --print-arch`, and what worked or did not.
+It is not a general router project. The Merlin build is the one I run at home, on
+an RT-AX95Q. The OpenWrt packages are built the same way, but I have no OpenWrt
+hardware to test them, so treat those as untested.
+
+Issues and pull requests are welcome, in particular reports from OpenWrt
+routers: the model, `apk --print-arch`, and what worked or did not.
 
 ## Screenshots
 
