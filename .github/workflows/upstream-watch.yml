@@ -48,6 +48,12 @@ jobs:
           # Everything else, including new upstream files and source changes, is
           # taken as upstream has it.
           git merge --no-edit -X ours upstream/main
+          # The workflow token is not allowed to create or update workflow files, and this
+          # fork does not want upstream's CI anyway. Restore our set before pushing.
+          rm -rf .github/workflows
+          git checkout ORIG_HEAD -- .github/workflows
+          git add .github/workflows
+          git commit --amend --no-edit
           git push origin main
           echo "Merged upstream main into this fork"
 
