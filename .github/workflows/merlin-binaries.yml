@@ -1,13 +1,12 @@
-# Build the static TelltaleDNS binaries for ASUS Merlin routers, on GitHub.
+# Build the static TelltaleDNS binaries for ASUS Merlin and OpenWrt, on GitHub.
 #
 # Asuswrt-Merlin runs on Broadcom HND hardware:
 #   * ARMv7 (32-bit), e.g. ZenWiFi XT8 / RT-AX95Q, RT-AX58U, RT-AX82U, RT-AX92U
 #   * ARM64 (aarch64), newer HND models (RT-AX86U, RT-AX88U, GT-AX11000, ...)
 # The binaries are static musl builds, so they need no Entware/uclibc on the router.
 #
-# Run it from Actions -> merlin-binaries -> Run workflow, or push a v* tag.
-# The binaries and SHA256SUMS are uploaded as the workflow artifact (and attached to
-# a GitHub release when the run is for a v* tag).
+# Each architecture builds on its own runner in parallel; the bundle job combines
+# them into one artifact (and a release on a v* tag).
 name: merlin-binaries
 
 on:
@@ -37,22 +36,41 @@ permissions:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: armv7-unknown-linux-musleabihf
+            name: armv7
+            cflags: ""
+          - target: aarch64-unknown-linux-musl
+            name: aarch64
+            cflags: ""
+          - target: x86_64-unknown-linux-musl
+            name: x86_64
+            cflags: ""
+          - target: i686-unknown-linux-musl
+            name: i686
+            cflags: "-mevex512"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    env:
+      CFLAGS: ${{ matrix.cflags }}
+      CFLAGS_i686_unknown_linux_musl: ${{ matrix.cflags }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: ${{ inputs.source_repository != '' && inputs.source_repository || github.repository }}
           ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
 
-      - name: Rust 1.99.0 with the musl targets
+      - name: Rust 1.99.0 with the musl target
         uses: dtolnay/rust-toolchain@1.99.0
         with:
-          targets: armv7-unknown-linux-musleabihf,aarch64-unknown-linux-musl,x86_64-unknown-linux-musl,i686-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: merlin-binaries
+          key: merlin-${{ matrix.name }}
 
       - name: Node (the web UI is embedded in the binary)
         uses: actions/setup-node@v4
@@ -86,7 +104,7 @@ jobs:
           "$HOME/.local/zig/zig" version
           cargo-zigbuild --version
 
-      - name: Build the static binaries
+      - name: Build ${{ matrix.name }}
         shell: bash
         env:
           VERSION_INPUT: ${{ inputs.version }}
@@ -109,30 +127,41 @@ jobs:
           export TELLTALE_BUILD_DATE="$date"
           export TELLTALE_BUILD_COMMIT="$(git rev-parse --short=7 HEAD)"
 
-          for target in \
-            armv7-unknown-linux-musleabihf \
-            aarch64-unknown-linux-musl \
-            x86_64-unknown-linux-musl \
-            i686-unknown-linux-musl
-          do
-            echo "::group::zigbuild $target"
-            cargo +1.99.0 zigbuild --locked --release -p telltale --target "$target"
-            echo "::endgroup::"
-          done
+          cargo +1.99.0 zigbuild --locked --release -p telltale --target "${{ matrix.target }}"
 
           mkdir -p dist
-          cp "target/armv7-unknown-linux-musleabihf/release/telltale" dist/telltale-armv7-linux
-          cp "target/aarch64-unknown-linux-musl/release/telltale"     dist/telltale-aarch64-linux
-          cp "target/x86_64-unknown-linux-musl/release/telltale"      dist/telltale-x86_64-linux
-          cp "target/i686-unknown-linux-musl/release/telltale"        dist/telltale-i686-linux
+          cp "target/${{ matrix.target }}/release/telltale" "dist/telltale-${{ matrix.name }}-linux"
           chmod 755 dist/*
+          ./dist/telltale-${{ matrix.name }}-linux --version
 
-          # The runner can execute the x86_64 build, so smoke-test it here.
+      - name: Upload ${{ matrix.name }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: telltale-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every architecture
+        uses: actions/download-artifact@v4
+        with:
+          pattern: telltale-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 755 dist/*
           ./dist/telltale-x86_64-linux --version
-
           (cd dist && sha256sum telltale-* > SHA256SUMS && cat SHA256SUMS)
 
-      - name: Upload the binaries
+      - name: Upload the combined artifact
         uses: actions/upload-artifact@v4
         with:
           name: telltale-merlin-${{ github.run_number }}
