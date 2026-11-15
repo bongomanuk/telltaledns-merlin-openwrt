@@ -9,6 +9,18 @@
 
 > **This fork is proudly not built by Claude.** The Merlin support here — the static ARM builds, the `merlin-binaries` workflow, and the install guide — is not. See [Not built with Claude](#not-built-with-claude).
 
+## What this fork is, and why it exists
+
+This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns) that makes it run on **ASUS Merlin (Asuswrt-Merlin) routers**. Upstream targets Docker, Kubernetes, and systemd hosts. A Merlin router has no Docker and no systemd, and many Merlin models — including the RT-AX95Q / ZenWiFi XT8 — are 32-bit ARM with a small JFFS partition. On those routers you need one static file you can drop in `/jffs`, not an image or a package manager.
+
+This fork adds exactly that:
+
+- **Static ARMv7 and ARM64 binaries** with the web UI compiled in — one file, no Entware, no shared libraries, no container.
+- A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) GitHub Actions workflow that builds them, uploads the binaries and `SHA256SUMS` as an artifact, and attaches them to a release on a `v*` tag.
+- A [Merlin install guide](deploy/merlin/README.md) with the full model list, the port-53/dnsmasq conflict and how to resolve it, the config, and a boot-time `/jffs/scripts/services-start` script.
+
+The resolver source is upstream's. This fork adds only the Merlin packaging.
+
 Every connection on your network starts with a DNS lookup. TelltaleDNS answers it in microseconds, filters it by your rules per device, and shows you exactly who asked, what they asked, and why it answered the way it did. It runs on a Raspberry Pi, in Kubernetes, or on both as one cluster that keeps answering even when parts of it fail.
 
 > A *telltale* is the strip of yarn sailors tie to a sail to see what the wind is really doing. DNS is your network's telltale: it reveals what every device is up to.
