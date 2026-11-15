@@ -63,8 +63,17 @@ if [ -f "$dest/telltale.toml" ]; then
     echo "kept the old config as $backup"
 fi
 
+# Accounts and settings live in the database under data_dir. Moving it to
+# another filesystem starts a new database, so the first admin must be created
+# again; say so instead of letting the user find out at the login page.
+old_data=$(sed -n 's/^data_dir = "\(.*\)"/\1/p' "$dest/telltale.toml" 2>/dev/null | head -1)
 cp "$here/telltale.toml" "$dest/telltale.toml"
 sed -i "s#^data_dir = .*#data_dir = \"$data_dir\"#" "$dest/telltale.toml"
+if [ -n "$old_data" ] && [ "$old_data" != "$data_dir" ]; then
+    echo "Data directory changed: $old_data -> $data_dir"
+    echo "The account database does not move between filesystems: if the login"
+    echo "stops working, create the first admin again with the setup token."
+fi
 cp "$here/telltale.gz" "$dest/telltale.gz"
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
