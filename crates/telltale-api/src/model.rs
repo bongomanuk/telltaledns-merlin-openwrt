@@ -64,6 +64,58 @@ pub struct BuildInfo {
     pub install: String,
 }
 
+/// What this process knows about the router it runs on, for the Router page.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterStatus {
+    /// `merlin`, `openwrt`, or `other` (a normal host: no router controls).
+    pub platform: String,
+    /// dnsmasq (the router's DHCP and DNS server) is running.
+    pub dnsmasq_running: bool,
+    /// The port dnsmasq listens on for DNS.
+    pub dnsmasq_port: u16,
+    /// Leases in the dnsmasq lease file.
+    pub dhcp_leases: usize,
+    /// dnsmasq forwards public queries to this process.
+    pub forwarding: bool,
+    /// Where the state database, query log, and blocklists live.
+    pub data_dir: String,
+    /// A mounted USB volume, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usb_mount: Option<String>,
+    /// How the service is started (`/jffs/scripts/services-start`, procd, or nothing).
+    pub service: String,
+}
+
+/// A control on the Router page.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterAction {
+    /// Restart dnsmasq, keeping its configuration.
+    RestartDnsmasq,
+    /// Restart this process.
+    RestartSelf,
+    /// Point dnsmasq at this process (safe mode).
+    EnableForwarding,
+    /// Stop sending public queries to this process.
+    DisableForwarding,
+}
+
+/// The body of a Router page control.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterActionRequest {
+    pub action: RouterAction,
+}
+
+/// What happened.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RouterActionResult {
+    pub ok: bool,
+    pub message: String,
+}
+
 /// Update status from the signed release index (ADR-046).
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

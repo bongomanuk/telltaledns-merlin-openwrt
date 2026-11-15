@@ -49,6 +49,7 @@ mod replay;
 mod replication;
 mod rollout;
 mod rollups;
+mod router_admin;
 mod routers;
 mod selfupdate;
 mod server;

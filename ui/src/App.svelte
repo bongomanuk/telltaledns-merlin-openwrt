@@ -30,6 +30,7 @@
   import Anomalies from './pages/Anomalies.svelte';
   import Cluster from './pages/Cluster.svelte';
   import Cache from './pages/Cache.svelte';
+  import Router from './pages/Router.svelte';
   import Groups from './pages/Groups.svelte';
   import Lists from './pages/Lists.svelte';
   import Rules from './pages/Rules.svelte';
@@ -57,6 +58,7 @@
     { path: '/cluster', label: 'Cluster', page: Cluster, icon: 'cluster', section: 'System' },
     { path: '/alerts', label: 'Alerts', page: Alerts, icon: 'bell', section: 'System' },
     { path: '/agent-changes', label: 'Agent changes', page: AgentChanges, icon: 'inbox', section: 'System' },
+    { path: '/router', label: 'Router', page: Router, icon: 'router', section: 'System' },
     { path: '/cache', label: 'Cache', page: Cache, icon: 'cache', section: 'System' },
     { path: '/settings', label: 'Settings', page: Settings, icon: 'settings', section: 'System' },
   ];

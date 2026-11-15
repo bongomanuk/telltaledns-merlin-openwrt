@@ -510,6 +510,32 @@ pub trait Backend: Send + Sync + 'static {
     /// REQ: OPS-004 (ADR-046) — checks the signed release index now instead of waiting for the
     /// daily check, and returns the new status. At most one check a minute: sooner, the
     /// current status comes back without a fetch.
+    /// Router controls (dnsmasq, the boot script) on a Merlin or OpenWrt router. A normal host
+    /// reports `platform: "other"`, and the Router page explains instead of offering controls.
+    fn router_status(&self) -> crate::model::RouterStatus {
+        crate::model::RouterStatus {
+            platform: "other".to_owned(),
+            dnsmasq_running: false,
+            dnsmasq_port: 53,
+            dhcp_leases: 0,
+            forwarding: false,
+            data_dir: String::new(),
+            usb_mount: None,
+            service: String::new(),
+        }
+    }
+
+    /// Runs a [`crate::model::RouterAction`]. Admin only; the API route enforces that.
+    fn router_action(
+        &self,
+        action: crate::model::RouterAction,
+    ) -> Result<crate::model::RouterActionResult, Problem> {
+        let _ = action;
+        Err(Problem::unavailable(
+            "router controls aren't available on this host",
+        ))
+    }
+
     fn check_updates(&self) -> BoxFuture<Result<crate::model::UpdateStatus, Problem>> {
         Box::pin(async {
             Err(Problem::unavailable(
@@ -993,6 +1019,15 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
                 .with_state(Arc::clone(&backend))
                 .route_layer(from_fn(auth::routes::require_admin)),
         )
+        // Router controls: restart dnsmasq or this service, or change how dnsmasq reaches
+        // this process. They run commands on the router, so they are admin only.
+        .merge(
+            Router::new()
+                .route("/api/v1/router", axum::routing::get(router_status))
+                .route("/api/v1/router/action", axum::routing::post(router_action))
+                .with_state(Arc::clone(&backend))
+                .route_layer(from_fn(auth::routes::require_admin)),
+        )
         // REQ: CLU-005 — promotion is an admin action (ADR-051).
         .merge(
             config_api::admin_routes(Arc::clone(&backend), Arc::clone(&auth))
@@ -1314,6 +1349,27 @@ async fn update_check(
     State(b): State<Shared>,
 ) -> Result<Json<crate::model::UpdateStatus>, Problem> {
     b.check_updates().await.map(Json)
+}
+
+/// The router this process runs on: dnsmasq, DHCP leases, USB, the service hook.
+#[utoipa::path(get, path = "/api/v1/router", tag = "system",
+    responses((status = 200, body = crate::model::RouterStatus, description = "Router status."),
+        (status = 403, body = Problem, description = "Needs the admin role.")))]
+async fn router_status(State(b): State<Shared>) -> Json<crate::model::RouterStatus> {
+    Json(b.router_status())
+}
+
+/// Restart dnsmasq or this service, or switch dnsmasq's forwarding on and off.
+#[utoipa::path(post, path = "/api/v1/router/action", tag = "system",
+    request_body = crate::model::RouterActionRequest,
+    responses((status = 200, body = crate::model::RouterActionResult, description = "Done."),
+        (status = 403, body = Problem, description = "Needs the admin role."),
+        (status = 503, body = Problem, description = "The action failed.")))]
+async fn router_action(
+    State(b): State<Shared>,
+    Json(req): Json<crate::model::RouterActionRequest>,
+) -> Result<Json<crate::model::RouterActionResult>, Problem> {
+    b.router_action(req.action).map(Json)
 }
 
 /// Git push webhook.

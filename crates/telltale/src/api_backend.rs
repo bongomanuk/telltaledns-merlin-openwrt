@@ -712,6 +712,18 @@ fn bad_cursor() -> Problem {
 }
 
 impl Backend for ApiBackend {
+    fn router_status(&self) -> telltale_api::model::RouterStatus {
+        let cfg = self.src.config.load();
+        crate::router_admin::status(cfg.node.data_dir.as_str())
+    }
+
+    fn router_action(
+        &self,
+        action: telltale_api::model::RouterAction,
+    ) -> Result<telltale_api::model::RouterActionResult, Problem> {
+        crate::router_admin::action(action)
+    }
+
     fn system_info(&self) -> SystemInfo {
         let cfg = self.src.config.load();
         let snap = self
