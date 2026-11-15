@@ -29,19 +29,27 @@ trap 'rm -rf "$work"' EXIT INT TERM
 stage=$work/stage
 
 mkdir -p "$stage/usr/bin" \
+         "$stage/usr/lib/telltale" \
          "$stage/etc/init.d" \
+         "$stage/etc/config" \
          "$stage/etc/telltale" \
          "$stage/lib/apk/packages"
 
-install -m 755 "$binary" "$stage/usr/bin/telltale"
+# Keep the compressed binary on flash and unpack it into /tmp at start.
+gzip -9 -n -c "$binary" > "$stage/usr/lib/telltale/telltale.gz"
+install -m 755 "$here/telltale.launcher" "$stage/usr/bin/telltale"
 install -m 755 "$here/telltale.init" "$stage/etc/init.d/telltale"
+install -m 644 "$here/config" "$stage/etc/config/telltale"
 install -m 644 "$here/telltale.toml" "$stage/etc/telltale/telltale.toml"
 
 # apk conffiles: keep the user's config across upgrades.
-conffile=/etc/telltale/telltale.toml
-printf '%s\n' "$conffile" > "$stage/lib/apk/packages/telltale.conffiles"
-sum=$(sha256sum "$stage$conffile" | cut -d' ' -f1)
-printf '%s %s\n' "$conffile" "$sum" > "$stage/lib/apk/packages/telltale.conffiles_static"
+printf '%s\n' /etc/telltale/telltale.toml /etc/config/telltale \
+    > "$stage/lib/apk/packages/telltale.conffiles"
+: > "$stage/lib/apk/packages/telltale.conffiles_static"
+for conffile in /etc/telltale/telltale.toml /etc/config/telltale; do
+    sum=$(sha256sum "$stage$conffile" | cut -d' ' -f1)
+    printf '%s %s\n' "$conffile" "$sum" >> "$stage/lib/apk/packages/telltale.conffiles_static"
+done
 
 # OpenWrt also records the file list (paths as /usr/bin/...).
 (cd "$stage" && find . \( -type f -o -type l \) -printf '/%P\n' | grep -v '^/lib/apk/packages/' | sort) \
@@ -58,7 +66,7 @@ rm -f "$package"
 SOURCE_DATE_EPOCH=0 "$apk" mkpkg \
     --info "name:telltale" \
     --info "version:${version}" \
-    --info "description:TelltaleDNS - a fast, per-device filtering DNS resolver with a web UI" \
+    --info "description:TelltaleDNS - a fast, per-device filtering DNS resolver with a web UI (compressed install, unpacked to /tmp at start)" \
     --info "arch:${arch}" \
     --info "license:Apache-2.0 OR MIT" \
     --info "origin:telltale" \

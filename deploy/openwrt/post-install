@@ -6,4 +6,5 @@
 export root="${IPKG_INSTROOT}"
 export pkgname="telltale"
 mkdir -p "${IPKG_INSTROOT}/etc/telltale/data"
+rm -f /tmp/telltale.bin
 default_postinst

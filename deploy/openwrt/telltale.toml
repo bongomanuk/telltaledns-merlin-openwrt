@@ -3,6 +3,8 @@
 config_version = 1
 
 [node]
+# Two UDP workers are enough for a home network and keep the RSS down.
+workers = 2
 # Persistent (flash) on OpenWrt; point this at a USB mount if you prefer.
 data_dir = "/etc/telltale/data"
 
@@ -36,3 +38,7 @@ url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.
 [telemetry.qlog]
 retention_days = 7
 retention_bytes = "16MiB"
+
+# Keep the response cache bounded on a 512 MB router.
+[cache]
+max_bytes = "16MiB"

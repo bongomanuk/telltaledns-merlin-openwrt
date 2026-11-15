@@ -147,10 +147,37 @@ The feed is unsigned, and it carries only `armv7-3.2` and `aarch64-3.10` package
 If `opkg` says the architecture is unsupported, your Entware is on the old 2.6.36
 feed; this build cannot run on that kernel anyway.
 
+## Flash-friendly bundle (recommended without Entware)
+
+The raw binary is about 28 MB. On a 47 MB JFFS partition that leaves little room
+for the query log and updates. The release also ships a bundle with the binary
+gzip-compressed to about 14 MB and a small launcher that unpacks it into `/tmp`
+at start:
+
+```sh
+cd /tmp
+tar xzf telltale-<version>-merlin-armv7.tar.gz
+cd telltale-<version>-merlin-armv7
+./install.sh
+```
+
+The installer:
+
+- checks `uname -m` and accepts only `armv7l` and `aarch64`;
+- installs `/jffs/telltale/telltale.gz`, a `/jffs/telltale/telltale` launcher, and the config, keeping a timestamped backup of an existing config;
+- appends a `# telltale` block to `/jffs/scripts/services-start` without overwriting other entries;
+- prints the next steps. It does not change dnsmasq or start the service.
+
+The bundle config uses two UDP workers, a 16 MiB response cache, a 2 MB blocklist,
+and a 4 MiB query log. The binary is unpacked to `/tmp` (RAM) at start, so the
+install takes about 20 MB of the JFFS partition instead of about 34 MB.
+
+Then follow steps 3 to 6 of the manual install below for port 53, the first run,
+and the setup token.
+
 ## Manual install (no Entware)
 
-Use this if you do not want Entware. The examples use `admin@192.168.1.1`; use your
-router's address and login name.
+Use this if you do not want Entware, or want to control every file yourself. The examples use `admin@192.168.1.1`; use your router's address and login name.
 
 ### 1. Get the binary onto the router
 

@@ -1,0 +1,47 @@
+# TelltaleDNS config for a manual install under /jffs (no Entware).
+# Check edits with: /jffs/telltale/telltale config check /jffs/telltale/telltale.toml
+config_version = 1
+
+[node]
+# Two UDP workers are enough for a home network and keep the RSS down.
+workers = 2
+# The data lives on the router's JFFS partition. The binary in this bundle is
+# gzip-compressed (about 14 MB instead of 28 MB) and is unpacked to /tmp at
+# start, which keeps the flash use down on a 47 MB JFFS.
+data_dir = "/jffs/telltale/data"
+
+# The web UI and API (the UI is embedded in the binary).
+[api]
+listen = "0.0.0.0:8053"
+
+# Encrypted (DNS over TLS) upstreams. The Mozilla roots are built into the
+# binary, so no CA bundle is needed on the router.
+[[upstream]]
+name = "cloudflare"
+url = "tls://1.1.1.1:853"
+tls_server_name = "cloudflare-dns.com"
+
+[[upstream]]
+name = "quad9"
+url = "tls://9.9.9.9:853"
+tls_server_name = "dns.quad9.net"
+
+[[upstream_group]]
+name = "default"
+members = ["cloudflare", "quad9"]
+strategy = "fastest"
+
+# A compact blocklist (about 2 MB) rather than the 150k-name list, to leave
+# room for the binary and the data directory on a small JFFS partition.
+[[list]]
+name = "hagezi-light"
+url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt"
+
+# Keep the query log small; the router writes to flash.
+[telemetry.qlog]
+retention_days = 2
+retention_bytes = "4MiB"
+
+# Keep the response cache bounded on a 512 MB router.
+[cache]
+max_bytes = "16MiB"

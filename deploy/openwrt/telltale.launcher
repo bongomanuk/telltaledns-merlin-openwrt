@@ -1,0 +1,9 @@
+#!/bin/sh
+# Unpack the compressed binary into /tmp and run it. The package keeps the
+# compressed copy on flash (about 14 MB instead of 28 MB); /tmp is RAM.
+BIN=/tmp/telltale.bin
+if [ ! -x "$BIN" ]; then
+    gzip -dc /usr/lib/telltale/telltale.gz > "$BIN" || exit 1
+    chmod 755 "$BIN"
+fi
+exec "$BIN" "$@"

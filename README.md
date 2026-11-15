@@ -15,6 +15,7 @@ This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/tellt
 This fork adds:
 
 - **Static ARMv7 and ARM64 binaries** with the web UI compiled in: one file, no Entware, no shared libraries, no container.
+- **Flash-friendly installs:** the Merlin bundle and the OpenWrt package keep the binary gzip-compressed (about 14 MB) and unpack it to RAM at start.
 - An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
 - **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
 - A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.
@@ -56,11 +57,11 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 ### Manually, without Entware
 
-Download the binary from the [`merlin-binaries`](.github/workflows/merlin-binaries.yml) Actions run (or the release asset), copy it to `/jffs/telltale/telltale`, and follow [`deploy/merlin/README.md`](deploy/merlin/README.md) for the config, port 53, and the boot script.
+Download the **flash-friendly bundle** (`telltale-<version>-merlin-armv7.tar.gz` or `-aarch64`) from the release or the [Merlin bundles](https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/), extract it on the router, and run `./install.sh`. The bundle keeps the binary gzip-compressed (about 14 MB on flash) and unpacks it to `/tmp` at start. The raw binary is also in the release. [`deploy/merlin/README.md`](deploy/merlin/README.md) covers port 53, the first run, and the setup token.
 
 ### On OpenWrt 25.12+ (apk v3)
 
-Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for armv7, aarch64 and x86_64. Install the one matching `apk --print-arch`:
+Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for armv7, aarch64 and x86_64. The package keeps the binary gzip-compressed (about 14 MB on flash), unpacks it to `/tmp` at start, and installs a UCI config at `/etc/config/telltale`. Install the one matching `apk --print-arch`:
 
 ```sh
 apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk
@@ -103,6 +104,7 @@ The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53
 - **Releases:** [releases](https://github.com/bongomanuk/telltaledns-merlin-openwrt/releases) (raw binaries, Entware `.ipk`, OpenWrt `.apk`, `SHA256SUMS`)
 - **Entware feed:** `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`
 - **OpenWrt packages:** `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`
+- **Merlin bundles:** `https://bongomanuk.github.io/telltaledns-merlin-openwrt/merlin/`
 - **Artifacts:** the `telltale-merlin-<run>` artifact on any `merlin-binaries` or `merlin-feed` run
 
 ## Build it yourself

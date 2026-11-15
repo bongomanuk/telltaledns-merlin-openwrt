@@ -43,10 +43,15 @@ The package installs:
 
 | Path | What |
 |---|---|
-| `/usr/bin/telltale` | the static binary |
-| `/etc/init.d/telltale` | procd init script |
-| `/etc/telltale/telltale.toml` | starter config (a conffile; edits survive upgrades) |
+| `/usr/bin/telltale` | a launcher that unpacks the binary into `/tmp` and runs it |
+| `/usr/lib/telltale/telltale.gz` | the gzip-compressed binary (about 14 MB on flash, 28 MB unpacked) |
+| `/etc/init.d/telltale` | procd init script; reads `/etc/config/telltale` |
+| `/etc/config/telltale` | UCI enable switch and config path (a conffile) |
+| `/etc/telltale/telltale.toml` | the TOML config (a conffile; edits survive upgrades) |
 | `/etc/telltale/data` | data and query log (created by the post-install script) |
+
+The launcher unpacks the binary into `/tmp` (RAM) at start, so the package uses
+about 14 MB of flash instead of 28 MB.
 
 ## Free port 53 (read this first)
 
@@ -70,10 +75,18 @@ uci commit dhcp
 
 ## Start it
 
+The UCI config is `/etc/config/telltale`:
+
 ```sh
+uci set telltale.main.enabled='1'
+uci set telltale.main.config='/etc/telltale/telltale.toml'
+uci commit telltale
 /etc/init.d/telltale enable
 /etc/init.d/telltale start
 ```
+
+`telltale.main.enabled='0'` stops procd from starting it at boot; the TOML file
+remains the resolver's own configuration.
 
 Then create the first admin and open the UI:
 
@@ -107,8 +120,9 @@ apk add --allow-untrusted /tmp/telltale-<new-version>-<arch>.apk
 apk del telltale
 ```
 
-`apk del` keeps the conffile (`/etc/telltale/telltale.toml`); remove
-`/etc/telltale/data` yourself if you also want to delete the query log and state.
+`apk del` keeps the conffiles (`/etc/telltale/telltale.toml` and
+`/etc/config/telltale`); remove `/etc/telltale/data` yourself if you also want to
+delete the query log and state.
 
 ## Notes
 

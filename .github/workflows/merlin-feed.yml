@@ -73,9 +73,11 @@ jobs:
           # apk version strings are stricter than opkg's: X.Y.Z or X.Y.Z-rN.
           base_version="${version%%-merlin.*}"
           apk_version="${base_version}-r${GITHUB_RUN_NUMBER}"
+          pkg_version="${version}-${GITHUB_RUN_NUMBER}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "APK_VERSION=$apk_version" >> "$GITHUB_ENV"
-          echo "Upstream tag: ${UPSTREAM_TAG:-none}; version $version; apk $apk_version"
+          echo "PKG_VERSION=$pkg_version" >> "$GITHUB_ENV"
+          echo "Upstream tag: ${UPSTREAM_TAG:-none}; version $version; ipk $pkg_version; apk $apk_version"
 
       - name: Build the Entware/opkg packages and index
         shell: bash
@@ -84,9 +86,9 @@ jobs:
           mkdir -p public/entware
           chmod +x deploy/merlin/opkg/build-ipk.sh
           deploy/merlin/opkg/build-ipk.sh \
-            bin/telltale-armv7-linux armv7-3.2 "$VERSION" public/entware
+            bin/telltale-armv7-linux armv7-3.2 "$PKG_VERSION" public/entware
           deploy/merlin/opkg/build-ipk.sh \
-            bin/telltale-aarch64-linux aarch64-3.10 "$VERSION" public/entware
+            bin/telltale-aarch64-linux aarch64-3.10 "$PKG_VERSION" public/entware
           cp bin/SHA256SUMS public/entware/SHA256SUMS
           python3 deploy/merlin/opkg/make_index.py public/entware
           cat public/entware/Packages
@@ -141,6 +143,30 @@ jobs:
             echo '</ul>'
           } > public/openwrt/index.html
 
+      - name: Build the Merlin bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public/merlin
+          chmod +x deploy/merlin/jffs/install.sh
+          for arch in armv7 aarch64; do
+            stage=$(mktemp -d)
+            gzip -9 -n -c "bin/telltale-${arch}-linux" > "$stage/telltale.gz"
+            cp deploy/merlin/jffs/install.sh deploy/merlin/jffs/telltale.toml "$stage/"
+            tar -C "$stage" -czf "public/merlin/telltale-${VERSION}-merlin-${arch}.tar.gz" .
+            rm -rf "$stage"
+          done
+          {
+            echo '<!doctype html><meta charset="utf-8"><title>TelltaleDNS Merlin bundles</title>'
+            echo '<h1>TelltaleDNS for ASUS Merlin</h1>'
+            echo '<p>Extract the bundle on the router and run <code>./install.sh</code>. The binary is gzip-compressed to save flash.</p><ul>'
+            for f in public/merlin/*.tar.gz; do
+              b=$(basename "$f")
+              echo "<li><a href=\"$b\">$b</a></li>"
+            done
+            echo '</ul>'
+          } > public/merlin/index.html
+
       - name: Landing page
         shell: bash
         run: |
@@ -161,6 +187,9 @@ jobs:
           <p>Pick the package for <code>apk --print-arch</code>, then install it:</p>
           <pre><code>apk add --allow-untrusted ./telltale-${APK_VERSION}-&lt;arch&gt;.apk</code></pre>
           <p><a href="openwrt/">OpenWrt packages</a></p>
+          <h2>ASUS Merlin without Entware</h2>
+          <p>Use the bundle: a gzip-compressed binary (about 14 MB on flash) and an installer.</p>
+          <p><a href="merlin/">Merlin bundles</a></p>
           HTML
 
       - name: Upload the Pages artifact
@@ -183,6 +212,8 @@ jobs:
 
             - **ASUS Merlin / Entware:** add `src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`
               to `/opt/etc/opkg/customfeeds.conf`, then `opkg update && opkg install telltale`.
+            - **ASUS Merlin without Entware:** download the `-merlin-armv7.tar.gz`
+              (or `-aarch64`) bundle and run `./install.sh`.
             - **OpenWrt 25.12+:** download the `.apk` for `apk --print-arch` and
               `apk add --allow-untrusted ./telltale-*.apk`.
 
@@ -192,6 +223,7 @@ jobs:
             public/entware/Packages
             public/entware/Packages.gz
             public/openwrt/*.apk
+            public/merlin/*.tar.gz
             bin/telltale-armv7-linux
             bin/telltale-aarch64-linux
             bin/telltale-x86_64-linux

@@ -3,6 +3,8 @@
 config_version = 1
 
 [node]
+# Two UDP workers are enough for a home network and keep the RSS down.
+workers = 2
 # On the Entware USB drive, not the router's flash.
 data_dir = "/opt/var/lib/telltale"
 
@@ -35,3 +37,7 @@ url = "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.
 # Keep the query log small on a router.
 [telemetry.qlog]
 retention_days = 7
+
+# Keep the response cache bounded on a 512 MB router.
+[cache]
+max_bytes = "16MiB"
