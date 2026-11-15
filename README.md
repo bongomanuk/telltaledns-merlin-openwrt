@@ -1,22 +1,24 @@
-# TelltaleDNS for ASUS Merlin
+# TelltaleDNS for ASUS Merlin and OpenWrt
 
-[![merlin-binaries](https://github.com/bongomanuk/telltaledns/actions/workflows/merlin-binaries.yml/badge.svg)](https://github.com/bongomanuk/telltaledns/actions/workflows/merlin-binaries.yml)
-[![merlin-feed](https://github.com/bongomanuk/telltaledns/actions/workflows/merlin-feed.yml/badge.svg)](https://github.com/bongomanuk/telltaledns/actions/workflows/merlin-feed.yml)
+[![merlin-binaries](https://github.com/bongomanuk/telltaledns-merlin-openwrt/actions/workflows/merlin-binaries.yml/badge.svg)](https://github.com/bongomanuk/telltaledns-merlin-openwrt/actions/workflows/merlin-binaries.yml)
+[![merlin-feed](https://github.com/bongomanuk/telltaledns-merlin-openwrt/actions/workflows/merlin-feed.yml/badge.svg)](https://github.com/bongomanuk/telltaledns-merlin-openwrt/actions/workflows/merlin-feed.yml)
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 
-Static, self-contained builds of [TelltaleDNS](https://github.com/paimonsoror/telltaledns) for **ASUS Merlin (Asuswrt-Merlin) routers** — one binary with the web UI embedded, no Docker, no systemd, no Entware required.
+Static, self-contained builds of [TelltaleDNS](https://github.com/paimonsoror/telltaledns) for **ASUS Merlin (Asuswrt-Merlin) and OpenWrt routers** — one binary with the web UI embedded, no Docker and no systemd. The ASUS Merlin builds need no Entware to run; the OpenWrt builds are apk packages for OpenWrt 25.12+.
 
 > **This fork is proudly not built by Claude.**
 
 ## What this fork is, and why it exists
 
-This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts. A Merlin router has none of those, and many Merlin models — including the RT-AX95Q / ZenWiFi XT8 — are 32-bit ARM with a small JFFS partition. On those routers you need one static file you can drop on the router, not an image or a package manager.
+This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts; routers have none of those. Many Merlin models — including the RT-AX95Q / ZenWiFi XT8 — are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk, not a conventional package manager. On these routers you need a static file or a native package, not an image.
 
 This fork adds exactly that:
 
 - **Static ARMv7 and ARM64 binaries** with the web UI compiled in — one file, no Entware, no shared libraries, no container.
-- An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
+- An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
+- **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
 - A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.
+- An [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow that rebuilds the packages for each new upstream release.
 - A [Merlin install guide](deploy/merlin/README.md) with the full model list, the port-53/dnsmasq conflict, the config, and a boot-time `/jffs/scripts/services-start` script.
 
 The resolver source is upstream's. This fork adds only the Merlin packaging.
@@ -28,7 +30,7 @@ The resolver source is upstream's. This fork adds only the Merlin packaging.
 If the router already runs [Entware](https://github.com/Entware/Entware) (usually installed with `amtm` on a USB drive), add the feed and install:
 
 ```sh
-echo 'src/gz telltale https://bongomanuk.github.io/telltaledns/entware' >> /opt/etc/opkg/customfeeds.conf
+echo 'src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware' >> /opt/etc/opkg/customfeeds.conf
 opkg update
 opkg install telltale
 ```
@@ -56,7 +58,17 @@ Update with `opkg update && opkg upgrade telltale`; remove with `/opt/etc/init.d
 
 Download the binary from the [`merlin-binaries`](.github/workflows/merlin-binaries.yml) Actions run (or the release asset), copy it to `/jffs/telltale/telltale`, and follow [`deploy/merlin/README.md`](deploy/merlin/README.md) for the config, port 53, and the boot script.
 
-## Supported routers
+### On OpenWrt 25.12+ (apk v3)
+
+Current OpenWrt uses apk; the same build produces unsigned `.apk` packages for armv7, aarch64 and x86_64. Install the one matching `apk --print-arch`:
+
+```sh
+apk add --allow-untrusted https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/telltale-<version>-<arch>.apk
+```
+
+Then free port 53 from dnsmasq (`uci set dhcp.@dnsmasq[0].port='0'`, commit, restart dnsmasq) and start `/etc/init.d/telltale`. [`deploy/openwrt/README.md`](deploy/openwrt/README.md) has the arch table, the exact port-53 steps, flash/data notes, and updates. OpenWrt 24.10 and older (opkg) is end of life and is not packaged.
+
+## Supported ASUS Merlin routers
 
 Your router's `uname -m` picks the binary. Run it on the router if you are unsure.
 
@@ -88,8 +100,9 @@ The router's `dnsmasq` serves DHCP and DNS on port 53. TelltaleDNS needs port 53
 ## Build it yourself
 
 - **Raw binaries:** Actions → **merlin-binaries** → *Run workflow* (or push a `v*` tag). The `telltale-merlin-<run>` artifact contains the three static binaries and `SHA256SUMS`.
-- **The opkg feed:** Actions → **merlin-feed** → *Run workflow* (or push a `v*` tag). It builds the binaries, packages them for `armv7-3.2` and `aarch64-3.10`, writes `Packages`/`Packages.gz`, and deploys the feed to GitHub Pages.
-- **Locally:** the packaging scripts are in [`deploy/merlin/opkg/`](deploy/merlin/opkg/) (`build-ipk.sh`, `make_index.py`) and the build uses the project's usual `cargo zigbuild` targets.
+- **The packages:** Actions → **merlin-feed** → *Run workflow* (or push a `v*` tag). It builds the binaries, makes the Entware `armv7-3.2`/`aarch64-3.10` packages, makes the OpenWrt 25.12 apk packages, writes the indexes, and deploys them to GitHub Pages.
+- **Upstream releases:** the [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow runs daily, finds the latest `paimonsoror/telltaledns` release, and dispatches `merlin-feed` for its tag if this fork has not built it yet. The build uses the upstream tag's source; the packaging is from this fork.
+- **Locally:** the Entware scripts are in [`deploy/merlin/opkg/`](deploy/merlin/opkg/) and the OpenWrt scripts in [`deploy/openwrt/`](deploy/openwrt/); the builds use the project's usual `cargo zigbuild` targets.
 
 ## Documentation
 
@@ -104,7 +117,8 @@ This fork only changes packaging. The full documentation lives upstream:
 | [`spec/`](https://github.com/paimonsoror/telltaledns/tree/main/spec) | the build specification and decisions |
 | [Project site](https://paimonsoror.github.io/telltaledns/) | FAQ, guides, release notes |
 | [Upstream releases](https://github.com/paimonsoror/telltaledns/releases) | upstream binaries and images |
-| [`deploy/merlin/`](deploy/merlin/README.md) | **this fork:** router install, models, port 53, boot script |
+| [`deploy/merlin/`](deploy/merlin/README.md) | **this fork:** ASUS Merlin install, models, port 53, boot script |
+| [`deploy/openwrt/`](deploy/openwrt/README.md) | **this fork:** OpenWrt 25.12+ apk packages, archs, port 53 |
 
 ## License
 

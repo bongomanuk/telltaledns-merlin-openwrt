@@ -1,0 +1,60 @@
+# Track upstream TelltaleDNS releases and build them automatically.
+#
+# Once a day, ask GitHub for the latest release of paimonsoror/telltaledns. If
+# this fork has no release for that tag yet, dispatch merlin-feed with the tag;
+# that builds the upstream source at the tag and publishes the Merlin/Entware
+# and OpenWrt packages, then creates the fork release that marks it as built.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Latest upstream release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/paimonsoror/telltaledns/releases/latest --jq .tag_name)
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "No upstream release found" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream release: $tag"
+
+      - name: Already built?
+        id: built
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.latest.outputs.tag }}" \
+               --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+            echo "Already built ${{ steps.latest.outputs.tag }}"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "Not built yet: ${{ steps.latest.outputs.tag }}"
+          fi
+
+      - name: Build the new upstream release
+        if: steps.built.outputs.built == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          gh workflow run merlin-feed.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            -f upstream_tag="$TAG"
+          echo "Dispatched merlin-feed for $TAG"

@@ -13,6 +13,22 @@ name: merlin-binaries
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      source_repository:
+        description: "Repository to build (default: this fork). Used to build an upstream release."
+        type: string
+        required: false
+        default: ""
+      source_ref:
+        description: "Git ref in source_repository (a tag, branch, or SHA)."
+        type: string
+        required: false
+        default: ""
+      version:
+        description: "Version to stamp into the binary (default: derived from the ref)."
+        type: string
+        required: false
+        default: ""
   push:
     tags: ['v*']
 
@@ -25,6 +41,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repository != '' && inputs.source_repository || github.repository }}
+          ref: ${{ inputs.source_ref != '' && inputs.source_ref || github.sha }}
 
       - name: Rust 1.99.0 with the musl targets
         uses: dtolnay/rust-toolchain@1.99.0
@@ -69,10 +88,15 @@ jobs:
 
       - name: Build the static binaries
         shell: bash
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
           pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          if [[ -n "${VERSION_INPUT}" ]]; then
+            version="${VERSION_INPUT#v}"
+            channel=stable
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
             channel=stable
           else
@@ -83,7 +107,7 @@ jobs:
           export TELLTALE_BUILD_VERSION="$version"
           export TELLTALE_BUILD_CHANNEL="$channel"
           export TELLTALE_BUILD_DATE="$date"
-          export TELLTALE_BUILD_COMMIT="${GITHUB_SHA::7}"
+          export TELLTALE_BUILD_COMMIT="$(git rev-parse --short=7 HEAD)"
 
           for target in \
             armv7-unknown-linux-musleabihf \

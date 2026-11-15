@@ -1,19 +1,25 @@
-# Build the Entware/opkg feed for Asuswrt-Merlin and publish it to GitHub Pages.
+# Build and publish the packages for ASUS Merlin (Entware/opkg) and OpenWrt
+# 25.12+ (apk v3), and host them on GitHub Pages.
 #
-# The feed is a normal opkg repository:
+#   Entware feed:  https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware
+#   OpenWrt files: https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt
 #
-#   src/gz telltale https://bongomanuk.github.io/telltaledns/entware
+# The binaries come from the reusable merlin-binaries workflow. This workflow
+# packages them, writes the Entware index, publishes the Pages site, and (when
+# building an upstream release) creates the release that marks it as built.
 #
-# It contains telltale_<version>_armv7-3.2.ipk and telltale_<version>_aarch64-3.10.ipk
-# (static binaries, web UI embedded), Packages and Packages.gz.
-#
-# The binaries come from the reusable merlin-binaries workflow; this workflow
-# only packages them and publishes the index. Run it from Actions ->
-# merlin-feed -> Run workflow, or push a v* tag.
+# Run it from Actions -> merlin-feed -> Run workflow. The upstream-watch
+# workflow dispatches it for each new release of paimonsoror/telltaledns.
 name: merlin-feed
 
 on:
   workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream release tag to build (e.g. v0.7.0); empty builds this fork."
+        type: string
+        required: false
+        default: ""
   push:
     tags: ['v*']
 
@@ -30,6 +36,10 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/merlin-binaries.yml
+    with:
+      source_repository: ${{ inputs.upstream_tag != '' && 'paimonsoror/telltaledns' || '' }}
+      source_ref: ${{ inputs.upstream_tag }}
+      version: ${{ inputs.upstream_tag }}
 
   feed:
     needs: build
@@ -46,46 +56,112 @@ jobs:
           name: telltale-merlin-${{ github.run_number }}
           path: bin
 
-      - name: Build the .ipk packages and the index
+      - name: Work out the versions
         shell: bash
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
           set -euo pipefail
           pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          if [[ -n "${UPSTREAM_TAG}" ]]; then
+            version="${UPSTREAM_TAG#v}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
           else
             version="${pkg}-merlin.${GITHUB_RUN_NUMBER}"
           fi
+          # apk version strings are stricter than opkg's: X.Y.Z or X.Y.Z-rN.
+          base_version="${version%%-merlin.*}"
+          apk_version="${base_version}-r${GITHUB_RUN_NUMBER}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "APK_VERSION=$apk_version" >> "$GITHUB_ENV"
+          echo "Upstream tag: ${UPSTREAM_TAG:-none}; version $version; apk $apk_version"
 
+      - name: Build the Entware/opkg packages and index
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p public/entware
           chmod +x deploy/merlin/opkg/build-ipk.sh
           deploy/merlin/opkg/build-ipk.sh \
-            bin/telltale-armv7-linux armv7-3.2 "$version" public/entware
+            bin/telltale-armv7-linux armv7-3.2 "$VERSION" public/entware
           deploy/merlin/opkg/build-ipk.sh \
-            bin/telltale-aarch64-linux aarch64-3.10 "$version" public/entware
+            bin/telltale-aarch64-linux aarch64-3.10 "$VERSION" public/entware
           cp bin/SHA256SUMS public/entware/SHA256SUMS
           python3 deploy/merlin/opkg/make_index.py public/entware
           cat public/entware/Packages
 
+      - name: Install zstd (the OpenWrt SDK is a .tar.zst)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+
+      - name: Cache the OpenWrt SDK
+        uses: actions/cache@v4
+        with:
+          path: openwrt-sdk
+          key: openwrt-sdk-25.12.6-x86-64
+
+      - name: Get the OpenWrt 25.12 SDK (for apk v3)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x openwrt-sdk/staging_dir/host/bin/apk ]]; then
+            url='https://downloads.openwrt.org/releases/25.12.6/targets/x86/64/openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
+            curl -fsSLo sdk.tar.zst "$url"
+            tar --zstd -xf sdk.tar.zst
+            mv openwrt-sdk-25.12.6-x86-64_gcc-14.3.0_musl.Linux-x86_64 openwrt-sdk
+            rm sdk.tar.zst
+          fi
+          openwrt-sdk/staging_dir/host/bin/apk --version
+
+      - name: Build the OpenWrt 25.12+ apk packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public/openwrt
+          chmod +x deploy/openwrt/build-apk.sh
+          apk=openwrt-sdk/staging_dir/host/bin/apk
+          build() {
+            # root owns the packaged files; ci runs with passwordless sudo.
+            sudo env SOURCE_DATE_EPOCH=0 deploy/openwrt/build-apk.sh \
+              "$apk" "$1" "$2" "$APK_VERSION" public/openwrt
+          }
+          build bin/telltale-armv7-linux  arm_cortex-a7_neon-vfpv4
+          build bin/telltale-armv7-linux  arm_cortex-a15_neon-vfpv4
+          build bin/telltale-aarch64-linux aarch64_cortex-a53
+          build bin/telltale-aarch64-linux aarch64_cortex-a72
+          build bin/telltale-aarch64-linux aarch64_generic
+          build bin/telltale-x86_64-linux  x86_64
+          {
+            echo '<!doctype html><meta charset="utf-8"><title>TelltaleDNS for OpenWrt</title>'
+            echo '<h1>TelltaleDNS for OpenWrt 25.12+</h1><ul>'
+            for f in public/openwrt/*.apk; do
+              b=$(basename "$f")
+              echo "<li><a href=\"$b\">$b</a></li>"
+            done
+            echo '</ul>'
+          } > public/openwrt/index.html
+
+      - name: Landing page
+        shell: bash
+        run: |
           cat > public/index.html <<HTML
           <!doctype html>
           <meta charset="utf-8">
-          <title>TelltaleDNS for ASUS Merlin</title>
+          <title>TelltaleDNS for routers</title>
           <style>body{font:16px/1.5 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem}code{background:#eee;padding:.1em .3em;border-radius:3px}pre{background:#f4f4f4;padding:1rem;overflow:auto}</style>
-          <h1>TelltaleDNS for ASUS Merlin</h1>
-          <p>Static ARM builds of <a href="https://github.com/paimonsoror/telltaledns">TelltaleDNS</a>
-          for Asuswrt-Merlin routers. Latest build: <strong>${version}</strong>.</p>
-          <h2>opkg feed</h2>
-          <pre><code>echo 'src/gz telltale https://bongomanuk.github.io/telltaledns/entware' &gt;&gt; /opt/etc/opkg/customfeeds.conf
+          <h1>TelltaleDNS for routers</h1>
+          <p>Static builds of <a href="https://github.com/paimonsoror/telltaledns">TelltaleDNS</a>.
+          Latest build: <strong>${VERSION}</strong>.</p>
+          <h2>ASUS Merlin / Entware (opkg)</h2>
+          <pre><code>echo 'src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware' &gt;&gt; /opt/etc/opkg/customfeeds.conf
           opkg update
           opkg install telltale</code></pre>
-          <p>Free port 53 from dnsmasq before starting the service. The install guide is at
-          <a href="https://github.com/bongomanuk/telltaledns/blob/main/deploy/merlin/README.md">deploy/merlin/README.md</a>.</p>
-          <p>Feed files: <a href="entware/Packages">Packages</a>,
-          <a href="entware/Packages.gz">Packages.gz</a>.</p>
+          <p><a href="entware/Packages">Packages</a> · <a href="entware/Packages.gz">Packages.gz</a></p>
+          <h2>OpenWrt 25.12+ (apk v3)</h2>
+          <p>Pick the package for <code>apk --print-arch</code>, then install it:</p>
+          <pre><code>apk add --allow-untrusted ./telltale-${APK_VERSION}-&lt;arch&gt;.apk</code></pre>
+          <p><a href="openwrt/">OpenWrt packages</a></p>
           HTML
-          sed -i 's/^          //' public/index.html
 
       - name: Upload the Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -95,3 +171,29 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+      - name: Publish the release for the upstream tag
+        if: inputs.upstream_tag != '' || startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}
+          name: TelltaleDNS ${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }} for Merlin and OpenWrt
+          body: |
+            Built from `${{ inputs.upstream_tag != '' && inputs.upstream_tag || github.ref_name }}`.
+
+            - **ASUS Merlin / Entware:** add `src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`
+              to `/opt/etc/opkg/customfeeds.conf`, then `opkg update && opkg install telltale`.
+            - **OpenWrt 25.12+:** download the `.apk` for `apk --print-arch` and
+              `apk add --allow-untrusted ./telltale-*.apk`.
+
+            The same files are on <https://bongomanuk.github.io/telltaledns-merlin-openwrt/>.
+          files: |
+            public/entware/*.ipk
+            public/entware/Packages
+            public/entware/Packages.gz
+            public/openwrt/*.apk
+            bin/telltale-armv7-linux
+            bin/telltale-aarch64-linux
+            bin/telltale-x86_64-linux
+            bin/SHA256SUMS
+          fail_on_unmatched_files: true

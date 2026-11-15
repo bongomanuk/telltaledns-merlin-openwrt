@@ -18,7 +18,7 @@ The `merlin-binaries` GitHub Actions workflow builds them
 
 The same binaries are also published as an **Entware/opkg feed** by the
 [`merlin-feed`](../.github/workflows/merlin-feed.yml) workflow:
-`https://bongomanuk.github.io/telltaledns/entware` (packages for `armv7-3.2` and
+`https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware` (packages for `armv7-3.2` and
 `aarch64-3.10`). See [Install from the opkg feed](#install-from-the-opkg-feed-recommended-needs-entware)
 below.
 
@@ -70,7 +70,7 @@ Requirements:
   *Administration → System → Enable JFFS custom scripts and configs = Yes*.
 - **SSH** enabled (*Administration → System → Enable SSH = LAN only*).
 - Enough space in `/jffs` (or on a mounted USB drive). Check with `df -h /jffs`.
-  The binary is about 15 MB; the query log grows over time, so either keep the
+  The binary is about 30 MB; the query log grows over time, so either keep the
   retention short (see below) or put `data_dir` on a USB drive.
 
 ## The port 53 problem (read this first)
@@ -104,7 +104,7 @@ drive, and updates come through `opkg`.
 Add the feed once and install:
 
 ```sh
-echo 'src/gz telltale https://bongomanuk.github.io/telltaledns/entware' >> /opt/etc/opkg/customfeeds.conf
+echo 'src/gz telltale https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware' >> /opt/etc/opkg/customfeeds.conf
 opkg update
 opkg install telltale
 ```
