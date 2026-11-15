@@ -29,7 +29,9 @@ case "$arch" in
     *) echo "unsupported architecture: $arch (need armv7l or aarch64)" >&2; exit 1 ;;
 esac
 [ -d /jffs ] || { echo "no /jffs on this router" >&2; exit 1; }
-[ "$(id -u)" = 0 ] || { echo "run this as root" >&2; exit 1; }
+# Busybox on Merlin has no id(1), so read the uid from /proc.
+uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/self/status)
+[ "$uid" = 0 ] || { echo "run this as root" >&2; exit 1; }
 [ -f "$here/telltale.gz" ] || { echo "telltale.gz is missing from the bundle" >&2; exit 1; }
 
 dest=/jffs/telltale
@@ -43,8 +45,10 @@ fi
 
 cp "$here/telltale.toml" "$dest/telltale.toml"
 cp "$here/telltale.gz" "$dest/telltale.gz"
-install -m 755 "$here/ui.sh" "$dest/ui.sh"
-install -m 644 "$here/telltale.asp" "$dest/telltale.asp"
+cp "$here/ui.sh" "$dest/ui.sh"
+cp "$here/telltale.asp" "$dest/telltale.asp"
+chmod 755 "$dest/ui.sh"
+chmod 644 "$dest/telltale.asp"
 
 cat > "$dest/telltale" <<'LAUNCH'
 #!/bin/sh

@@ -530,10 +530,11 @@ impl Rollups {
     fn init(conn: Connection) -> Result<Self> {
         // ADR-124 — temp_store = MEMORY: sorts and temporary tables never need a temp file.
         // Containers run with a read-only root filesystem and no /tmp, where SQLite would
-        // fail them with "disk I/O error".
+        // fail them with "disk I/O error". WAL is used where the filesystem supports it
+        // (see `set_journal`).
+        crate::state::set_journal(&conn)?;
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
+            "PRAGMA synchronous = NORMAL;
              PRAGMA temp_store = MEMORY;
              CREATE TABLE IF NOT EXISTS rollup_minute (start INTEGER PRIMARY KEY, data BLOB NOT NULL) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS rollup_hour (start INTEGER PRIMARY KEY, data BLOB NOT NULL) WITHOUT ROWID;

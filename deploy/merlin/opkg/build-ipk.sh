@@ -49,6 +49,8 @@ tar_args="--owner=0 --group=0 --numeric-owner --sort=name --mtime=@0"
 printf '2.0\n' > "$work/debian-binary"
 
 mkdir -p "$outdir"
+# `ar` runs from a temporary directory, so the output path must be absolute.
+outdir=$(CDPATH= cd -- "$outdir" && pwd)
 ipk="$outdir/telltale_${version}_${arch}.ipk"
 rm -f "$ipk"
 (cd "$work" && ar rcs "$ipk" debian-binary control.tar.gz data.tar.gz)

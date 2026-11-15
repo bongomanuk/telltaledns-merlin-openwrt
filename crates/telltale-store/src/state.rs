@@ -234,6 +234,16 @@ fn i(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
+/// Sets the journal mode, falling back to the rollback journal where WAL is not
+/// available. JFFS2 (the `/jffs` partition on Asus routers) cannot back the WAL
+/// shared-memory file and fails the pragma with "disk I/O error".
+pub(crate) fn set_journal(conn: &Connection) -> Result<()> {
+    if conn.pragma_update(None, "journal_mode", "WAL").is_err() {
+        conn.pragma_update(None, "journal_mode", "DELETE")?;
+    }
+    Ok(())
+}
+
 impl State {
     /// Opens (creating if needed) `path` and applies pending migrations.
     pub fn open(path: &Path) -> Result<Self> {
@@ -247,7 +257,7 @@ impl State {
     }
 
     fn init(conn: Connection) -> Result<Self> {
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        set_journal(&conn)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         // ADR-124 — no temp files (read-only root filesystems have nowhere to put them).
