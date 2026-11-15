@@ -35,10 +35,11 @@ concurrency:
 
 jobs:
   build:
+    # Build this fork, not the bare upstream tag: the fork carries the router
+    # integration (dnsmasq lease source, local zones) that the packages need.
+    # The upstream tag only supplies the version stamp and release name.
     uses: ./.github/workflows/merlin-binaries.yml
     with:
-      source_repository: ${{ inputs.upstream_tag != '' && 'paimonsoror/telltaledns' || '' }}
-      source_ref: ${{ inputs.upstream_tag }}
       version: ${{ inputs.upstream_tag }}
 
   feed:

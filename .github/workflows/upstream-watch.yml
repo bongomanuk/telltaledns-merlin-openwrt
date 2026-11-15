@@ -4,8 +4,8 @@
 #   1. merge paimonsoror/telltaledns main into this fork's main, keeping this
 #      fork's README, workflows and packaging files on conflicts;
 #   2. look at the latest upstream release; if this fork has no release for that
-#      tag yet, dispatch merlin-feed for the tag, which builds the upstream tag,
-#      publishes the Merlin/Entware and OpenWrt packages, and creates the release.
+#      tag yet, dispatch merlin-feed for the tag, which builds this fork's main
+#      (upstream merged in, fork integration on top), publishes the Merlin/Entware and OpenWrt packages, and creates the release.
 name: upstream-watch
 
 on:
