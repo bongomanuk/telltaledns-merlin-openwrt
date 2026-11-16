@@ -33,7 +33,7 @@
 </style>
 <script type="text/javascript">
 var appBase = 'http://' + location.hostname + ':8053/';
-var appLogin = appBase + 'api/v1/auth/ui-login?json=1&token=__UI_TOKEN__';
+var appLogin = appBase + 'api/v1/auth/ui-login?json=true&token=__UI_TOKEN__';
 
 function initial() {
   show_menu();
@@ -45,6 +45,12 @@ function initial() {
     // The cookie is set from this page, a first-party context. Setting it from the
     // frame itself is rejected as a third-party cookie by Chrome.
     fetch(appLogin, { credentials: 'include' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.cookie) {
+          document.cookie = 'telltale_session=' + d.cookie + '; path=/; SameSite=Strict';
+        }
+      })
       .catch(function () {})
       .then(function () { frame.src = appBase; });
   }

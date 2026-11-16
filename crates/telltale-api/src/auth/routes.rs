@@ -1030,7 +1030,10 @@ pub(crate) async fn ui_login(
         );
     }
     if q.json.unwrap_or(false) {
-        return Ok((StatusCode::NO_CONTENT, out_headers).into_response());
+        // The value too: a page can set it with document.cookie when the browser
+        // refuses to store a cookie from a cross-origin response.
+        let value = sess.cookie.clone();
+        return Ok((out_headers, Json(serde_json::json!({ "cookie": value }))).into_response());
     }
     Ok((out_headers, axum::response::Redirect::to("/")).into_response())
 }
