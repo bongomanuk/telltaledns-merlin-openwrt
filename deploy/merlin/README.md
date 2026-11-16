@@ -179,7 +179,7 @@ The installer:
 
 - checks `uname -m` and accepts only `armv7l` and `aarch64`;
 - installs `/jffs/telltale/telltale.gz`, a `/jffs/telltale/telltale` launcher, and the config, keeping a timestamped backup of an existing config;
-- puts `data_dir` on the first mounted USB volume (`/tmp/mnt/<label>/telltale/data`). With no USB volume it uses `/tmp/telltale-data`, which is RAM, so nothing is written to the router's flash at runtime. Re-run the installer after plugging a drive in;
+- puts `data_dir` on the first mounted USB volume, inside a small ext4 image (`<volume>/telltale.ext4`, mounted at `/tmp/mnt/telltale`). The image keeps SQLite off Asus's NTFS driver, which hangs under database load; the drive only sees one large file. With no USB volume it uses `/tmp/telltale-data`, which is RAM, so nothing is written to the router's flash at runtime. Re-run the installer after plugging a drive in;
 - waits up to a minute for that volume at boot, then uses `/tmp/telltale-data` if it never appears;
 - appends a `# telltale` block to `/jffs/scripts/services-start` without overwriting other entries;
 - prints the next steps. It does not change dnsmasq or start the service.

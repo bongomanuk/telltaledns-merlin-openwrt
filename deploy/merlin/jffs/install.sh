@@ -55,6 +55,24 @@ for m in /tmp/mnt/*; do
     usb="$m"
     break
 done
+# On a USB volume, keep SQLite in a small ext4 image: Asus's NTFS driver is not safe
+# for a database under load. The image is one large file to tntfs and a normal
+# filesystem to ext4.
+if [ -n "$usb" ]; then
+    img="$usb/telltale.ext4"
+    if [ ! -f "$img" ]; then
+        dd if=/dev/zero of="$img" bs=1M count=0 seek=2048 2>/dev/null
+        mke2fs -t ext4 -F -q -L ttdata "$img" 2>/dev/null || rm -f "$img"
+    fi
+    if [ -f "$img" ]; then
+        mkdir -p /tmp/mnt/telltale
+        mount | grep -q " on /tmp/mnt/telltale " || mount -o loop "$img" /tmp/mnt/telltale
+        if mount | grep -q " on /tmp/mnt/telltale "; then
+            data_dir=/tmp/mnt/telltale/data
+            usb=/tmp/mnt/telltale
+        fi
+    fi
+fi
 mkdir -p "$data_dir"
 
 if [ -f "$dest/telltale.toml" ]; then
@@ -131,6 +149,15 @@ if [ -x /jffs/telltale/telltale ]; then
     if [ -z "$data" ]; then
         echo "$(date) no USB volume mounted: using RAM, nothing persists across a reboot" >>/tmp/telltale.log
         data=/tmp/telltale-data
+    fi
+    # Data lives in the ext4 image on the USB volume when it is there.
+    if [ -n "$data" ]; then
+        img="${data%/telltale/*}/telltale.ext4"
+        if [ -f "$img" ]; then
+            mkdir -p /tmp/mnt/telltale
+            mount | grep -q " on /tmp/mnt/telltale " || mount -o loop "$img" /tmp/mnt/telltale
+            data=/tmp/mnt/telltale/data
+        fi
     fi
     mkdir -p "$data"
     sed "s#^data_dir = .*#data_dir = \"$data\"#" "$cfg" > /tmp/telltale-run.toml

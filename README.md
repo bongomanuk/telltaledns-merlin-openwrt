@@ -74,7 +74,7 @@ The resolver itself is upstream's. These are the changes on top of it.
 - Static ARMv7 and ARM64 binaries with the web UI compiled in, gzip-compressed on flash and unpacked to RAM at start.
 - An Entware/opkg feed and OpenWrt 25.12+ apk packages, both on GitHub Pages.
 - A daily upstream merge with the build and packaging run for each upstream release.
-- No writes to the router's flash at runtime: the database, query log and blocklists live on the USB drive, or in RAM when there is none. JFFS2 and the router NTFS drivers get SQLite's rollback journal instead of WAL.
+- No writes to the router's flash at runtime: the database, query log and blocklists live on the USB drive, or in RAM when there is none. On an NTFS volume they sit inside a small ext4 image, so SQLite never runs on the router's NTFS driver. JFFS2 gets SQLite's rollback journal instead of WAL.
 - The [Merlin install guide](deploy/merlin/README.md) with the model list, the dnsmasq setup, the config and the boot script.
 
 ## Install
