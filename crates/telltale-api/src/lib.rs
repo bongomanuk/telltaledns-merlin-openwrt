@@ -529,6 +529,11 @@ pub trait Backend: Send + Sync + 'static {
     /// REQ: OPS-004 (ADR-046) — checks the signed release index now instead of waiting for the
     /// daily check, and returns the new status. At most one check a minute: sooner, the
     /// current status comes back without a fetch.
+    /// Live connections per device, from conntrack.
+    fn traffic(&self) -> Vec<crate::model::TrafficRow> {
+        Vec::new()
+    }
+
     /// Instant lockdown state.
     fn lockdown(&self) -> crate::model::LockdownStatus {
         crate::model::LockdownStatus {
@@ -545,6 +550,15 @@ pub trait Backend: Send + Sync + 'static {
     ) -> Result<crate::model::LockdownStatus, Problem> {
         let _ = request;
         Err(Problem::unavailable("lockdown is not available on this node"))
+    }
+
+    /// Pauses or resumes a group's internet access at the firewall.
+    fn set_pause(
+        &self,
+        request: crate::model::PauseRequest,
+    ) -> Result<crate::model::RouterStatus, Problem> {
+        let _ = request;
+        Err(Problem::unavailable("internet pause is not available on this host"))
     }
 
     /// Router controls (dnsmasq, the boot script) on a Merlin or OpenWrt router. A normal host
@@ -571,6 +585,7 @@ pub trait Backend: Send + Sync + 'static {
             ui_installed: None,
             service_enabled: None,
             dns_guard: false,
+            paused: Vec::new(),
         }
     }
 
@@ -965,6 +980,7 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
         .route("/api/v1/groups", get(groups))
         .route("/api/v1/services", get(services))
         .route("/api/v1/clients", get(clients))
+        .route("/api/v1/traffic", get(traffic))
         .route("/api/v1/analytics/anomalies", get(anomalies))
         .route("/api/v1/analytics/new-domains", get(new_domains))
         .route("/api/v1/analytics/vqlog", get(vqlog_query))
@@ -1077,6 +1093,16 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
                 .route(
                     "/api/v1/lockdown",
                     axum::routing::get(lockdown).post(set_lockdown),
+                )
+                .with_state(Arc::clone(&backend))
+                .route_layer(from_fn(auth::routes::require_admin)),
+        )
+        // Internet pause: a firewall rule per group, admin only.
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/router/pause",
+                    axum::routing::post(set_pause),
                 )
                 .with_state(Arc::clone(&backend))
                 .route_layer(from_fn(auth::routes::require_admin)),
@@ -1413,6 +1439,13 @@ async fn update_check(
     b.check_updates().await.map(Json)
 }
 
+/// Live connections per device.
+#[utoipa::path(get, path = "/api/v1/traffic", tag = "config",
+    responses((status = 200, body = [crate::model::TrafficRow], description = "Connections by device, heaviest first.")))]
+async fn traffic(State(b): State<Shared>) -> Json<Vec<crate::model::TrafficRow>> {
+    Json(b.traffic())
+}
+
 /// The instant lockdown state.
 #[utoipa::path(get, path = "/api/v1/lockdown", tag = "config",
     responses((status = 200, body = crate::model::LockdownStatus, description = "The groups locked now, and the configured default."),
@@ -1432,6 +1465,19 @@ async fn set_lockdown(
     Json(request): Json<crate::model::LockdownRequest>,
 ) -> Result<Json<crate::model::LockdownStatus>, Problem> {
     b.set_lockdown(request).map(Json)
+}
+
+/// Pause or resume a group's internet access.
+#[utoipa::path(post, path = "/api/v1/router/pause", tag = "system",
+    request_body = crate::model::PauseRequest,
+    responses((status = 200, body = crate::model::RouterStatus, description = "The router after the change."),
+        (status = 403, body = Problem, description = "Needs the admin role."),
+        (status = 422, body = Problem, description = "The group has no devices.")))]
+async fn set_pause(
+    State(b): State<Shared>,
+    Json(request): Json<crate::model::PauseRequest>,
+) -> Result<Json<crate::model::RouterStatus>, Problem> {
+    b.set_pause(request).map(Json)
 }
 
 /// The router this process runs on: dnsmasq, DHCP leases, USB, the service hook.

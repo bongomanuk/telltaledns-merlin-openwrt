@@ -65,6 +65,7 @@ pub(crate) fn status(data_dir: &str) -> RouterStatus {
         ui_installed: (platform == "merlin").then(ui_installed),
         service_enabled: (platform == "openwrt").then(service_enabled),
         dns_guard: dns_guard_on(),
+        paused: paused_groups(),
     }
 }
 
@@ -602,4 +603,126 @@ fn ensure_firewall_hook(on: bool) -> Result<(), Problem> {
         .status()
         .map_err(|e| failed(format!("chmod: {e}")))?;
     Ok(())
+}
+
+/// One chain holds every pause rule, so cleanup is a flush rather than a hunt.
+const BLOCK_CHAIN: &str = "TELLTALE_BLOCK";
+
+fn ensure_block_chain() -> Result<(), Problem> {
+    let _ = Command::new("iptables").args(["-N", BLOCK_CHAIN]).status();
+    let jump = ["FORWARD", "-j", BLOCK_CHAIN];
+    if !rule_exists(&jump) {
+        let _ = Command::new("iptables")
+            .args(["-I", "FORWARD", "1", "-j", BLOCK_CHAIN])
+            .status();
+    }
+    Ok(())
+}
+
+fn rule_exists(args: &[&str]) -> bool {
+    Command::new("iptables")
+        .arg("-C")
+        .args(args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Pauses a group's internet access at the firewall, or resumes it.
+pub(crate) fn set_pause(
+    group: &str,
+    macs: &[String],
+    ips: &[String],
+    until: u64,
+) -> Result<(), Problem> {
+    ensure_block_chain()?;
+    let mut lines = vec!["#!/bin/sh".to_owned()];
+    for mac in macs {
+        lines.push(format!(
+            "iptables -C {BLOCK_CHAIN} -i br0 -o eth0 -m mac --mac-source {mac} -j REJECT 2>/dev/null || iptables -A {BLOCK_CHAIN} -i br0 -o eth0 -m mac --mac-source {mac} -j REJECT"
+        ));
+    }
+    for ip in ips {
+        lines.push(format!(
+            "iptables -C {BLOCK_CHAIN} -i br0 -o eth0 -s {ip} -j REJECT 2>/dev/null || iptables -A {BLOCK_CHAIN} -i br0 -o eth0 -s {ip} -j REJECT"
+        ));
+    }
+    // Applying rules is done by one script, kept for the resume and the timer.
+    let apply = format!("/tmp/telltale-pause-{group}.sh");
+    let mut text = lines.join("\n");
+    text.push('\n');
+    std::fs::write(&apply, text).map_err(|e| failed(format!("could not write {apply}: {e}")))?;
+    run("/bin/sh", &[apply.as_str()])?;
+
+    let state = format!("/tmp/telltale-pause-{group}");
+    if until > 0 {
+        std::fs::write(&state, format!("{until}\n"))
+            .map_err(|e| failed(format!("could not write the pause state: {e}")))?;
+        // A detached shell removes the rules at the deadline. A reboot clears the
+        // chain in services-start, so nothing survives into the next boot.
+        let undo = format!("/tmp/telltale-unpause-{group}.sh");
+        let mut del = vec!["#!/bin/sh".to_owned()];
+        for mac in macs {
+            del.push(format!(
+                "iptables -D {BLOCK_CHAIN} -i br0 -o eth0 -m mac --mac-source {mac} -j REJECT 2>/dev/null"
+            ));
+        }
+        for ip in ips {
+            del.push(format!("iptables -D {BLOCK_CHAIN} -i br0 -o eth0 -s {ip} -j REJECT 2>/dev/null"));
+        }
+        del.push(format!("rm -f {state} {undo} {apply}"));
+        let mut dtext = del.join("\n");
+        dtext.push('\n');
+        std::fs::write(&undo, dtext).map_err(|e| failed(format!("could not write {undo}: {e}")))?;
+        let now = crate::pipeline::unix_now();
+        let sleep = until.saturating_sub(now);
+        let _ = Command::new("sh")
+            .args([
+                "-c",
+                &format!("sleep {sleep}; /bin/sh {undo} >/dev/null 2>&1 &"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    } else {
+        // Resume now, and let any pending timer find nothing to remove.
+        run("/bin/sh", &[format!("/tmp/telltale-unpause-{group}.sh").as_str()])
+            .or_else(|_| Ok::<(), Problem>(()))?;
+        let _ = std::fs::remove_file(&state);
+        let _ = std::fs::remove_file(format!("/tmp/telltale-unpause-{group}.sh"));
+        let _ = std::fs::remove_file(&apply);
+    }
+    Ok(())
+}
+
+/// Groups paused right now, from the state files.
+pub(crate) fn paused_groups() -> Vec<telltale_api::model::PausedGroup> {
+    let mut out = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/tmp") else {
+        return out;
+    };
+    let now = crate::pipeline::unix_now();
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(group) = name.strip_prefix("telltale-pause-") else {
+            continue;
+        };
+        if group.contains('.') {
+            continue;
+        }
+        let until = std::fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        if until > now {
+            out.push(telltale_api::model::PausedGroup {
+                group: group.to_owned(),
+                until_unix_seconds: until,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.group.cmp(&b.group));
+    out
 }

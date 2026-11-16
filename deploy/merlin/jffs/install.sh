@@ -159,6 +159,10 @@ if [ -x /jffs/telltale/telltale ]; then
             data=/tmp/mnt/telltale/data
         fi
     fi
+    # Connection accounting for the Traffic page, and clear yesterday's firewall pauses.
+    echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null
+    iptables -F TELLTALE_BLOCK 2>/dev/null
+    rm -f /tmp/telltale-pause-* /tmp/telltale-unpause-* /tmp/telltale-pause-*.sh
     mkdir -p "$data"
     sed "s#^data_dir = .*#data_dir = \"$data\"#" "$cfg" > /tmp/telltale-run.toml
     ui_token=""

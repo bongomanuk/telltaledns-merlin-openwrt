@@ -120,6 +120,7 @@ export interface RouterStatus {
   uiInstalled?: boolean | null;
   serviceEnabled?: boolean | null;
   dnsGuard: boolean;
+  paused: { group: string; untilUnixSeconds: number }[];
 }
 export type RouterAction =
   | 'restart_dnsmasq'
@@ -134,7 +135,22 @@ export type RouterAction =
   | 'enable_dns_guard'
   | 'disable_dns_guard';
 
+export interface TrafficPeer {
+  peer: string;
+  port: number;
+  bytes: number;
+}
+export interface TrafficRow {
+  client: string;
+  name?: string | null;
+  connections: number;
+  bytes: number;
+  peers: TrafficPeer[];
+}
+
 export const api = {
+  // Per-device connections from conntrack.
+  traffic: () => get<TrafficRow[]>('/traffic'),
   // Instant lockdown.
   lockdown: () => get<LockdownStatus>('/lockdown'),
   setLockdown: (body: { enabled: boolean; groups?: string[]; minutes?: number }) =>
@@ -143,6 +159,8 @@ export const api = {
   routerStatus: () => get<RouterStatus>('/router'),
   routerAction: (action: RouterAction) =>
     post<{ ok: boolean; message: string }>('/router/action', { action }),
+  pauseGroup: (group: string, minutes: number, enabled: boolean) =>
+    post<RouterStatus>('/router/pause', { group, minutes, enabled }),
   // Sign-in (API-003)
   status: () => get<S['AuthStatus']>('/auth/status'),
   setup: (b: S['SetupRequest']) => post<S['LoginResponse']>('/auth/setup', b),

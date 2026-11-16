@@ -767,6 +767,126 @@ impl Backend for ApiBackend {
         Ok(self.lockdown())
     }
 
+    fn traffic(&self) -> Vec<telltale_api::model::TrafficRow> {
+        use std::collections::HashMap;
+        use std::net::Ipv4Addr;
+        #[derive(Default)]
+        struct Agg {
+            conns: u64,
+            bytes: u64,
+            peers: HashMap<(String, u16), u64>,
+        }
+        let Ok(text) = std::fs::read_to_string("/proc/net/nf_conntrack") else {
+            return Vec::new();
+        };
+        let mut map: HashMap<Ipv4Addr, Agg> = HashMap::new();
+        for line in text.lines() {
+            // The line holds two half-tuples, each starting at src=.
+            let mut halves: Vec<Vec<&str>> = Vec::new();
+            for tok in line.split_whitespace() {
+                if tok.starts_with("src=") {
+                    halves.push(Vec::new());
+                }
+                if let Some(h) = halves.last_mut() {
+                    h.push(tok);
+                }
+            }
+            let mut counted = false;
+            for h in &halves {
+                let src = h
+                    .iter()
+                    .find_map(|t| t.strip_prefix("src=").and_then(|v| v.parse::<Ipv4Addr>().ok()));
+                let dst = h
+                    .iter()
+                    .find_map(|t| t.strip_prefix("dst=").and_then(|v| v.parse::<Ipv4Addr>().ok()));
+                let bytes = h
+                    .iter()
+                    .find_map(|t| t.strip_prefix("bytes=").and_then(|v| v.parse::<u64>().ok()))
+                    .unwrap_or(0);
+                let dport = h
+                    .iter()
+                    .find_map(|t| t.strip_prefix("dport=").and_then(|v| v.parse::<u16>().ok()))
+                    .unwrap_or(0);
+                let sport = h
+                    .iter()
+                    .find_map(|t| t.strip_prefix("sport=").and_then(|v| v.parse::<u16>().ok()))
+                    .unwrap_or(0);
+                let (lan, peer, port) = match (src, dst) {
+                    (Some(s), Some(d)) if s.is_private() && !d.is_private() => (s, d.to_string(), dport),
+                    (Some(s), Some(d)) if d.is_private() && !s.is_private() => (d, s.to_string(), sport),
+                    _ => continue,
+                };
+                let e = map.entry(lan).or_default();
+                e.bytes += bytes;
+                if !counted {
+                    e.conns += 1;
+                    counted = true;
+                }
+                *e.peers.entry((peer, port)).or_default() += bytes;
+            }
+        }
+        let mut rows: Vec<telltale_api::model::TrafficRow> = map
+            .into_iter()
+            .map(|(ip, a)| {
+                let mut peers: Vec<telltale_api::model::TrafficPeer> = a
+                    .peers
+                    .into_iter()
+                    .map(|((peer, port), bytes)| telltale_api::model::TrafficPeer { peer, port, bytes })
+                    .collect();
+                peers.sort_by(|x, y| y.bytes.cmp(&x.bytes));
+                peers.truncate(5);
+                telltale_api::model::TrafficRow {
+                    client: ip.to_string(),
+                    name: device_name(&self.src, ip.to_ipv6_mapped().octets()),
+                    connections: a.conns,
+                    bytes: a.bytes,
+                    peers,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        rows.truncate(50);
+        rows
+    }
+
+    fn set_pause(
+        &self,
+        request: telltale_api::model::PauseRequest,
+    ) -> Result<telltale_api::model::RouterStatus, Problem> {
+        let cfg = self.src.config.load();
+        let mut macs = Vec::new();
+        let mut ips = Vec::new();
+        for c in &cfg.client {
+            let in_group = c.groups.iter().any(|g| g.as_str() == request.group)
+                || (request.group == "default" && c.groups.is_empty());
+            if !in_group {
+                continue;
+            }
+            for key in &c.match_keys {
+                let key = key.as_str().trim();
+                if key.len() == 17 && key.split(':').count() == 6 {
+                    macs.push(key.to_ascii_lowercase());
+                } else if let Ok(ip) = key.parse::<std::net::Ipv4Addr>() {
+                    ips.push(ip.to_string());
+                }
+            }
+        }
+        if macs.is_empty() && ips.is_empty() {
+            return Err(Problem::invalid(format!(
+                "the group `{}` has no devices with a MAC or IP address",
+                request.group
+            )));
+        }
+        let until = if request.enabled {
+            let minutes = request.minutes.unwrap_or(60).clamp(1, 1440);
+            crate::pipeline::unix_now() + u64::from(minutes) * 60
+        } else {
+            0
+        };
+        crate::router_admin::set_pause(&request.group, &macs, &ips, until)?;
+        Ok(self.router_status())
+    }
+
     fn router_status(&self) -> telltale_api::model::RouterStatus {
         let cfg = self.src.config.load();
         crate::router_admin::status(cfg.node.data_dir.as_str())

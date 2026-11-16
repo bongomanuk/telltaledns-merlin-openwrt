@@ -37,6 +37,7 @@
   import LocalDns from './pages/LocalDns.svelte';
   import Schedules from './pages/Schedules.svelte';
   import Lockdown from './pages/Lockdown.svelte';
+  import NetTraffic from './pages/NetTraffic.svelte';
   import Settings from './pages/Settings.svelte';
   import Alerts from './pages/Alerts.svelte';
 
@@ -45,6 +46,7 @@
     { path: "/", label: "Dashboard", page: Dashboard, icon: "dashboard", section: "Monitor", hint: "What is happening now: queries, blocking, cache and upstream health." },
     { path: "/traffic", label: "Traffic map", page: Traffic, icon: "traffic", section: "Monitor", hint: "Where the questions go, per client and per domain." },
     { path: "/heatmap", label: "Heatmap", page: Heatmap, icon: "heatmap", section: "Monitor", hint: "When devices are active, hour by hour." },
+    { path: "/traffic-live", label: "Traffic", page: NetTraffic, icon: "traffic", section: "Monitor", hint: "Live connections per device, with bytes, from the router's connection table." },
     { path: "/flow", label: "Flow", page: Flow, icon: "flow", section: "Monitor", hint: "One device's DNS journey from question to answer." },
     { path: "/queries", label: "Query log", page: Queries, icon: "queries", section: "Monitor", hint: "Every question that arrived, with the device, rule and timing." },
     { path: "/analyze", label: "Analyze", page: Analyze, icon: "analyze", section: "Monitor", hint: "Group and compare the query log: by device, domain or time." },

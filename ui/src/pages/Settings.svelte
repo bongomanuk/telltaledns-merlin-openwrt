@@ -406,12 +406,30 @@
   let routerError = $state<unknown>(null);
   let routerBusy = $state<RouterAction | null>(null);
   let routerMessage = $state('');
+  let pauseGroupName = $state('');
+  let pauseMinutes = $state(60);
+  let routerGroups = $state<string[]>([]);
   async function loadRouter() {
     try {
-      router = await api.routerStatus();
+      const [r, g] = await Promise.all([api.routerStatus(), api.groups().catch(() => ({ items: [] }))]);
+      router = r;
+      routerGroups = g.items.map((x) => x.name);
+      if (!pauseGroupName && routerGroups.length) pauseGroupName = routerGroups[0];
       routerError = null;
     } catch (e) {
       routerError = e;
+    }
+  }
+  async function pauseGroup(enabled: boolean) {
+    routerBusy = 'restart_self';
+    try {
+      router = await api.pauseGroup(pauseGroupName, pauseMinutes, enabled);
+      routerMessage = enabled ? `Paused ${pauseGroupName}.` : `Resumed ${pauseGroupName}.`;
+      routerError = null;
+    } catch (e) {
+      routerError = e;
+    } finally {
+      routerBusy = null;
     }
   }
   async function routerRun(action: RouterAction, question: string) {
@@ -866,6 +884,40 @@
             {:else}
               <p class="muted">DNS protection is available on Merlin only for now.</p>
             {/if}
+          </section>
+
+          <section class="card">
+            <h2>Internet pause</h2>
+            <p class="muted small">
+              Blocks all internet traffic for a group's devices at the firewall, not just DNS.
+              This is what stops a TV or console that ignores DNS. It ends by itself, and a
+              reboot clears it.
+            </p>
+            {#if router.paused.length}
+              <ul>
+                {#each router.paused as p (p.group)}
+                  <li>
+                    <strong>{p.group}</strong> until {new Date(p.untilUnixSeconds * 1000).toLocaleTimeString()}
+                    <button class="link small" disabled={routerBusy !== null} onclick={() => { pauseGroupName = p.group; pauseGroup(false); }}>Resume</button>
+                  </li>
+                {/each}
+              </ul>
+            {:else}
+              <p><span class="badge">off</span> No group is paused.</p>
+            {/if}
+            <div class="row">
+              <label class="field" style="min-width: 160px;">Group
+                <select bind:value={pauseGroupName}>
+                  {#each routerGroups as g (g)}<option value={g}>{g}</option>{/each}
+                </select>
+              </label>
+              <label class="field" style="max-width: 120px;">Minutes
+                <input type="number" min="1" max="1440" bind:value={pauseMinutes} />
+              </label>
+              <button class="danger" disabled={routerBusy !== null || !pauseGroupName} onclick={() => pauseGroup(true)}>
+                Pause internet
+              </button>
+            </div>
           </section>
 
           <section class="card">

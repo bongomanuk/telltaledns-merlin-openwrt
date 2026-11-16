@@ -111,6 +111,34 @@ pub struct RouterStatus {
     /// Router traffic is forced through this resolver: port 53 redirected, DoT and
     /// known DoH hostnames blocked.
     pub dns_guard: bool,
+    /// Groups whose internet access is blocked at the firewall right now.
+    #[serde(default)]
+    pub paused: Vec<PausedGroup>,
+}
+
+/// A group whose internet access is blocked right now.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PausedGroup {
+    pub group: String,
+    pub until_unix_seconds: u64,
+}
+
+/// Pause or resume a group's internet access.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PauseRequest {
+    pub group: String,
+    /// Minutes; default 60, clamped to 1..=1440.
+    #[serde(default)]
+    pub minutes: Option<u32>,
+    /// `false` resumes the group.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A control on the Router page.
@@ -139,6 +167,28 @@ pub enum RouterAction {
     EnableDnsGuard,
     /// Undo the above.
     DisableDnsGuard,
+}
+
+/// One device's live connections, from conntrack.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficRow {
+    pub client: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub connections: u64,
+    /// Bytes both directions.
+    pub bytes: u64,
+    pub peers: Vec<TrafficPeer>,
+}
+
+/// A destination this device is talking to.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficPeer {
+    pub peer: String,
+    pub port: u16,
+    pub bytes: u64,
 }
 
 /// Instant lockdown: the switch on the dashboard that blocks whole groups now.
