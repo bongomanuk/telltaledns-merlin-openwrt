@@ -95,7 +95,7 @@ fi
 cp "$here/telltale.gz" "$dest/telltale.gz"
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
-cp "$here/telltale_icon.png" "$dest/telltale_icon.png"
+[ -f "$here/telltale_icon.png" ] && cp "$here/telltale_icon.png" "$dest/telltale_icon.png"
 # The router page signs the embedded dashboard in with this token. It is readable only
 # by root and only sent to sessions that already signed in to the router.
 if [ ! -s "$dest/ui-token" ]; then

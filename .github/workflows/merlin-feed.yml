@@ -167,6 +167,7 @@ jobs:
             gzip -9 -n -c "bin/telltale-${arch}-linux" > "$stage/telltale.gz"
             cp deploy/merlin/jffs/install.sh deploy/merlin/jffs/telltale.toml "$stage/"
             cp deploy/merlin/jffs/ui.sh deploy/merlin/jffs/telltale.asp "$stage/"
+            cp deploy/merlin/jffs/telltale_icon.png "$stage/"
             chmod 755 "$stage/install.sh" "$stage/ui.sh"
             tar -C "$stage" -czf "public/merlin/telltale-${VERSION}-merlin-${arch}.tar.gz" .
             rm -rf "$stage"
