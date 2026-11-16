@@ -5,7 +5,7 @@
   // Advanced adds, without adding cards: the service level (OBS-016) as a strip under the numbers;
   // the chart's other views (groups, upstream exchanges) beside Status; where time goes (OBS-030)
   // and the upstreams as plain sections; devices by type (OBS-025) as a line under the clients.
-  import { api, type S } from '../lib/api';
+  import { api, type S, type LockdownStatus } from '../lib/api';
   import { changes } from '../lib/annotations.svelte';
   import { change, DashData, remember } from '../lib/dash/data.svelte';
   import DashHead from '../lib/dash/DashHead.svelte';
@@ -18,6 +18,39 @@
   import Tip from '../lib/components/Tip.svelte';
   import { href } from '../lib/router.svelte';
   import { ms, num, pct, short } from '../lib/format';
+
+  // Instant lockdown: the one switch a parent reaches for.
+  let lockdown = $state<LockdownStatus | null>(null);
+  let lockdownBusy = $state(false);
+  let lockdownError = $state<unknown>(null);
+  const locked = $derived((lockdown?.active.length ?? 0) > 0);
+  async function loadLockdown() {
+    try {
+      lockdown = await api.lockdown();
+      lockdownError = null;
+    } catch (e) {
+      lockdownError = e;
+    }
+  }
+  async function toggleLockdown() {
+    if (!lockdown) return;
+    lockdownBusy = true;
+    try {
+      lockdown = await api.setLockdown({
+        enabled: !locked,
+        groups: !locked && lockdown.configuredGroups.length ? lockdown.configuredGroups : undefined,
+        minutes: !locked ? lockdown.minutes : undefined,
+      });
+      lockdownError = null;
+    } catch (e) {
+      lockdownError = e;
+    } finally {
+      lockdownBusy = false;
+    }
+  }
+  $effect(() => {
+    void loadLockdown();
+  });
 
   const d = new DashData();
   $effect(() => d.attach());
@@ -154,6 +187,24 @@
 
 <div class="page calm">
   <DashHead {d} />
+
+  <div class="row lock" data-testid="lockdown">
+    <div>
+      <strong>Lockdown</strong>
+      <span class="muted small">
+        {#if locked}
+          Blocking {lockdown?.active.map((a) => a.group).join(', ')} until
+          {new Date((lockdown?.active[0]?.untilUnixSeconds ?? 0) * 1000).toLocaleTimeString()}.
+        {:else}
+          Block the configured groups now. Use the Lockdown page to pick them.
+        {/if}
+      </span>
+    </div>
+    <button class={locked ? 'danger' : 'primary'} disabled={lockdownBusy || !lockdown} onclick={toggleLockdown}>
+      {locked ? 'Unlock' : 'Lock down'}
+    </button>
+  </div>
+  {#if lockdownError}<p class="muted small">{String(lockdownError)}</p>{/if}
 
   <div class="stats">
     <div class="cell" data-testid="stat-queries"><Stat label="Queries" value={short(s?.queries)} delta={change(s?.queries, d.previous?.queries)} sub={`last ${d.range.label}${d.scope ? ` · ${scopeLabel}` : ''}`} /></div>
@@ -525,5 +576,12 @@
     .pair {
       grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
     }
+  }
+  .lock {
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin: 4px 0 18px;
+    flex-wrap: wrap;
   }
 </style>

@@ -33,13 +33,16 @@
 </style>
 <script type="text/javascript">
 var appBase = 'http://' + location.hostname + ':8053/';
-var appLogin = appBase + 'api/v1/auth/ui-login?json=true&token=__UI_TOKEN__';
+// ui.sh replaces the marker below with the install's token.
+var uiToken = '__UI_TOKEN__';
+var appLogin = appBase + 'api/v1/auth/ui-login?json=true&token=' + uiToken;
 
 function initial() {
   show_menu();
   var frame = document.getElementById('app');
-  // No token (an older install): open the dashboard and sign in there.
-  if (appLogin.indexOf('__UI_TOKEN__') !== -1) {
+  // No token (an older install): open the dashboard and sign in there. The test is
+  // split so the installer's replacement cannot match it.
+  if (uiToken === '__UI_' + 'TOKEN__') {
     frame.src = appBase;
   } else {
     // The cookie is set from this page, a first-party context. Setting it from the
