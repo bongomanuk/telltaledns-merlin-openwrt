@@ -1196,36 +1196,20 @@ impl Backend for ApiBackend {
             TopKind::Clients => telltale_telemetry::agg::TopKind::Clients,
             TopKind::Internal => telltale_telemetry::agg::TopKind::Internal,
         };
-        let tops =
-            self.src
-                .pipeline
-                .telemetry
-                .aggregates()
-                .top_names_in_group(k, hour(h), gi, limit);
-        Ok(tops
-            .into_iter()
-            // The router's own lookups come from loopback and are not a device. Keep
-            // them out of "top clients"; the query log still shows them as the router.
-            .filter(|t| {
-                !matches!(kind, TopKind::Clients)
-                    || !t
-                        .key
-                        .parse::<IpAddr>()
-                        .map(|ip| ip.is_loopback())
-                        .unwrap_or(false)
-            })
-            .map(|t| {
-                let (name, groups) = self.client_labels(kind, &t.key);
-                TopItem {
-                    key,
-                    name,
-                    groups,
-                    count,
-                    error_bound,
-                    by_status,
-                }
-            })
-            .collect()
+        let agg = self.src.pipeline.telemetry.aggregates();
+        let tops = if kind == TopKind::Clients {
+            agg.top_clients(hour(h), Some(gi), limit)
+                .into_iter()
+                .map(|(t, s)| (t, Some(s)))
+                .collect()
+        } else {
+            agg.top_names_in_group(k, hour(h), gi, limit)
+                .into_iter()
+                .map(|t| (t, None))
+                .collect::<Vec<_>>()
+        };
+        drop(agg);
+        Ok(self.top_items(kind, tops))
     }
 
     fn top(&self, kind: TopKind, h: Hour, limit: usize, client: Option<IpAddr>) -> Vec<TopItem> {
@@ -1252,28 +1236,7 @@ impl Backend for ApiBackend {
             }
         };
         drop(agg);
-        tops.into_iter()
-            // The router's own lookups come from loopback and are not a device. Keep
-            // them out of "top clients"; the query log still shows them as the router.
-            .filter(|t| {
-                !matches!(kind, TopKind::Clients)
-                    || !t
-                        .key
-                        .parse::<IpAddr>()
-                        .map(|ip| ip.is_loopback())
-                        .unwrap_or(false)
-            })
-            .map(|t| {
-                let (name, groups) = self.client_labels(kind, &t.key);
-                TopItem {
-                    key: t.key,
-                    name,
-                    groups,
-                    count: t.count,
-                    error_bound: t.error,
-                }
-            })
-            .collect()
+        self.top_items(kind, tops)
     }
 
     fn latency(&self, by: LatencyBy, h: Hour) -> Vec<LatencyRow> {
@@ -4690,6 +4653,16 @@ impl ApiBackend {
         )>,
     ) -> Vec<TopItem> {
         tops.into_iter()
+            // The router's own lookups come from loopback and are not a device. Keep
+            // them out of "top clients"; the query log still shows them as the router.
+            .filter(|(t, _)| {
+                !matches!(kind, TopKind::Clients)
+                    || !t
+                        .key
+                        .parse::<IpAddr>()
+                        .map(|ip| ip.is_loopback())
+                        .unwrap_or(false)
+            })
             .map(|(t, s)| {
                 let (name, groups) = self.client_labels(kind, &t.key);
                 TopItem {

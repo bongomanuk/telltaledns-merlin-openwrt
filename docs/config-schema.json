@@ -290,6 +290,14 @@
         "hosts_files": []
       }
     },
+    "lockdown": {
+      "description": "Instant lockdown: the groups a dashboard switch blocks, and for how long.",
+      "$ref": "#/$defs/LockdownConfig",
+      "default": {
+        "groups": [],
+        "minutes": 60
+      }
+    },
     "node": {
       "description": "This node's role and local settings.",
       "$ref": "#/$defs/NodeConfig",
@@ -398,6 +406,13 @@
         "localhost": true,
         "private_ptr_nxdomain": true,
         "refuse_chaos": true
+      }
+    },
+    "support": {
+      "description": "REQ: OPS-011 (ADR-156) — the support package's settings. Node-local: it names this node's\nown disk.",
+      "$ref": "#/$defs/SupportConfig",
+      "default": {
+        "persist_logs": true
       }
     },
     "telemetry": {
@@ -2516,6 +2531,29 @@
         "value"
       ]
     },
+    "LockdownConfig": {
+      "description": "Instant lockdown: a switch on the dashboard that blocks whole groups now, for a set\nnumber of minutes. Quick allow rules still work, and it turns itself off at the deadline.",
+      "type": "object",
+      "properties": {
+        "groups": {
+          "description": "The groups the switch blocks. Empty: every group.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
+          }
+        },
+        "minutes": {
+          "description": "How long it stays on, in minutes.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 60,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
     "MetricsConfig": {
       "description": "Prometheus endpoint (OBS-005).",
       "type": "object",
@@ -3244,10 +3282,19 @@
     },
     "RouterKind": {
       "description": "A router integration's kind.",
-      "type": "string",
-      "enum": [
-        "unifi",
-        "opnsense"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unifi",
+            "opnsense"
+          ]
+        },
+        {
+          "description": "A local dnsmasq lease file (Asuswrt-Merlin, OpenWrt).",
+          "type": "string",
+          "const": "dnsmasq"
+        }
       ]
     },
     "RuleAction": {
@@ -3757,6 +3804,18 @@
         "fastest",
         "parallel"
       ]
+    },
+    "SupportConfig": {
+      "description": "REQ: OPS-011 (ADR-156) — the support package (`telltale support-package`, System page). No\nplatform lets the process read its own stderr back, so it keeps a small log of its own: the\nlast 2,000 lines (INFO and up) in memory, and, unless turned off here, two rotating files of\nabout 1 MiB each under `<data_dir>/logs/`, so lines from before a restart reach the package.\nThe files are not redacted (they hold client addresses; mode 0640): the package redacts when\nit is made. Node-local.",
+      "type": "object",
+      "properties": {
+        "persist_logs": {
+          "description": "Keep the log files. Off: only the in-memory lines, which a restart loses. About 21 KB a\nday at INFO on a quiet node; nothing is written if the data directory is read-only.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
     },
     "TelemetryConfig": {
       "type": "object",
