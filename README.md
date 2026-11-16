@@ -42,22 +42,40 @@ routers: the model, `apk --print-arch`, and what worked or did not.
 | ![Merlin page](docs/screenshots/merlin-tab.png) | |
 | The TelltaleDNS entry in the Merlin menu, with the dashboard embedded | |
 
-## What this fork is, and why it exists
+## What this fork adds
 
-This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes, and systemd hosts; routers have none of those. Many Merlin models, including the RT-AX95Q / ZenWiFi XT8, are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk, not a conventional package manager. On these routers you need a static file or a native package, not an image.
+This is a fork of [paimonsoror/telltaledns](https://github.com/paimonsoror/telltaledns). Upstream targets Docker, Kubernetes and systemd hosts. Many Merlin models, including the RT-AX95Q / ZenWiFi XT8, are 32-bit ARM with a small JFFS partition, and OpenWrt 25.12+ uses apk rather than a conventional package manager, so on a router you need a static file or a native package, not an image.
 
-This fork adds:
+The resolver itself is upstream's. These are the changes on top of it.
 
-- **Static ARMv7 and ARM64 binaries** with the web UI compiled in: one file, no Entware, no shared libraries, no container.
-- **Flash-friendly installs:** the binary is gzip-compressed on flash (about 15 MB) and unpacked to RAM at start. The database, query log and blocklists live on the USB drive, and never on the router's flash.
-- **Router UI integration:** a **Services → TelltaleDNS** page in LuCI, and a **TelltaleDNS** entry in the Merlin web UI's main menu.
-- An **opkg/Entware feed** at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/entware`, rebuilt by the [`merlin-feed`](.github/workflows/merlin-feed.yml) workflow.
-- **OpenWrt 25.12+ apk packages** for armv7, aarch64 and x86_64 at `https://bongomanuk.github.io/telltaledns-merlin-openwrt/openwrt/`.
-- A [`merlin-binaries`](.github/workflows/merlin-binaries.yml) workflow that builds and checksums the raw binaries.
-- An [`upstream-watch`](.github/workflows/upstream-watch.yml) workflow that rebuilds the packages for each new upstream release.
-- A [Merlin install guide](deploy/merlin/README.md) with the full model list, the dnsmasq setup, the config, and a boot-time `/jffs/scripts/services-start` script.
+**Runs alongside dnsmasq**
 
-The resolver source is upstream's. This fork adds only the router packaging.
+- dnsmasq keeps port 53, DHCP and the local names. TelltaleDNS listens on `127.0.0.1:5354`, and dnsmasq forwards public queries to it with a plain-DNS fallback if it is down.
+- Device attribution through dnsmasq's `add-mac`, including the base64 and text encodings dnsmasq actually sends.
+- Device names come from the DHCP lease file, the static reservations, and the names set in the Merlin UI, with the ARP table as a fallback for static addresses.
+- The router's own lookups are labelled `router (dnsmasq)` and left out of the top-clients list.
+- Devices the router knows are listed in Clients straight away, with one-click Add to make one manageable in a group.
+
+**Parental controls**
+
+- Weekly schedules that block whole services such as YouTube and Roblox, attached to groups.
+- Groups with per-device exceptions, so one or two devices can keep access.
+- An instant **Lockdown** page and a one-click switch on the dashboard, with a deadline and automatic expiry.
+
+**ASUS Merlin integration**
+
+- A top-level **TelltaleDNS** entry in the router menu, with its own icon, that survives a firmware update because `services-start` re-applies it.
+- The entry embeds the full dashboard, pre-authenticated from the router session, with the status line below it.
+- **Settings → Router** shows dnsmasq state, the model, firmware, uptime, memory, storage and the USB mount, and can restart dnsmasq or TelltaleDNS, switch forwarding, patch or unpatch the web UI, and reboot the router.
+- A LuCI page for OpenWrt.
+
+**Packaging and operations**
+
+- Static ARMv7 and ARM64 binaries with the web UI compiled in, gzip-compressed on flash and unpacked to RAM at start.
+- An Entware/opkg feed and OpenWrt 25.12+ apk packages, both on GitHub Pages.
+- A daily upstream merge with the build and packaging run for each upstream release.
+- No writes to the router's flash at runtime: the database, query log and blocklists live on the USB drive, or in RAM when there is none. JFFS2 and the router NTFS drivers get SQLite's rollback journal instead of WAL.
+- The [Merlin install guide](deploy/merlin/README.md) with the model list, the dnsmasq setup, the config and the boot script.
 
 ## Install
 
