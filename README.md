@@ -216,6 +216,13 @@ the query log, top clients and per-device rules see the device, not the router.
 
 There is no port 53 conflict: dnsmasq never gives up port 53.
 
+### Known issues on Merlin routers
+
+- **SQLite on the router's NTFS driver.** Asus's `tntfs` can hang the kernel under database load: ping answers, SSH and the web UI do not. The installer therefore keeps the database in a small ext4 image on the USB volume (`telltale.ext4`, mounted at `/tmp/mnt/telltale`), so the drive only sees one large file. If you point `data_dir` at a raw NTFS path instead, expect trouble.
+- **The media server.** Merlin's DLNA server (`dms_enable=1`) indexes the whole USB volume at boot and competes with the database for a slow drive. Set `nvram set dms_enable=0` unless you use it.
+- **USB power and ports.** If hangs continue with the image in place, try the other USB port or a different drive before blaming the software.
+- **Internal flash.** A `bcm63xx_nand ... timeout waiting for command` line in dmesg is the router's own flash, not the USB drive. One at boot is a warning; if it appears every boot with JFFS2 CRC errors, the flash is failing.
+
 ### Flash wear
 
 Nothing is written to the router's flash while TelltaleDNS runs. The install writes the

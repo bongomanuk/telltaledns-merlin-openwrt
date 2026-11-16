@@ -207,6 +207,15 @@ install takes about 20 MB of the JFFS partition instead of about 34 MB.
 The installer also points dnsmasq at TelltaleDNS and restarts it (`--no-dns`
 skips that).
 
+### The database and the USB drive
+
+SQLite does not belong on Asus's NTFS driver: it can hang the kernel under load, with ping
+still answering and SSH and the web UI frozen. The installer keeps the database in a 2 GB
+ext4 image on the volume (`<volume>/telltale.ext4`, mounted at `/tmp/mnt/telltale`), so
+`tntfs` only handles one large file. Turn the DLNA server off (`nvram set dms_enable=0`) if
+you do not use it, because it indexes the whole volume at boot. If hangs continue with the
+image in place, try the other USB port or another drive.
+
 ### Flash wear
 
 The installer writes about 16 MB to `/jffs` once: the compressed binary, the config, the
