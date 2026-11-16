@@ -123,10 +123,43 @@ impl Backend for Fake {
             .push(format!("top {kind:?} {hour:?} {limit} {client:?}"));
         vec![TopItem {
             groups: Vec::new(),
+            by_status: None,
             key: "a.example".into(),
             name: None,
             count: 7,
             error_bound: 0,
+        }]
+    }
+    fn top_clients_rolling(
+        &self,
+        limit: usize,
+        group: Option<&str>,
+    ) -> Result<Vec<TopItem>, Problem> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(format!("top_clients_rolling {limit} {group:?}"));
+        Ok(vec![TopItem {
+            groups: Vec::new(),
+            key: "10.0.0.9".into(),
+            name: None,
+            count: 3,
+            error_bound: 0,
+            by_status: None,
+        }])
+    }
+    fn top_range(&self, kind: TopKind, from_s: u64, to_s: u64, limit: usize) -> Vec<TopItem> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(format!("top_range {kind:?} {from_s} {to_s} {limit}"));
+        vec![TopItem {
+            groups: Vec::new(),
+            key: "10.0.0.1".into(),
+            name: None,
+            count: 9,
+            error_bound: 0,
+            by_status: None,
         }]
     }
     fn latency(&self, by: LatencyBy, _: Hour) -> Vec<LatencyRow> {
@@ -272,8 +305,29 @@ impl Backend for Fake {
             nodes: Vec::new(),
             acknowledged: None,
             informational: false,
+            muted_by: None,
             rhythm: None,
         }];
+        // REQ: OBS-038 — one a mute matched: listed only with `muted=true`.
+        v.push(AnomalyFinding {
+            id: crate::model::anomaly_id("nxdomain_storm", "192.168.1.30", None, NOW - 7200, 60),
+            kind: "nxdomain_storm".into(),
+            client: "192.168.1.30".into(),
+            client_name: Some("lg-tv".into()),
+            domain: None,
+            window_start: "2026-10-04T10:00:00.000Z".into(),
+            window_seconds: 60,
+            observed: 225.0,
+            baseline: 260.0,
+            spread: 0.0,
+            threshold: 30.0,
+            detail: "225 NXDOMAIN answers in a minute".into(),
+            nodes: Vec::new(),
+            acknowledged: None,
+            informational: false,
+            muted_by: Some("tv-sweep".into()),
+            rhythm: None,
+        });
         self.annotate_acks(&mut v);
         v
     }
@@ -497,6 +551,27 @@ fn app() -> (TestApp, Arc<Fake>) {
 }
 // REQ: OBS-014, OBS-015 — acknowledging anomalies over HTTP: an operator's change, audited,
 // reflected in the list and its filter; a viewer can't; health is a plain read.
+/// REQ: OBS-038 (ADR-161) — a finding a mute matched is left out of the list unless `muted=true`,
+/// and then says which mute.
+#[tokio::test]
+async fn obs_038_muted_findings_are_listed_only_when_asked_for() {
+    let (app, _) = app();
+    let (_, _, v) = get(&app, "/api/v1/analytics/anomalies").await;
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{v}");
+    assert!(items[0].get("mutedBy").is_none());
+    let (_, _, v) = get(&app, "/api/v1/analytics/anomalies?muted=true").await;
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{v}");
+    let muted: Vec<&serde_json::Value> = items
+        .iter()
+        .filter(|f| f.get("mutedBy").is_some())
+        .collect();
+    assert_eq!(muted.len(), 1);
+    assert_eq!(muted[0]["mutedBy"], "tv-sweep");
+    assert_eq!(muted[0]["kind"], "nxdomain_storm");
+}
+
 #[tokio::test]
 async fn obs_014_acknowledging_anomalies_over_http() {
     let (app, fake) = app();
@@ -1135,6 +1210,99 @@ async fn api_001_errors_are_problem_json_with_codes_and_hints() {
         StatusCode::BAD_REQUEST,
         "unknown enum values are rejected"
     );
+}
+
+// REQ: API-005 (ADR-158) — `hour=rolling` reads the last 60 minutes, for clients only.
+#[tokio::test]
+async fn api_005_top_clients_over_the_rolling_hour() {
+    let (app, fake) = app();
+    let (status, _, v) = get(&app, "/api/v1/stats/top?kind=clients&hour=rolling&limit=50").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["items"][0]["key"], "10.0.0.9");
+    assert_eq!(v["items"][0]["errorBound"], 0);
+    assert!(
+        fake.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s == "top_clients_rolling 50 None")
+    );
+    // With a group (as AGT-004 forces for a group-restricted agent), narrowed to it.
+    let (status, _, _) = get(
+        &app,
+        "/api/v1/stats/top?kind=clients&hour=rolling&group=kids",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        fake.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s == "top_clients_rolling 10 Some(\"kids\")")
+    );
+    let (status, _, v) = get(&app, "/api/v1/stats/top?kind=domains&hour=rolling").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_parameter"))
+    );
+    // The clock hours still read the hourly lists.
+    let (status, _, _) = get(&app, "/api/v1/stats/top?kind=clients&hour=previous").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        fake.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s == "top Clients Previous 10 None")
+    );
+}
+
+/// REQ: OBS-004 (ADR-160) — `from` (and `to`) read a top list over a window, and the summary's
+/// active clients count the window's devices; `from` doesn't mix with one hour, one client, or
+/// one group.
+#[tokio::test]
+async fn obs_004_top_lists_take_a_window() {
+    let (app, fake) = app();
+    let (status, _, v) = get(&app, "/api/v1/stats/top?kind=clients&from=-24h").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["items"][0]["count"], 9);
+    let (status, _, _) = get(
+        &app,
+        "/api/v1/stats/top?kind=blocked&from=-7d&to=-1d&limit=5",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, v) = get(&app, "/api/v1/stats/summary?from=-48h&to=-24h").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["activeClients"], 1);
+    let seen = fake.seen.lock().unwrap().clone();
+    for want in [
+        format!("top_range Clients {} {} 10", NOW - 86_400, NOW + 1),
+        format!("top_range Blocked {} {} 5", NOW - 7 * 86_400, NOW - 86_400),
+        format!(
+            "top_range Clients {} {} 1000",
+            NOW - 2 * 86_400,
+            NOW - 86_400
+        ),
+    ] {
+        assert!(seen.contains(&want), "{want} not in {seen:?}");
+    }
+    for bad in [
+        "/api/v1/stats/top?kind=clients&to=-1h",
+        "/api/v1/stats/top?kind=clients&from=-1h&hour=previous",
+        "/api/v1/stats/top?kind=clients&from=-1h&group=iot",
+        "/api/v1/stats/top?kind=domains&from=-1h&client=10.0.0.1",
+        "/api/v1/stats/top?kind=clients&from=-1h&to=-2h",
+        "/api/v1/stats/top?kind=clients&from=yesterday",
+    ] {
+        let (status, _, v) = get(&app, bad).await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_parameter")),
+            "{bad}"
+        );
+    }
 }
 
 #[tokio::test]

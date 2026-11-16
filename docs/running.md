@@ -1264,6 +1264,8 @@ mdns = true
 - Changing it needs a restart.
 
 ### Naming devices in the UI
+The Clients page's **Last hour** tab lists every address that asked in the last hour, busiest first, with every node's queries added up. It moves with the clock in 5-minute steps rather than starting again on the hour, so at 10:02 it still shows what asked at 9:30; it always covers the full hour (60 to 65 minutes back). Its counts are exact. A node that doesn't answer (one still on an older version during an upgrade) is named above the list, as its clients aren't in it. (The API: `GET /api/v1/stats/top?kind=clients&hour=rolling`, optionally with `group`.)
+
 Click a device's address anywhere (the dashboard's top clients, the query log, the live view, Clients) and choose **Name this device…** or **Add to group…**. The name shows everywhere at once, including on past queries: names are looked up when data is read, never written into the query log, so renaming relabels history and forgetting a device brings the address back.
 
 Devices named this way are stored in `state.db` (next to users and the audit log) and merged with `[[client]]` entries from the config files. The files win: a device defined in a file is read-only in the UI, and the UI can't reuse its name. If a stored device stops being valid (say its group was removed from the file), TelltaleDNS logs why and runs with the file config alone until it's fixed. Operators and admins can name devices; viewers see the names.
@@ -2354,11 +2356,27 @@ primary kept can't be pinned there.
   and day. That includes traffic by group, which is stored by group name, so renaming or
   reordering groups doesn't mislabel history. Minutes saved before this release have no group
   breakdown.
+- The top lists (Top domains, Top blocked, Top clients) and **Active clients** follow the time
+  range, by whole hours: each hour's busiest 100 are saved in `rollups.db` (400 days), and the
+  hours the range overlaps are added up, with this hour from memory. So **15 min** and **1 h**
+  show the hours they touch ("since 14:00"). Stored hours keep their busiest 100 only, so over
+  long ranges a name or device that was never in an hour's top 100 is missing, and Active
+  clients undercounts on networks with more than 100 devices an hour. With **Top lists for**
+  set to a group, the lists cover this hour only (groups' lists aren't saved).
 - The current and previous hour's top lists and latency are rebuilt at start from the query
   log, in the background within seconds. This needs the query log on, kept locally, at
   privacy level 0. Otherwise they start empty, and completed hours still come from the
   rollups.
 - Prometheus counters restart from zero, as Prometheus expects.
+
+**Top clients' colours.** Each device's bar in the dashboard's **Top clients** is split the way
+the status chart is: red for blocked, green for answered from the cache (stale and refreshed
+answers included), blue for forwarded to an upstream, and grey for the rest (local records,
+special names, refused queries). Hover over a bar for the numbers. They come from the same
+hourly top list as the bar's length, so a device that only just made the list (common on networks
+with more than 1,000 devices) shows the queries before it joined in grey. A node on an older
+version sends no split: in a cluster view its queries count in the grey. Each hour's split is
+saved with its top lists in `rollups.db`.
 
 An HTTP listener (default `0.0.0.0:9153`, set with `[telemetry.metrics] listen`) serves:
 
@@ -2402,7 +2420,7 @@ Counters are kept per thread and summed on scrape, so recording never slows a qu
 
 ### Traffic map
 **Monitor → Traffic map** answers "what is the network reaching right now?" in one picture, which suits a wall screen:
-- Each tile is a service, a site, or a name, sized by how often it was looked up this hour (or the last). Blue tiles were answered, red ones were blocked; a stronger colour means busier.
+- Each tile is a service, a site, or a name, sized by how often it was looked up this hour (or the previous clock hour). Blue tiles were answered, red ones were blocked; a stronger colour means busier.
 - **Services** folds names into the services of the [blocked-services](#blocked-services) catalog (all of YouTube's names make one YouTube tile) and shows other names by site. **Sites** folds each name into its base domain (`rr3.googlevideo.com` → `googlevideo.com`). **Names** shows them as devices asked.
 - It refreshes every 5 seconds. The five tiles that grew most since the previous refresh get an amber ring and a `+N`.
 - Point at a tile for the names behind it; select it to open them in the query log.
@@ -2410,7 +2428,7 @@ Counters are kept per thread and summed on scrape, so recording never slows a qu
 - Uptime monitors, phones checking their connection, and other background lookups can crowd it: [keep them out](#keeping-names-and-devices-out-of-the-log).
 
 ### Where does time go?
-The dashboard's **Where time goes** card (Advanced view) has two views:
+The dashboard's **Where time goes** section (Advanced view) has two views:
 - **Percentiles:** this hour's p50, p90, p99, and max per answer path and transport, and the time spent waiting for upstreams.
 - **Heatmap:** answers over time (minutes for 1 to 24 hours, hours for 7 days) in the bands of `telltale_query_duration_seconds` (50 µs to 5 s, and slower), darker where more answers landed; one path or several (**cache**, **upstream**, **local names**, **blocked & special**). The dashed line is the [latency objective](#service-level-objectives)'s threshold. Dots are real queries (exemplars): select one to open it in the query log. The ticks along the top are [change markers](#change-markers). **Table** lists the counts.
 - On the **Upstreams** page, **Answer time over time** shows the same for one upstream.
@@ -2620,7 +2638,8 @@ clients = ["192.168.1.10", "10.20.0.0/24"]               # addresses or networks
 
 ### Internal names
 Some names are your own network talking to itself: reverse lookups of private addresses (`20.1.168.192.in-addr.arpa`) and, in Kubernetes, the cluster's names (`postgres.db.svc.cluster.local`). A pod's search list alone turns one lookup of `api.github.com` into three failed ones under `cluster.local` first. These **internal names** get their own top list, so the dashboard's **Top domains** shows what your network reaches outside:
-- The dashboard's **Top domains** card switches between **Internet** and **Internal**. The NXDOMAIN list leaves internal names out too.
+- The dashboard's **Top domains** list switches between **Internet** and **Internal**. The NXDOMAIN list leaves internal names out too.
+- Long names stay on one line. A Kubernetes service shows as its name with the namespace beside it (`postgres` and `db` for `postgres.db.svc.cluster.local`); a pod's search-list variants of one name are a single row marked **search suffix ×3**; long hash labels are shortened and reverse lookups show the address. Tap a row's count for the full name (with a **Copy** button) and, for a merged row, each variant with its count.
 - They're still in the query log, the live view, a device's own top domains, the blocked list, exports, and Prometheus: nothing is hidden, only sorted.
 - Internal by default: reverse lookups of private and local addresses (the same ranges as `[special] private_ptr_nxdomain`), and `cluster.local` with `[kubernetes] enabled`. Add your own, each with its subdomains, per node (`[telemetry]` isn't shared):
   ```toml
@@ -2710,7 +2729,7 @@ flush_secs = 5                           # or whatever arrived in 5 s
 - Sinks are read at startup: restart after changing them.
 
 ## Device anomalies
-TelltaleDNS learns how each device usually behaves and points out when that changes (the **Anomalies** page, `GET /api/v1/analytics/anomalies`, and the metric `telltale_anomalies_total{kind}`):
+TelltaleDNS learns how each device usually behaves and points out when that changes (the **Anomalies** page, `GET /api/v1/analytics/anomalies`, and the metric `telltale_anomalies_total{kind}`, with `telltale_anomalies_muted_total{kind}` for findings a [mute](#muting-a-kind-of-finding-for-a-device) matched):
 - **Many more queries than usual** (`rate_spike`): this hour's queries against the device's usual count for this hour of the day.
 - **Unusual traffic to one domain** (`domain_volume`): queries to one registrable domain in an hour against that device's usual volume for it. A spike one domain explains is reported once, as this.
 - **Many new domains** (`drift`): registrable domains the device has never contacted, per day, against its usual number of new ones.
@@ -2734,7 +2753,7 @@ nxdomain_percent = 50          # ...that are at least this share of the device's
 The engine runs on the telemetry thread, never on the query path, keeps a few KiB per device (at most `max_clients`, 1024 by default), and saves its baselines to `<data_dir>/anomaly.json` hourly and on shutdown, so restarts don't restart the learning period. It's off when `[telemetry.qlog] privacy_level` is 1 or above (names and devices are hidden). Replaying the same queries always gives the same findings (fixed arithmetic on event timestamps, no machine learning).
 
 ### A device's rhythm
-**Clients → Seen this hour → Rhythm** shows how regularly a device asks for each domain it talks to most (the ones the engine tracks, up to 16): one row per domain, one column per gap between two queries, on a log scale from under a second to two hours and longer, darker where more of the gaps fall.
+**Clients → Last hour → Rhythm** shows how regularly a device asks for each domain it talks to most (the ones the engine tracks, up to 16): one row per domain, one column per gap between two queries, on a log scale from under a second to two hours and longer, darker where more of the gaps fall.
 - A timer is one dark, outlined cell with its period in words: a time-sync loop every 2.5 s, a phone-home every 5 min. A person browsing is a smear across many columns.
 - **Recent** (the default) weighs the last couple of hours (each hour's close halves what was there and adds that hour); **This hour** shows only this hour. **Table** lists the counts.
 - **usual** marks a rhythm the device already had while it was being learned; **new rhythm** one that has been regular for 4 hours or more and wasn't (the beacon detector reports it on the Anomalies page, where a beacon finding shows its own strip as it was when reported).
@@ -2742,7 +2761,7 @@ The engine runs on the telemetry thread, never on the query path, keeps a few Ki
 - It's measured, not judged: what alerts is still the beacon detector (30 s to an hour, low jitter, 4 hours). `GET /api/v1/clients/<ip>/rhythm` returns the bins and the words; the MCP tool `get_client_profile` includes the period and share per domain, and `find_anomalies` a beacon's bins. It needs the anomaly engine, so privacy level 0.
 
 ### A device's day
-**Clients → Seen this hour → Day** (or **See the day** on an anomaly finding, or **Day timeline** on a device's heatmap) shows one device over a window (6 hours to 7 days) as swimlanes, from the query log:
+**Clients → Last hour → Day** (or **See the day** on an anomaly finding, or **Day timeline** on a device's heatmap) shows one device over a window (6 hours to 7 days) as swimlanes, from the query log:
 - One lane per domain it talks to (the 30 busiest; the rest in **other**), one cell per bin (5 minutes over a day), darker for more queries. A red underline marks blocked answers, an amber tick answers slower than the latency objective. A **new** tag marks where a domain was first contacted.
 - Under the lanes, the device's p99 answer time per bin; above them, dots for first contacts (hollow), anomaly findings (amber), blocked bursts (red, 10 or more blocked in a bin), and a diamond when the device's [identity](#what-is-this-device) changed (it now looks like a different product or class: "now looks like Roku player (was unknown)"), and grey ticks for changes. Select a dot for the page behind it, a lane's name for that device's queries to it.
 - Point at a cell for its numbers. **Table** sums the bins into at most 24 columns. Nothing older than the query log keeps can be shown: that part is grey. If a read stops early, the drawer says so.
@@ -2754,6 +2773,23 @@ Once you've looked at a finding, acknowledge it: **Acknowledge** on its card (or
 - It needs the operator role (agents: `ops:anomalies`) and is recorded in the audit log as `anomaly.ack` or `anomaly.unack`.
 - **In a cluster** every node learns from the queries it answers, and the Anomalies page shows every node's findings (**Found by** names them; the same finding on two nodes is one entry). An acknowledgement made on any node is recorded by the primary and reaches every node within seconds, with the next configuration version; a node that was down gets it when it reconnects. It works in a GitOps-managed cluster too. On a replica that can't reach the primary, acknowledging fails with 503, like other changes.
 - Acknowledgements are kept for 60 days from the finding's window.
+
+### Muting a kind of finding for a device
+Acknowledging clears one finding; a device that does something harmless every hour makes a new one every hour (two TVs that look up the reverse name of every address on the network answer a few hundred NXDOMAINs a minute, which is a real storm to the detector and nothing to worry about). A **mute** says: this kind of finding, for this device, stops counting. On the Anomalies page choose **Mute for this device…** on a finding: the device and the kind are filled in, you pick how long (a day, a week, or until you remove it) and write why, and the preview says what it will do before you save. The list of mutes below the findings has **Remove**.
+```toml
+[[anomaly_mute]]
+name    = "lg-tv-ptr-sweep"
+devices = ["lg-tv-living", "lg-tv-bedroom"]   # device names ([[client]]), IPs or CIDRs
+# groups  = ["iot"]                           # or groups: their networks and the devices that name them
+kinds   = ["nxdomain_storm"]                  # rate_spike, domain_volume, drift, beacon, nxdomain_storm, dga, chatty_loop
+expires = "2026-12-31T00:00:00Z"              # optional: it stops applying (a finding created later counts again)
+note    = "hourly reverse-DNS sweep"
+```
+- **Recorded, not counted.** The finding is made as before and listed (turn on **Show muted** on the page, or `GET /api/v1/analytics/anomalies?muted=true`), marked with the mute that matched (`mutedBy`). It isn't counted in the sidebar badge, the `anomaly` alert rule, the health level, or `telltale_anomalies_total`; `telltale_anomalies_muted_total{kind}` counts it, so a mute never hides that something happened. The same kind of finding for any other device counts as usual.
+- **Decided when the finding is created.** Removing a mute or letting it expire doesn't change findings already recorded; ones made afterwards count. Muting is not blocking: nothing about the device's queries changes.
+- **Narrow on purpose.** A mute names at least one device or group and at least one kind: there is no mute for everyone or for every kind (to switch the detector off, `[telemetry.anomaly] enabled = false`). A MAC address isn't accepted: a device's address changes with its lease, and findings are made from addresses. Name the device (a `[[client]]` with an IP or network in its `match`) or give its IP. A group means its networks and the devices that name it.
+- **In a cluster** a mute is shared like groups and schedules: set on the primary, it reaches every node, including ones that were down. In a cluster whose configuration comes from Git the page and the API refuse the change (409 `gitops_managed`): add the `[[anomaly_mute]]` block to the repository (or the Helm values' `config:`) instead. On a single node that loads its configuration from Git, a mute made here is saved and the response includes the TOML to keep.
+- **Through the API:** `PUT /api/v1/anomaly-mutes/<name>` with the same fields (add `?dryRun=true` to preview), `DELETE` to remove, `GET /api/v1/config/entries?kind=anomaly_mute` to list. The operator role; agents need `config:write:anomalies` (a mute can hide a compromised device, so it isn't part of any other scope, though `config:write:*` includes it) and use `plan_set_anomaly_mute` / `plan_remove_anomaly_mute`. Every change is audited as `config.anomaly_mute`.
 
 ## Alerts
 TelltaleDNS can tell you when something needs attention: by email, on your phone through [ntfy](https://ntfy.sh) or Gotify, in a Slack-compatible channel (Slack, Mattermost, Discord's `/slack` webhook URL), or on any webhook.
@@ -2788,7 +2824,7 @@ Rules watch:
 | `list_failing` | a list fails to update | list |
 | `list_stale` | a URL list's content hasn't changed in `stale_after_days` (default 30; see [Lists that stopped changing](#lists-that-stopped-changing)) | list |
 | `servfail_rate` | SERVFAIL above `threshold` % (default 5) over 5 minutes, at least 50 queries | node |
-| `anomaly` | a [device anomaly](#device-anomalies) is found | finding |
+| `anomaly` | a [device anomaly](#device-anomalies) is found, unless it is acknowledged or [muted](#muting-a-kind-of-finding-for-a-device) | finding |
 | `update_available` | a newer TelltaleDNS build is out | version |
 | `sync_lag` | a replica is behind the primary's configuration (set `for_secs`, say 300, so a normal sync stays quiet) | node |
 | `new_device` | a device TelltaleDNS has never seen starts asking, on any node (quiet for the first day after a fresh start, while every device is new) | device |
@@ -2834,7 +2870,7 @@ Open `http://<server>:8053/` in a browser. On first start it asks for the setup 
 
 | Page | What it shows |
 |---|---|
-| Dashboard | queries, blocked %, cache hits, upstream latency, active clients; the [service level](#service-level-objectives) (each objective's last 30 days, error budget left, and burn rates); queries over time by status (15 min to 48 h); where time goes; top domains, blocked names, and clients with their groups (click through to the query log); upstream share and health. In a cluster, **Showing** switches between every node together, one node, or one site's nodes (remembered in your browser) |
+| Dashboard | queries, blocked %, cache hits, upstream latency, active clients, each with its change against the previous period; one chart whose hover gives the exact figures for each moment (totals and blocked, or the split by status; the Advanced view adds traffic by group and upstream exchanges), with a **Table** view and the change markers; the [service level](#service-level-objectives) (each objective's last 30 days, error budget left, and burn rates); where time goes; top domains, blocked names, and clients with their groups, one line each (click a name to open the query log, tap a count for the full name); upstream share and health. In a cluster, **Showing** switches between every node together, one node, or one site's nodes (remembered in your browser) |
 | Query log | search by name (contains, exact, subdomains, wildcard, regex), client, status, type, response code, slowness, and time; each row shows how long it took and how much of that was the upstream; **Why?** explains the decision. Filters live in the URL, so a search can be bookmarked or shared. **Live** streams new matching queries as they happen (the newest 500 stay on screen) |
 | Explain | why any name is or isn't blocked for any device |
 | Clients, Groups, Lists, Upstreams | devices seen and configured; groups and their lists; list download state and size; upstream health (Healthy, Benched, or Probing: the circuit breaker's closed, open, and half-open), traffic, failures by kind (timeouts, connection errors, SERVFAIL, ...), and latency |
@@ -2890,10 +2926,11 @@ listen = "0.0.0.0:8053"
 |---|---|
 | `GET /api/v1/system/info` | version, node, uptime, listeners, query log on/off, active filter snapshot |
 | `GET /api/v1/system/health` | `healthy`, `degraded`, or `severe`, with every reason, its node, and where to look ([Health](#health)) |
-| `GET /api/v1/analytics/anomalies?acknowledged=false` | device anomalies from every node, each with its `id` and who acknowledged it; `POST /api/v1/analytics/anomalies/acknowledge` (or `/unacknowledge`) with `{"ids": [...], "note": "..."}` marks them seen ([Acknowledging](#acknowledging-findings)) |
+| `GET /api/v1/analytics/anomalies?acknowledged=false` | device anomalies from every node, each with its `id` and who acknowledged it; `POST /api/v1/analytics/anomalies/acknowledge` (or `/unacknowledge`) with `{"ids": [...], "note": "..."}` marks them seen ([Acknowledging](#acknowledging-findings)); `muted=true` also lists findings an [anomaly mute](#muting-a-kind-of-finding-for-a-device) matched, each with `mutedBy` |
+| `PUT` / `DELETE /api/v1/anomaly-mutes/<name>` | mute kinds of finding for devices or groups, or remove the mute ([Muting](#muting-a-kind-of-finding-for-a-device)); listed by `GET /api/v1/config/entries?kind=anomaly_mute` |
 | `GET /api/v1/stats/summary?from=-24h` | queries, blocked %, cache hit %, NXDOMAIN/SERVFAIL, active clients, latency by path |
 | `GET /api/v1/stats/timeseries?step=minute&from=-1h` | counts per second or minute by status, type, and response code |
-| `GET /api/v1/stats/top?kind=blocked&limit=10` | top `domains`, `blocked`, `nxdomain`, or `clients` (add `client=IP` for one device's domains) |
+| `GET /api/v1/stats/top?kind=blocked&limit=10` | top `domains`, `blocked`, `nxdomain`, or `clients` (add `client=IP` for one device's domains; `hour=previous` for the last complete hour, and for clients `hour=rolling` for the last hour whatever the clock hour) |
 | `GET /api/v1/stats/latency?by=upstream` | percentiles by `path`, `qtype`, `upstream`, or `stage` |
 | `GET /api/v1/queries?name=ads&status=blocked&from=-1h` | the query log, newest first (filters: `name` + `match`, `client`, `status`, `qtype`, `rcode`, `upstream`, `minLatencyMs`, `from`, `to`) |
 | `GET /api/v1/audit?action=user.`, `GET /api/v1/audit/verify` | the audit log, newest first, and a check of its hash chain (admins) |
@@ -2942,7 +2979,7 @@ Give an AI assistant (or any automation) an **agent token** instead of your own 
 | `analytics:read` | statistics, top lists, latency, anomalies, explain, cluster status |
 | `querylog:read` | the query log and live tail: who asked for what |
 | `config:read` | lists, groups, devices, upstreams, local names, forwarded domains |
-| `config:write:clients`, `config:write:records`, `config:write:forwards`, `config:write:rules`, `config:write:lists`, `config:write:groups`, `config:write:upstreams`, `config:write:ratelimit` (`config:write:*` for all) | name and regroup devices; change local names; send domains to other servers; make quick rules; change lists, groups, and upstreams; change the rate limit |
+| `config:write:clients`, `config:write:records`, `config:write:forwards`, `config:write:rules`, `config:write:lists`, `config:write:groups`, `config:write:upstreams`, `config:write:ratelimit`, `config:write:anomalies` (`config:write:*` for all) | name and regroup devices; change local names; send domains to other servers; make quick rules; change lists, groups, and upstreams; change the rate limit; mute kinds of device anomaly |
 | `ops:pause`, `ops:cache`, `ops:anomalies`, `ops:maintenance`, `ops:annotate` | pause blocking; flush the cache; acknowledge device anomalies; start and end [node maintenance](#taking-a-node-down-for-maintenance) (at most 2 hours); leave [notes](#change-markers) on the time charts |
 | `ops:drill` | start and end [failover drills](#failover-drills) (at most 5 minutes; never a default scope) |
 | `cluster:admin` | promote a node to primary |
@@ -2982,7 +3019,8 @@ For agents that start their tools as a subprocess, use the stdio transport. It r
 | `health` | healthy, degraded, or severe, and why (start here when something seems wrong) |
 | `upstream_health` | upstream health (healthy, benched, probing), latency |
 | `list_effectiveness` | list sizes, updates, errors, hits, unique names, and overlap |
-| `find_anomalies` | device anomalies from every node with evidence (including NXDOMAIN storms and DGA-like names), optionally only the unacknowledged ones |
+| `find_anomalies` | device anomalies from every node with evidence (including NXDOMAIN storms and DGA-like names), optionally only the unacknowledged ones, or with `muted` also the ones a mute matched |
+| `list_anomaly_mutes` | the [anomaly mutes](#muting-a-kind-of-finding-for-a-device): devices or groups, kinds, end time, note (needs `config:read`) |
 | `acknowledge_anomalies` | marks findings as seen on every node, or takes it back with `undo` (needs `ops:anomalies`; changes at once, audited) |
 | `new_domains` | domains devices contacted for the first time, with DGA scores |
 | `vqlog` | any count, top list, percentile, or time series over the query log, in one query (needs `querylog:read`; below) |
@@ -3062,6 +3100,7 @@ Resources read the same REST routes with the agent's token, so scopes apply: a p
 | `plan_add_list` | add a filter list (URL or inline rules) | `config:write:lists` |
 | `plan_update_group` | change a group's networks, lists, blocked answer, priority, or schedules | `config:write:groups` (+ `config:read`) |
 | `plan_set_schedule` | make or change a weekly schedule (a bedtime, extra lists, blocked services) | `config:write:groups` |
+| `plan_set_anomaly_mute`, `plan_remove_anomaly_mute` | mute kinds of device anomaly for devices or groups (at least one device or group and one kind; give a note and prefer an end time), or remove the mute | `config:write:anomalies` (+ `config:read`) |
 | `plan_set_ratelimit` | change the per-client rate limit (queries per window, the action, exempt addresses, how clients are grouped) | `config:write:ratelimit` (+ `config:read`) |
 | `plan_update_upstreams` | change or add an upstream server or upstream group | `config:write:upstreams` (+ `config:read`) |
 | `apply_plan`, `discard_plan`, `list_plans` | make the planned change; drop a plan; list yours | the plan's scope |

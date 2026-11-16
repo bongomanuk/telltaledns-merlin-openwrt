@@ -405,6 +405,7 @@ impl ApiBackend {
                     count,
                     error_bound,
                     groups: Vec::new(),
+                    by_status: None,
                 })
                 .collect();
             v.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
@@ -1216,20 +1217,29 @@ impl Backend for ApiBackend {
             .map(|t| {
                 let (name, groups) = self.client_labels(kind, &t.key);
                 TopItem {
+                    key,
                     name,
                     groups,
-                    key: t.key,
-                    count: t.count,
-                    error_bound: t.error,
+                    count,
+                    error_bound,
+                    by_status,
                 }
             })
-            .collect())
+            .collect()
     }
 
     fn top(&self, kind: TopKind, h: Hour, limit: usize, client: Option<IpAddr>) -> Vec<TopItem> {
         let agg = self.src.pipeline.telemetry.aggregates();
+        let plain = |v: Vec<telltale_telemetry::topk::Top<String>>| {
+            v.into_iter().map(|t| (t, None)).collect::<Vec<_>>()
+        };
         let tops = match (kind, client) {
-            (TopKind::Domains, Some(ip)) => agg.top_client_domains(mapped(ip), limit),
+            (TopKind::Domains, Some(ip)) => plain(agg.top_client_domains(mapped(ip), limit)),
+            (TopKind::Clients, _) => agg
+                .top_clients(hour(h), None, limit)
+                .into_iter()
+                .map(|(t, s)| (t, Some(s)))
+                .collect(),
             (k, _) => {
                 let k = match k {
                     TopKind::Domains => telltale_telemetry::agg::TopKind::Domains,
@@ -1238,7 +1248,7 @@ impl Backend for ApiBackend {
                     TopKind::Clients => telltale_telemetry::agg::TopKind::Clients,
                     TopKind::Internal => telltale_telemetry::agg::TopKind::Internal,
                 };
-                agg.top_names(k, hour(h), limit)
+                plain(agg.top_names(k, hour(h), limit))
             }
         };
         drop(agg);
@@ -2056,6 +2066,7 @@ impl Backend for ApiBackend {
                     // REQ: OBS-031 — a beacon's strip at report time.
                     rhythm: rhythm.map(|b| b.iter().map(|&n| u32::from(n)).collect()),
                     informational: f.kind.informational(),
+                    muted_by: f.muted_by,
                 }
             })
             .collect();
@@ -2840,6 +2851,16 @@ impl Backend for ApiBackend {
                 &mut out,
             );
         }
+        // REQ: OBS-038
+        if want("anomaly_mute") {
+            rows(
+                "anomaly_mute",
+                &cfg.anomaly_mute,
+                &file.anomaly_mute,
+                &e.anomaly_mutes,
+                &mut out,
+            );
+        }
         if want("alert_rule") {
             rows(
                 "alert_rule",
@@ -3540,6 +3561,7 @@ fn kind_name(k: ManagedKind) -> &'static str {
         ManagedKind::AlertDestination => crate::managed::ALERT_DESTINATION,
         ManagedKind::AlertRule => crate::managed::ALERT_RULE,
         ManagedKind::Schedule => crate::managed::SCHEDULE,
+        ManagedKind::AnomalyMute => crate::managed::ANOMALY_MUTE,
         ManagedKind::RateLimit => crate::managed::RATELIMIT,
         ManagedKind::Exclusions => crate::managed::EXCLUSIONS,
         ManagedKind::Simulate => crate::managed::SIMULATE,
@@ -3867,6 +3889,13 @@ fn managed_impact(src: &Sources, kind: ManagedKind, name: &str, setting: bool) -
         (ManagedKind::Schedule, _) => {
             "Applies within 15 seconds to the groups that use it.".into()
         }
+        // REQ: OBS-038 — decided when a finding is created, so nothing already recorded changes.
+        (ManagedKind::AnomalyMute, true) => {
+            "Applies to findings created from now on, on every node: they are still recorded and listed (with Show muted), but not counted in the badge, the alerts or /metrics (telltale_anomalies_muted_total counts them). Findings already recorded stay as they are.".into()
+        }
+        (ManagedKind::AnomalyMute, false) => {
+            "Findings created from now on count again; ones already muted stay muted.".into()
+        }
         (ManagedKind::AlertDestination | ManagedKind::AlertRule, _) => {
             "Applies at the next alert check; firing alerts of a changed rule start over.".into()
         }
@@ -3930,6 +3959,7 @@ fn plan_managed(
             | ManagedKind::AlertDestination
             | ManagedKind::AlertRule
             | ManagedKind::Schedule
+            | ManagedKind::AnomalyMute
             | ManagedKind::KubernetesMap
     ) {
         return plan_override(src, state, w);
@@ -4563,6 +4593,13 @@ fn plan_override(
             before_cfg.schedule.iter().find(|u| u.name() == name),
             &mut entries.schedules,
         )?,
+        ManagedKind::AnomalyMute => override_step(
+            &name,
+            w.body.as_ref(),
+            file.anomaly_mute.iter().any(|u| u.name() == name),
+            before_cfg.anomaly_mute.iter().find(|u| u.name() == name),
+            &mut entries.anomaly_mutes,
+        )?,
         ManagedKind::KubernetesMap => {
             kubernetes_map_step(&name, w.body.as_ref(), &file, &before_cfg, &mut entries)?
         }
@@ -4583,6 +4620,7 @@ fn plan_override(
         ManagedKind::AlertDestination => named_json(&merged.alerts.destination, &name),
         ManagedKind::AlertRule => named_json(&merged.alerts.rule, &name),
         ManagedKind::Schedule => named_json(&merged.schedule, &name),
+        ManagedKind::AnomalyMute => named_json(&merged.anomaly_mute, &name),
         ManagedKind::KubernetesMap => merged
             .kubernetes
             .map
@@ -4608,6 +4646,35 @@ fn plan_override(
 }
 
 impl ApiBackend {
+    /// Top-list entries for the API: client names and groups (`client_labels`), and the
+    /// clients' split by status (REQ: OBS-004).
+    fn top_items(
+        &self,
+        kind: TopKind,
+        tops: Vec<(
+            telltale_telemetry::topk::Top<String>,
+            Option<telltale_telemetry::agg::ClientStatus>,
+        )>,
+    ) -> Vec<TopItem> {
+        tops.into_iter()
+            .map(|(t, s)| {
+                let (name, groups) = self.client_labels(kind, &t.key);
+                TopItem {
+                    key: t.key,
+                    name,
+                    groups,
+                    count: t.count,
+                    error_bound: t.error,
+                    by_status: s.map(|s| telltale_api::model::ClientStatusCounts {
+                        blocked: s.blocked,
+                        cached: s.cached,
+                        forwarded: s.forwarded,
+                    }),
+                }
+            })
+            .collect()
+    }
+
     /// For a client row of a top list: its device name and the groups that apply to it now.
     fn client_labels(&self, kind: TopKind, key: &str) -> (Option<String>, Vec<String>) {
         let Some(ip) = (kind == TopKind::Clients)
@@ -4988,6 +5055,7 @@ fn keep_in_git(
         ManagedKind::AlertDestination => "alerts.destination",
         ManagedKind::AlertRule => "alerts.rule",
         ManagedKind::Schedule => "schedule",
+        ManagedKind::AnomalyMute => "anomaly_mute",
         ManagedKind::RateLimit => "ratelimit",
         ManagedKind::Exclusions => "exclusions",
         ManagedKind::Simulate => "simulate",
@@ -5765,5 +5833,96 @@ mod top_client_name_tests {
         );
         assert_eq!(name(TopKind::Clients, "192.168.1.40"), None);
         assert_eq!(name(TopKind::Domains, "example.com"), None);
+    }
+}
+
+#[cfg(test)]
+mod top_range_tests {
+    use super::*;
+    use telltale_store::rollup::{Rollups, TopRow};
+    use telltale_telemetry::event::{Name, Record};
+
+    fn query(ts_s: u64, ip: [u8; 4]) -> Record {
+        Record::Query(
+            telltale_telemetry::QueryEvent {
+                ts_us: ts_s * 1_000_000,
+                client_ip: std::net::Ipv4Addr::from(ip).to_ipv6_mapped().octets(),
+                client_ref: 0,
+                group: 0,
+                qtype: 1,
+                qclass: 1,
+                rcode: Some(0),
+                status: telltale_telemetry::Status::Forwarded,
+                proto: telltale_telemetry::Proto::Udp,
+                flags: 0x8180,
+                rule: None,
+                upstream: 0,
+                attempts: 0,
+                t_total_us: 100,
+                t_upstream_us: 0,
+                resp_size: 64,
+                answers: 1,
+            },
+            Name::from_wire(b"\x07example\x03com\x00"),
+        )
+    }
+
+    fn row(key: &str, count: u64) -> TopRow {
+        TopRow {
+            key: key.into(),
+            count,
+            error: 0,
+        }
+    }
+
+    /// REQ: OBS-004 (ADR-160) — a top list over a window sums the stored hours it overlaps and
+    /// the current hour from memory, per key; an hour the window only touches counts whole,
+    /// and a window that ends before this hour leaves memory out. Active clients (the
+    /// summary's) is the same list's length.
+    #[test]
+    fn obs_004_top_lists_over_a_window_sum_stored_and_live_hours() {
+        let mut s = crate::http::tests::sources();
+        let db = Arc::new(Rollups::in_memory().unwrap());
+        s.rollups = Some(Arc::clone(&db));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let cur = now - now % 3600;
+        let (h0, h1) = (cur - 7200, cur - 3600);
+        db.put_hour_extras(
+            h0,
+            &[("clients", vec![row("10.0.0.1", 5), row("10.0.0.3", 4)])],
+            &[],
+        )
+        .unwrap();
+        db.put_hour_extras(h1, &[("clients", vec![row("10.0.0.3", 2)])], &[])
+            .unwrap();
+        {
+            let mut agg = s.pipeline.telemetry.aggregates();
+            for ip in [[10, 0, 0, 1], [10, 0, 0, 1], [10, 0, 0, 1], [10, 0, 0, 2]] {
+                agg.record(&query(cur + 1, ip));
+            }
+        }
+        let api = ApiBackend { src: Arc::new(s) };
+        let list = |from, to| -> Vec<(String, u64)> {
+            api.top_range(TopKind::Clients, from, to, 10)
+                .into_iter()
+                .map(|t| (t.key, t.count))
+                .collect()
+        };
+        let pairs = |v: &[(&str, u64)]| -> Vec<(String, u64)> {
+            v.iter().map(|(k, c)| ((*k).to_owned(), *c)).collect()
+        };
+        assert_eq!(
+            list(h0 + 600, now + 1),
+            pairs(&[("10.0.0.1", 8), ("10.0.0.3", 6), ("10.0.0.2", 1)])
+        );
+        assert_eq!(
+            list(h1 + 5, now + 1),
+            pairs(&[("10.0.0.1", 3), ("10.0.0.3", 2), ("10.0.0.2", 1)])
+        );
+        assert_eq!(list(h0, h1), pairs(&[("10.0.0.1", 5), ("10.0.0.3", 4)]));
+        assert_eq!(api.top_range(TopKind::Clients, h0, now + 1, 2).len(), 2);
     }
 }

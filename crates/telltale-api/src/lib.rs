@@ -148,6 +148,12 @@ pub trait Backend: Send + Sync + 'static {
     }
     /// Heaviest items, heaviest first; `client` narrows `domains` to one client.
     fn top(&self, kind: TopKind, hour: Hour, limit: usize, client: Option<IpAddr>) -> Vec<TopItem>;
+    /// REQ: OBS-004 (ADR-160) — heaviest items over the hours `[from_s, to_s)` overlaps: the
+    /// stored hours plus the ones still in memory, summed per key.
+    fn top_range(&self, kind: TopKind, from_s: u64, to_s: u64, limit: usize) -> Vec<TopItem> {
+        let _ = (kind, from_s, to_s, limit);
+        Vec::new()
+    }
     /// Top items among one group's queries (ADR-050).
     fn top_in_group(
         &self,
@@ -159,6 +165,19 @@ pub trait Backend: Send + Sync + 'static {
         let _ = (kind, hour, limit, group);
         Err(Problem::unavailable(
             "per-group lists aren't available on this node",
+        ))
+    }
+    /// REQ: API-005 (ADR-158) — the clients with the most queries in the last hour (60–65
+    /// minutes, whole 5-minute slots), most first, exact counts; with `group`, only clients
+    /// whose settings come from it (their first group).
+    fn top_clients_rolling(
+        &self,
+        limit: usize,
+        group: Option<&str>,
+    ) -> Result<Vec<TopItem>, Problem> {
+        let _ = (limit, group);
+        Err(Problem::unavailable(
+            "the last-hour client list isn't available on this node",
         ))
     }
     fn latency(&self, by: LatencyBy, hour: Hour) -> Vec<LatencyRow>;
@@ -786,6 +805,9 @@ pub enum ManagedKind {
     AlertRule,
     /// REQ: FLT-010 (T9.7) — a schedule (`/schedules/{name}`).
     Schedule,
+    /// REQ: OBS-038 (ADR-161) — an anomaly mute (`/anomaly-mutes/{name}`): kinds of finding that
+    /// stop counting for some devices or groups.
+    AnomalyMute,
     /// REQ: DNS-014 (review 01 q1) — the per-client rate limit, `[ratelimit]` (`/ratelimit/default`):
     /// one entry, named `default`, that replaces the files' section until it's reverted.
     RateLimit,
@@ -1128,11 +1150,11 @@ async fn fallback(
         config_api::put_forward, config_api::delete_forward
     ),
     components(schemas(
-        Problem, problem::Code, SystemInfo, MaskedClients, ClusterInfo, ClusterPeer, ClusterView, ClusterNode, ClusterEvent, ClusterCheck, ClusterConflict, ClusterFailover, ClusterSource, HostReport, HostInfo, HostPoint, model::RuleInput, model::RuleInfo, model::CacheNodeStats, model::CacheEntry, model::CacheLookup, model::CacheFlushRequest, model::CacheFlushNode, model::CacheFlushResult, model::CacheSettings, model::CacheWarmStart, model::CachePoint, model::CacheSizing, model::CacheSizingStep, model::CacheMakeup, model::CacheTopEntry, model::CacheNodeEntries, model::BlockingRequest, model::BlockingNode, model::PauseInfo, model::ConfigEntry, plans::Plan, model::ServiceInfo, PromoteRequest, model::PromotePlan, Summary, TimeBucket, TopItem, LatencyRow, QueryPage, QueryRow,
+        Problem, problem::Code, SystemInfo, MaskedClients, ClusterInfo, ClusterPeer, ClusterView, ClusterNode, ClusterEvent, ClusterCheck, ClusterConflict, ClusterFailover, ClusterSource, HostReport, HostInfo, HostPoint, model::RuleInput, model::RuleInfo, model::CacheNodeStats, model::CacheEntry, model::CacheLookup, model::CacheFlushRequest, model::CacheFlushNode, model::CacheFlushResult, model::CacheSettings, model::CacheWarmStart, model::CachePoint, model::CacheSizing, model::CacheSizingStep, model::CacheMakeup, model::CacheTopEntry, model::CacheNodeEntries, model::BlockingRequest, model::BlockingNode, model::PauseInfo, model::ConfigEntry, plans::Plan, model::ServiceInfo, PromoteRequest, model::PromotePlan, Summary, TimeBucket, TopItem, model::ClientStatusCounts, LatencyRow, QueryPage, QueryRow,
         TailDropped,
         ScanStats, Explanation, ExplainClient, ExplainBlock, ExplainFilter, ExplainRule,
         ExplainLine, ExplainRoute, ListInfo, GroupInfo, ClientInfo, ClientInput, ClientChange, LocalName, RecordInput, RecordsInput, ForwardInfo, ForwardInput, ConfigChange, AnomalyFinding, model::AnomalyAckInfo, model::AnomalyAckRequest, model::AnomalyAckResult, model::Annotation, model::AnnotationPage, model::NoteRequest, model::Health, model::HealthReason, model::NodeMaintenance, model::MaintenanceRequest, model::MaintenanceResult, model::DrillAll, model::DrillTargets, model::DrillRequest, model::DrillMode, model::DrillCheck, model::DrillTargetDevice, model::DrillStart, model::ActiveDrill, model::DrillDevice, model::DrillNodeCount, model::DrillSummary, model::DrillReport, model::DrillPage, model::AffinityNode, model::AffinityRow, model::AffinityPage, model::GuardReadings, model::ClusterPin, model::ClusterRollout, model::RolloutFailure, model::RolloutNode, model::RolloutStatus, model::ClusterVersion, model::ClusterVersions, model::PinRequest, model::RolloutAction, model::NodeRemoval, model::DeviceIdentity, model::IdentityEvidence, model::WorkloadEvidence, model::ExplainWorkload, model::WorkloadInfo, model::WorkloadPod, model::WorkloadPage, model::KubernetesStatus, model::MatchedDomain, model::IdentityRunnerUp, model::Simulation, model::SimulatedClass, model::SimulatedName, model::SimulatedDevice, model::SimulatedGroup, model::SimulateRequest, model::SloStatus, attribution::SloAttribution, attribution::AttributionBudget, attribution::AttributionPoint, attribution::AttributionRow, attribution::AttributionCoverage, heatmap::Heatmap, flow::QueryFlow, flow::FlowNode, flow::FlowLink, compare::NodeCompare, compare::NodeNumbers, compare::NodeSeries, compare::NodeFinding, rhythm_api::ClientRhythm, rhythm_api::RhythmDomain, timeline::DeviceTimeline, timeline::TimelineLane, timeline::TimelineEvent, latency_heatmap::LatencyHeatmap, latency_heatmap::LatencyExemplar, latency_heatmap::LatencyExemplars, model::SloObjective, model::SloBurn, model::ProbeResult, model::UpstreamChecks, model::UpstreamQuality, model::EdeCount, model::UpstreamDisagreement, model::ShadowListStats, model::NameCount, model::OverblockSuspect, NewDomain, VqlogResult, VqlogCost, ZoneInfo, model::RewriteInfo, model::AlertsStatus, model::FiringAlert, model::AlertDelivery, model::AlertTest, model::CheckResult, ListShare, DhcpLease, UpstreamInfo, Step, TopKind,
-        Hour, LatencyBy, NameMatch, auth::Role, auth::Scope, auth::routes::Me,
+        Hour, model::TopHour, LatencyBy, NameMatch, auth::Role, auth::Scope, auth::routes::Me,
         auth::routes::AuthStatus, auth::routes::SetupRequest, auth::routes::LoginRequest,
         auth::routes::LoginResponse, auth::routes::PasswordChange, auth::routes::TotpSetup,
         auth::routes::TotpCode, auth::routes::PasswordConfirm, auth::routes::RecoveryCodes,
@@ -1468,8 +1490,9 @@ async fn cluster(State(b): State<Shared>) -> Result<Json<ClusterView>, Problem> 
 /// Totals over a time range.
 ///
 /// Queries, blocked (count and percent), cache hits, forwarded, NXDOMAIN and SERVFAIL counts
-/// over the range (per-minute data up to 48 hours back, hourly rollups beyond), plus this
-/// hour's active clients and latency percentiles by answer path. Example:
+/// over the range (per-minute data up to 48 hours back, hourly rollups beyond), the devices
+/// seen in the hours the range overlaps (active clients), and this hour's latency
+/// percentiles by answer path. Example:
 /// `GET /api/v1/stats/summary?from=-24h` or `?from=-30d`.
 #[utoipa::path(get, path = "/api/v1/stats/summary", tag = "stats", params(SummaryParams),
     responses((status = 200, body = Summary, description = "The result."), (status = 400, body = Problem, description = "Invalid request: problem+json says which parameter and how to fix it.")))]
@@ -1516,7 +1539,8 @@ async fn stats_summary(
     let bk = Arc::clone(&b);
     let (clients, latency) = blocking(move || {
         Ok((
-            bk.top(TopKind::Clients, Hour::Current, 1000, None).len() as u64,
+            // REQ: OBS-004 (ADR-160) — devices seen in the range's hours.
+            bk.top_range(TopKind::Clients, from, to, 1000).len() as u64,
             bk.latency(LatencyBy::Path, Hour::Current),
         ))
     })
@@ -1644,6 +1668,11 @@ async fn queries_stream(
 /// Ranked by a Space-Saving sketch per hour: `count` is an upper bound and `errorBound` how
 /// far it may be over. Example: `GET /api/v1/stats/top?kind=blocked&limit=10`. With
 /// `kind=domains&client=192.168.1.20`, one client's top domains (recently active clients only).
+/// With `kind=clients&hour=rolling`, the clients of the last hour (60–65 minutes, whole
+/// 5-minute slots) rather than of the clock hour, with exact counts (`errorBound` 0); with
+/// `group`, the clients whose settings come from that group.
+/// With `from=-24h`, the hours the window overlaps, summed per key (stored hours and the
+/// current one).
 #[utoipa::path(get, path = "/api/v1/stats/top", tag = "stats", params(TopParams),
     responses((status = 200, body = Items<TopItem>, description = "The result."), (status = 400, body = Problem, description = "Invalid request: problem+json says which parameter and how to fix it.")))]
 async fn stats_top(
@@ -1672,11 +1701,46 @@ async fn stats_top(
             ));
         }
     }
+    // REQ: OBS-004 (ADR-160) — a window of hours.
+    if p.to.is_some() && p.from.is_none() {
+        return Err(Problem::invalid("`to` needs `from`"));
+    }
+    let window = match p.from.as_deref() {
+        None => None,
+        Some(f) => {
+            if p.hour.is_some() || client.is_some() || p.group.is_some() {
+                return Err(Problem::invalid(
+                    "`from` doesn't combine with `hour`, `client`, or `group`",
+                )
+                .hint(
+                    "Group and per-device lists are kept for the current and previous hour only.",
+                ));
+            }
+            let now = b.now_unix_seconds();
+            let from = time_param(Some(f), 0, now, "from")?;
+            let to = time_param(p.to.as_deref(), now + 1, now, "to")?;
+            if from >= to {
+                return Err(Problem::invalid("`from` must be before `to`"));
+            }
+            Some((from, to))
+        }
+    };
+    // REQ: API-005 (ADR-158) — the rolling hour is kept for clients only. `group` works with
+    // it, so a group-restricted agent (AGT-004 adds its group) can read it too.
+    let hour = p.hour.unwrap_or_default();
+    if hour == model::TopHour::Rolling && p.kind != TopKind::Clients {
+        return Err(
+            Problem::invalid("`hour=rolling` only applies to kind=clients")
+                .hint("Use hour=current or hour=previous for the other lists."),
+        );
+    }
     let bk = Arc::clone(&b);
-    let (kind, hour, group) = (p.kind, p.hour.unwrap_or_default(), p.group);
-    let items = blocking(move || match group {
-        Some(g) => bk.top_in_group(kind, hour, limit, &g),
-        None => Ok(bk.top(kind, hour, limit, client)),
+    let (kind, group) = (p.kind, p.group);
+    let items = blocking(move || match (window, hour.hour(), group) {
+        (Some((from, to)), _, _) => Ok(bk.top_range(kind, from, to, limit)),
+        (None, None, g) => bk.top_clients_rolling(limit, g.as_deref()),
+        (None, Some(h), Some(g)) => bk.top_in_group(kind, h, limit, &g),
+        (None, Some(h), None) => Ok(bk.top(kind, h, limit, client)),
     })
     .await?;
     Ok(Json(Items {
@@ -1847,7 +1911,8 @@ async fn clients(State(b): State<Shared>, ext: axum::http::Extensions) -> impl I
 /// Newest first. In a cluster every node's findings are included (each node learns from the
 /// queries it answers), with `nodes` saying which found each. Each has a stable `id` for
 /// acknowledging it (OBS-014); `acknowledged` says who did and when, and `acknowledged=false`
-/// returns only the ones nobody has.
+/// returns only the ones nobody has. A finding an anomaly mute matched (OBS-038) is left out
+/// unless `muted=true`; it then carries `mutedBy`, the mute's name.
 #[utoipa::path(get, path = "/api/v1/analytics/anomalies", tag = "stats",
     params(AnomalyParams),
     responses((status = 200, body = Items<AnomalyFinding>, description = "The result."), (status = 400, body = Problem, description = "Invalid request: problem+json says which parameter and how to fix it.")))]
@@ -1871,6 +1936,10 @@ async fn anomalies(
     .map_err(|e| Problem::internal(format!("anomalies: {e}")))?;
     if let Some(w) = want {
         items.retain(|f| f.acknowledged.is_some() == w);
+    }
+    // REQ: OBS-038 — muted findings are kept, but only listed when asked for.
+    if !p.muted.unwrap_or(false) {
+        items.retain(|f| f.muted_by.is_none());
     }
     Ok(Json(Items {
         items,

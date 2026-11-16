@@ -511,7 +511,9 @@ impl Cache {
     pub fn top(&self, by: TopBy, limit: usize, now: Instant) -> (Vec<TopEntry>, Makeup) {
         use std::collections::BinaryHeap;
         // The ranking heap is sized from the limit: the API allows 200, but this is public, so it
-        // doesn't trust the caller (CodeQL rust/uncontrolled-allocation-size).
+        // doesn't trust the caller. (CodeQL's `rust/uncontrolled-allocation-size` still reports
+        // the allocation below, with a plain comparison as well as with `min`: it doesn't model
+        // either as a bound. The alert is dismissed as a false positive; the test proves the bound.)
         let limit = limit.min(MAX_TOP);
         let mut makeup = Makeup::default();
         let mut heap: BinaryHeap<std::cmp::Reverse<Ranked>> = BinaryHeap::with_capacity(limit + 1);

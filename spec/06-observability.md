@@ -36,13 +36,13 @@ Upstream transactions additionally emit `UpstreamEvent { ts, upstream_id, latenc
 - One **aggregator thread** drains all rings every ≤ 50 ms (or at a ring high-watermark). It:
   1. Interns qnames and client keys (FxHash map; the dictionary is per hour-segment).
   2. Updates the **live window**: per-second buckets for 15 min and per-minute buckets for 48 h (counts by status/qtype/rcode/proto/upstream/group).
-  3. Updates **Space-Saving top-K** (K=1000, reporting top 100) for domains, blocked domains, clients, NXDOMAIN domains, and per-client domains (bounded LRU of clients). **Internal names** (OBS-037, ADR-152: private reverse lookups, the cluster domain, `[telemetry] internal_names`) go to their own `internal` list instead of the domains and NXDOMAIN lists; the other lists keep them.
+  3. Updates **Space-Saving top-K** (K=1000, reporting top 100) for domains, blocked domains, clients, NXDOMAIN domains, and per-client domains (bounded LRU of clients). Each client entry (overall and per group) also counts its blocked, cached (stale and refreshed included), and forwarded queries since it entered the list (ADR-159). **Internal names** (OBS-037, ADR-152: private reverse lookups, the cluster domain, `[telemetry] internal_names`) go to their own `internal` list instead of the domains and NXDOMAIN lists; the other lists keep them.
   4. Records **HDR histograms** (1 µs–60 s, 3 significant digits) for total latency by `{status-class, proto}`, per upstream, per client (top 256 clients + "other"), per qtype, and per stage.
   5. Appends to the query-log store (§4).
   6. Fans out to exporters (§5) and live-tail subscribers (§6), each through its own bounded queue (a drop on a slow consumer is counted per consumer).
 
 ## 3. Rollups
-- Minute rollups are flushed to SQLite `rollup_minute` (kept 7 days), then aggregated into `rollup_hour` (kept 400 days) and `rollup_day` (kept forever; tiny). Top-K and serialized HDR histograms are stored per hour.
+- Minute rollups are flushed to SQLite `rollup_minute` (kept 7 days), then aggregated into `rollup_hour` (kept 400 days) and `rollup_day` (kept forever; tiny). Top-K and serialized HDR histograms are stored per hour. `GET /stats/top?from=` sums the stored hours' top-K a window overlaps with the hours still in memory (ADR-160); the summary's active clients count that list's devices.
 - All dashboard queries beyond 15 minutes read rollups, never raw logs. So "last 30 days" charts render in < 100 ms on a Pi.
 - REQ: OBS-029 (ADR-129) — the heatmap reads the same: the network's slots from the hour buckets (400 days) or the minute buckets (7 days, summed into 15-minute slots), a device's or a name's hours from `hour_top` (`clients`, `domains`, `blocked`) and memory's current lists. `GET /api/v1/stats/heatmap` (`starts`/`values` arrays, `covered` for a key; federated, `Read::HeatmapKey`), MCP `activity_heatmap`. A 7-day minute read and its sum take under 150 ms on the build VM.
 

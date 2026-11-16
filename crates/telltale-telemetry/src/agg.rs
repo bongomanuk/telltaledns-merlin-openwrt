@@ -543,6 +543,27 @@ pub struct Percentiles {
     pub max: u64,
 }
 
+/// REQ: OBS-004 — how a top-list client's queries were answered, since it entered the list
+/// (`count - error` of them; the statuses that are none of these make up the rest). Cached
+/// takes in stale and refreshed answers, like the dashboard's status chart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientStatus {
+    pub blocked: u64,
+    pub cached: u64,
+    pub forwarded: u64,
+}
+
+impl ClientStatus {
+    fn add(&mut self, s: Status) {
+        match s {
+            Status::Blocked => self.blocked += 1,
+            Status::Cached | Status::Stale | Status::Refreshed => self.cached += 1,
+            Status::Forwarded => self.forwarded += 1,
+            _ => {}
+        }
+    }
+}
+
 /// Client → (last seen, its heaviest domains).
 type ClientDomains = HashMap<[u8; 16], (u64, SpaceSaving<Box<[u8]>>)>;
 
@@ -556,7 +577,7 @@ struct Hour {
     nxdomain: SpaceSaving<Box<[u8]>>,
     /// REQ: OBS-037 — internal names, kept apart from `domains` and `nxdomain`.
     internal: SpaceSaving<Box<[u8]>>,
-    clients: SpaceSaving<[u8; 16]>,
+    clients: SpaceSaving<[u8; 16], ClientStatus>,
     /// Client → (last seen, its domains).
     per_client: ClientDomains,
     total: Vec<Hist>,
@@ -620,7 +641,7 @@ impl BadTop {
 struct GroupTops {
     domains: SpaceSaving<Box<[u8]>>,
     blocked: SpaceSaving<Box<[u8]>>,
-    clients: SpaceSaving<[u8; 16]>,
+    clients: SpaceSaving<[u8; 16], ClientStatus>,
     /// REQ: OBS-037 — the group's internal names.
     internal: SpaceSaving<Box<[u8]>>,
 }
@@ -692,7 +713,7 @@ impl Hour {
             blocked: SpaceSaving::new(TOP_CAPACITY),
             nxdomain: SpaceSaving::new(TOP_CAPACITY),
             internal: SpaceSaving::new(TOP_CAPACITY),
-            clients: SpaceSaving::new(TOP_CAPACITY),
+            clients: SpaceSaving::with_payload(TOP_CAPACITY),
             per_client: HashMap::new(),
             total: vec![Hist::default(); Path::ALL.len() * Proto::ALL.len()],
             qtype: vec![Hist::default(); N_QTYPE],
@@ -750,7 +771,8 @@ impl Hour {
             }
             self.per_client_domain(e.client_ip, wire, seq);
         }
-        self.clients.offer(&e.client_ip, |ip| *ip);
+        self.clients
+            .offer_with(&e.client_ip, |ip| *ip, |c| c.add(e.status));
         self.group_add(e, wire, internal);
         if e.status.answered() {
             let us = u64::from(e.t_total_us);
@@ -778,7 +800,7 @@ impl Hour {
             Box::new(GroupTops {
                 domains: SpaceSaving::new(GROUP_TOP_CAPACITY),
                 blocked: SpaceSaving::new(GROUP_TOP_CAPACITY),
-                clients: SpaceSaving::new(GROUP_TOP_CAPACITY),
+                clients: SpaceSaving::with_payload(GROUP_TOP_CAPACITY),
                 internal: SpaceSaving::new(GROUP_TOP_CAPACITY),
             })
         });
@@ -792,7 +814,8 @@ impl Hour {
                 t.blocked.offer(wire, boxed);
             }
         }
-        t.clients.offer(&e.client_ip, |ip| *ip);
+        t.clients
+            .offer_with(&e.client_ip, |ip| *ip, |c| c.add(e.status));
     }
 
     fn per_client_domain(&mut self, client: [u8; 16], wire: &[u8], seq: u64) {
@@ -839,6 +862,8 @@ pub struct Aggregates {
     pub exported: Exported,
     /// Per-client counts in 10-minute windows (OPS-003).
     recent: RecentClients,
+    /// REQ: API-005 (ADR-158) — per-client counts over the last hour, in 5-minute slots.
+    last_hour: crate::last_hour::LastHour,
     /// REQ: OBS-016 (T11.1) — answers slower than this (µs) count as `slow` in the time
     /// buckets: the latency objective's threshold (`[slo] latency_ms`).
     pub slo_latency_us: u64,
@@ -886,6 +911,7 @@ impl Aggregates {
             latest_s: 0,
             exported: Exported::default(),
             recent: RecentClients::default(),
+            last_hour: crate::last_hour::LastHour::default(),
             slo_latency_us: DEFAULT_SLO_LATENCY_US,
             latency_hist: true,
             internal: crate::internal::InternalNames::default(),
@@ -1007,6 +1033,7 @@ impl Aggregates {
             Record::Query(e, name) => {
                 self.exported.add_query(e);
                 self.recent.add(e.client_ip, ts_s);
+                self.last_hour.add(e.client_ip, ts_s);
                 self.count_workload(e, ts_s);
                 // REQ: CLU-014 — one hash update; the window only while a drill runs.
                 self.seen.add(e.client_ip, ts_s);
@@ -1042,14 +1069,19 @@ impl Aggregates {
     /// the query log) into the current or previous hour's top lists and latency histograms, by
     /// its own timestamp, in any order. The time windows aren't touched (the rollups hold those
     /// minutes), nor are the Prometheus counters or the masked-client windows (they count this
-    /// process). Queries older than the previous hour are ignored.
+    /// process). Queries older than the previous hour are ignored. Queries in the last hour also
+    /// count in the clients' last-hour list (ADR-158).
     pub fn replay_hours(&mut self, now_s: u64, e: &QueryEvent, name: &Name) {
         let now_hour = now_s / 3600;
         if now_hour > self.current.index {
             let done = std::mem::replace(&mut self.current, Hour::new(now_hour));
             self.previous = (done.index + 1 == now_hour).then_some(done);
         }
-        let hour = e.ts_us / 1_000_000 / 3600;
+        let ts_s = e.ts_us / 1_000_000;
+        if ts_s <= now_s && ts_s + crate::last_hour::WINDOW_S > now_s {
+            self.last_hour.add_replayed(e.client_ip, ts_s);
+        }
+        let hour = ts_s / 3600;
         self.seq += 1;
         let slow_us = self.slo_latency_us;
         // A name the query log keeps hashed (privacy 1+) can't be told apart: it counts as a
@@ -1156,6 +1188,39 @@ impl Aggregates {
         }
     }
 
+    /// REQ: OBS-004 — the heaviest clients, heaviest first, each with how its queries were
+    /// answered; with `group`, among that group's queries (ADR-050).
+    pub fn top_clients(
+        &self,
+        sel: HourSel,
+        group: Option<u16>,
+        n: usize,
+    ) -> Vec<(Top<String>, ClientStatus)> {
+        let Some(h) = self.hour(sel) else {
+            return Vec::new();
+        };
+        let list = match group {
+            None => &h.clients,
+            Some(g) => match h.per_group.get(usize::from(g)).and_then(|t| t.as_deref()) {
+                Some(t) => &t.clients,
+                None => return Vec::new(),
+            },
+        };
+        list.top_with(n)
+            .into_iter()
+            .map(|(x, s)| {
+                (
+                    Top {
+                        key: client_text(x.key),
+                        count: x.count,
+                        error: x.error,
+                    },
+                    s,
+                )
+            })
+            .collect()
+    }
+
     /// REQ: OBS-027 — the selected hour's heaviest bad-answer names (presentation form) or
     /// clients, heaviest first.
     pub fn bad_top(&self, which: BadTop, sel: HourSel, n: usize) -> Vec<Top<String>> {
@@ -1250,6 +1315,13 @@ impl Aggregates {
     /// Who sent the queries in the latest 10-minute window (REQ: OPS-003).
     pub fn recent_clients(&self, now_s: u64) -> Option<ClientWindow> {
         self.recent.latest(now_s)
+    }
+
+    /// REQ: API-005 (ADR-158) — every client's exact query count over the last hour (the
+    /// 60–65 minutes up to `now_s`), unsorted: rank them with [`crate::last_hour::rank`] once
+    /// the lock is released.
+    pub fn last_hour_counts(&self, now_s: u64) -> Vec<([u8; 16], u64)> {
+        self.last_hour.counts(now_s)
     }
 
     /// Start (Unix seconds) of the last complete hour kept in memory, if any.

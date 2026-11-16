@@ -50,6 +50,18 @@ enum Read {
         limit: usize,
         group: String,
     },
+    /// REQ: API-005 (ADR-158) — the clients of the last hour (older peers don't know it).
+    TopClientsRolling {
+        limit: usize,
+        group: Option<String>,
+    },
+    /// REQ: OBS-004 (ADR-160) — a top list over a window.
+    TopRange {
+        kind: TopKind,
+        from_s: u64,
+        to_s: u64,
+        limit: usize,
+    },
     Latency {
         by: LatencyBy,
         hour: Hour,
@@ -185,6 +197,16 @@ fn answer(b: &dyn Backend, r: Read) -> Result<Vec<u8>, String> {
             limit,
             group,
         } => serde_json::to_vec(&b.top_in_group(kind, hour, limit, &group).map_err(text)?),
+        Read::TopClientsRolling { limit, group } => serde_json::to_vec(
+            &b.top_clients_rolling(limit, group.as_deref())
+                .map_err(text)?,
+        ),
+        Read::TopRange {
+            kind,
+            from_s,
+            to_s,
+            limit,
+        } => serde_json::to_vec(&b.top_range(kind, from_s, to_s, limit)),
         Read::Latency { by, hour } => serde_json::to_vec(&b.latency(by, hour)),
         Read::LatencyHist { by, hour } => serde_json::to_vec(&b.latency_hists(by, hour)),
         Read::NewDevices { since_s } => serde_json::to_vec(&b.new_devices(since_s)),
@@ -423,12 +445,16 @@ fn merge_findings(parts: Vec<(String, Vec<AnomalyFinding>)>) -> Vec<AnomalyFindi
                 if !seen.nodes.contains(&label) {
                     seen.nodes.push(label.clone());
                 }
+                // REQ: OBS-038 — muted if any node's mute matched (the mutes are shared, so
+                // nodes agree unless one hasn't applied a change yet).
+                let muted_by = seen.muted_by.clone().or_else(|| f.muted_by.clone());
                 // The node that saw the most of it tells the story.
                 if f.observed > seen.observed {
                     let nodes = std::mem::take(&mut seen.nodes);
                     *seen = f;
                     seen.nodes = nodes;
                 }
+                seen.muted_by = muted_by;
             } else {
                 f.nodes = vec![label.clone()];
                 by_id.insert(f.id.clone(), f);
@@ -1294,6 +1320,20 @@ impl Backend for Federated {
         }
         federation::merge_top(parts, limit)
     }
+    // REQ: OBS-004 (ADR-160) — each node sums its own hours; the lists merge by key. A peer
+    // one version behind doesn't know the read and is listed in `missingNodes`.
+    fn top_range(&self, kind: TopKind, from_s: u64, to_s: u64, limit: usize) -> Vec<TopItem> {
+        let mut parts: Vec<Vec<TopItem>> = self.everyone(|| Read::TopRange {
+            kind,
+            from_s,
+            to_s,
+            limit,
+        });
+        if self.with_me() {
+            parts.push(self.local.top_range(kind, from_s, to_s, limit));
+        }
+        federation::merge_top(parts, limit)
+    }
     fn top_in_group(
         &self,
         kind: TopKind,
@@ -1311,6 +1351,27 @@ impl Backend for Federated {
             hour,
             limit,
             group: group.to_owned(),
+        });
+        parts.push(own);
+        Ok(federation::merge_top(parts, limit))
+    }
+    // REQ: API-005 (ADR-158) — exact counts that add up per client. Each node sends every
+    // client it has (not just its top `limit`), so a client low on one node's list isn't
+    // undercounted; the merged list is cut to `limit` afterwards.
+    fn top_clients_rolling(
+        &self,
+        limit: usize,
+        group: Option<&str>,
+    ) -> Result<Vec<TopItem>, Problem> {
+        let all = telltale_telemetry::last_hour::MAX_CLIENTS;
+        let own = if self.with_me() {
+            self.local.top_clients_rolling(all, group)?
+        } else {
+            Vec::new()
+        };
+        let mut parts: Vec<Vec<TopItem>> = self.everyone(|| Read::TopClientsRolling {
+            limit: all,
+            group: group.map(str::to_owned),
         });
         parts.push(own);
         Ok(federation::merge_top(parts, limit))
@@ -2409,6 +2470,7 @@ mod anomaly_tests {
             nodes: Vec::new(),
             acknowledged: None,
             informational: false,
+            muted_by: None,
             rhythm: None,
         }
     }
@@ -2440,6 +2502,21 @@ mod anomaly_tests {
             serde_json::from_slice(&serde_json::to_vec(&Read::Anomalies { since_s: 5 }).unwrap())
                 .unwrap();
         assert!(matches!(r, Read::Anomalies { since_s: 5 }));
+        // REQ: API-005 (ADR-158) — the last-hour read carries its group; peers send every
+        // client so the merged counts stay exact.
+        let r: Read = serde_json::from_slice(
+            &serde_json::to_vec(&Read::TopClientsRolling {
+                limit: 7,
+                group: Some("kids".into()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            r,
+            Read::TopClientsRolling { limit: 7, group: Some(ref g) } if g == "kids"
+        ));
+        assert!(!changes_state(&r));
         assert!(!changes_state(&Read::Anomalies { since_s: 5 }));
         assert!(!changes_state(&Read::Health));
     }

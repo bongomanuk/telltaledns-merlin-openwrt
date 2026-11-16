@@ -37,6 +37,9 @@ async function signIn(user: string, pass: string) {
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
 
+// REQ: API-005 (ADR-157) — the dashboard's top lists are plain sections, found by their heading.
+const listOf = (title: string) => page.locator('section').filter({ has: page.getByRole('heading', { name: new RegExp(`^${title}`) }) });
+
 test('first run: the setup token creates the admin', async () => {
   await page.goto('/');
   const welcome = page.getByRole('heading', { name: 'Welcome to TelltaleDNS' });
@@ -72,17 +75,26 @@ test('dashboard shows traffic and top blocked names', async () => {
     await page.reload();
     await expect(page.getByRole('link', { name: 'ads.e2e.test', exact: true }).first()).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 20_000 });
-  await expect(page.getByText('Queries by status')).toBeVisible();
+  // One chart: totals and blocked by default, the status split a click away.
+  const chart = page.getByTestId('dashboard-chart');
+  await expect(chart.getByRole('figure', { name: 'Queries', exact: true })).toBeVisible();
+  await chart.getByRole('button', { name: 'Status', exact: true }).click();
+  await expect(chart.getByRole('figure', { name: 'Queries by status' })).toBeVisible();
   // Every chart has a table view.
   await page.getByRole('button', { name: 'Table' }).first().click();
   await expect(page.locator('.table-view table').first()).toBeVisible();
-  // The technical cards are in the Advanced view only (owner, 2026-10-09).
+  await page.getByRole('button', { name: 'Chart', exact: true }).click();
+  // The technical parts are in the Advanced view only (owner, 2026-10-09): two sections, and two
+  // more views of the chart.
   // (Headings may carry "(this hour)" and a help button after the title.)
   const heading = (h: string) => page.getByRole('heading', { name: new RegExp(`^${h}( |$)`) });
-  const advancedOnly = ['Where time goes', 'Upstreams', 'Upstream exchanges'];
+  const advancedOnly = ['Where time goes', 'Upstreams'];
+  const upstreamView = chart.getByRole('button', { name: 'Upstream', exact: true });
   for (const h of advancedOnly) await expect(heading(h)).toHaveCount(0);
+  await expect(upstreamView).toHaveCount(0);
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   for (const h of advancedOnly) await expect(heading(h)).toBeVisible();
+  await expect(upstreamView).toBeVisible();
   // "Where time goes": each path explains itself on hover (and keyboard focus).
   const local = page.getByRole('button', { name: 'local/udp' });
   await local.hover();
@@ -90,6 +102,30 @@ test('dashboard shows traffic and top blocked names', async () => {
   await expect(local).toHaveAccessibleDescription(/names on your network.*UDP/);
   await page.getByRole('button', { name: 'Simple', exact: true }).click();
   await expect(heading('Upstreams')).toHaveCount(0);
+});
+
+// REQ: API-005 (ADR-157) — the previous dashboard is one address away: `#/?view=legacy` shows it
+// and the choice is remembered in this browser; `#/?view=new` (its quiet link) goes back. Nothing
+// else in the UI points at it.
+test('api_005 the previous dashboard is reachable and remembered', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/#/');
+  await expect(page.getByTestId('dashboard-chart')).toBeVisible();
+  await expect(page.getByTestId('dashboard-new-link')).toHaveCount(0);
+  await page.goto('/#/?view=legacy');
+  // The old page: its own chart card, no new chart.
+  await expect(page.getByRole('heading', { name: 'Queries by status' })).toBeVisible();
+  await expect(page.getByTestId('dashboard-chart')).toHaveCount(0);
+  // Remembered: away and back without the parameter.
+  await page.goto('/#/queries');
+  await page.goto('/#/');
+  await expect(page.getByRole('heading', { name: 'Queries by status' })).toBeVisible();
+  // And back to the new one.
+  await page.getByTestId('dashboard-new-link').click();
+  await expect(page.getByTestId('dashboard-chart')).toBeVisible();
+  await page.goto('/#/queries');
+  await page.goto('/#/');
+  await expect(page.getByTestId('dashboard-chart')).toBeVisible();
 });
 
 // REQ: OBS-026 — the traffic map: the real queries above (ads.e2e.test blocked, nas.e2e.test
@@ -291,6 +327,84 @@ test('obs_015 health icon, its reasons, and the phone dot', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
 });
 
+// REQ: OBS-004 (ADR-159, ADR-160) — a top client's bar is split by how its queries were answered
+// (a device a peer on an older build reported has none), and the top lists follow the range: they
+// ask for it and say which hours they cover, except for one group's lists, which are this hour's.
+test('obs_004 top clients split by status; the top lists follow the range', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route('**/api/v1/stats/top?*', (route) => {
+    if (new URL(route.request().url()).searchParams.get('kind') !== 'clients') return route.fallback();
+    return route.fulfill({
+      json: {
+        items: [
+          { key: '10.9.9.9', name: 'Kitchen TV', count: 100, errorBound: 0, byStatus: { blocked: 60, cached: 25, forwarded: 10 } },
+          { key: '10.9.9.8', count: 40, errorBound: 0 },
+        ],
+      },
+    });
+  });
+  const clientsFrom24h = page.waitForRequest((r) => /stats\/top\?/.test(r.url()) && r.url().includes('kind=clients') && r.url().includes('from=-24h'));
+  await page.goto('/#/');
+  await page.reload();
+  await clientsFrom24h;
+  const clients = listOf('Top clients');
+  await expect(clients.getByTestId('clients-legend')).toBeVisible();
+  const split = clients.getByTestId('client-split');
+  await expect(split).toHaveCount(1);
+  await expect(split).toHaveAccessibleName('60 blocked · 25 cached · 10 forwarded · 5 other');
+  // Tapping the count shows the numbers.
+  await clients.getByRole('button', { name: /^Details for Kitchen TV/ }).click();
+  await expect(clients.locator('.how')).toContainText('blocked');
+  await expect(clients.locator('.how')).toContainText('60');
+  // The headings say which hours they cover: the range, or this hour for one group.
+  await expect(listOf('Top domains')).toContainText('last 24 h');
+  await page.getByRole('button', { name: '15 min', exact: true }).click();
+  await expect(listOf('Top domains')).toContainText(/since \d/);
+  const groupOnly = page.waitForRequest((r) => /stats\/top\?/.test(r.url()) && r.url().includes('kind=blocked') && r.url().includes('group=lab') && !r.url().includes('from='));
+  await page.getByLabel('Group').selectOption('lab');
+  await groupOnly;
+  await expect(listOf('Top domains')).toContainText('this hour');
+  await page.getByLabel('Group').selectOption('');
+  await page.unroute('**/api/v1/stats/top?*');
+});
+
+// T6.8 — a chart's legend sits above the plot and wraps; its values change on hover ("total"
+// becomes a time, the range's sums one bucket's counts). Each keeps its width, so on a narrow
+// screen the legend doesn't rewrap and move the plot under the cursor.
+test('chart legend keeps its place while hovering', async () => {
+  // This legend is the shared Chart's (the previous dashboard, the Cache page); the new
+  // dashboard's chart has a legend of its own that doesn't change on hover (ADR-157).
+  await page.goto('/#/?view=legacy');
+  const card = page.locator('section.card.chart', { hasText: 'Queries by status' });
+  const over = card.locator('.u-over');
+  const layout = () =>
+    card.evaluate((c) => {
+      const top = c.getBoundingClientRect().top;
+      const items = [...c.querySelectorAll('.u-legend tr')].map((t) => Math.round(t.getBoundingClientRect().width));
+      return `${items.join(',')} plot at ${Math.round(c.querySelector('.u-over')!.getBoundingClientRect().top - top)}`;
+    });
+  for (const width of [340, 360, 390, 420]) {
+    await page.setViewportSize({ width, height: 844 });
+    // A new width (and every refresh) rebuilds the chart: measure once it has settled, and
+    // again if a rebuild lands mid-check.
+    await expect(async () => {
+      await over.scrollIntoViewIfNeeded();
+      await page.mouse.move(0, 0);
+      const rest = await layout();
+      const box = (await over.boundingBox())!;
+      for (const f of [0.1, 0.5, 0.9]) {
+        await page.mouse.move(box.x + box.width * f, box.y + box.height / 2);
+        expect(await layout(), `${width}px wide, hovering at ${f}`).toBe(rest);
+      }
+    }).toPass({ timeout: 15_000 });
+  }
+  await page.mouse.move(0, 0);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  // The choice of the previous dashboard is remembered: put the new one back for the tests after.
+  await page.goto('/#/?view=new');
+  await expect(page.getByTestId('dashboard-chart')).toBeVisible();
+});
+
 // REQ: OBS-016 — the dashboard's Service level card (Advanced view only): the server's
 // objectives (a few local answers make them "on track"), then a stubbed outage that burns the
 // availability budget fast.
@@ -303,7 +417,7 @@ test('obs_016 service level card', async () => {
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await expect(card).toContainText('Service level');
-  await expect(card).toContainText('(last 30 days)');
+  await expect(card).toContainText('last 30 days');
   await expect(card.getByTestId('slo-availability')).toContainText('Answers that work');
   await expect(card.getByTestId('slo-latency')).toContainText('answers sent within 250 ms');
   const burns = (rates: number[]) =>
@@ -353,7 +467,7 @@ test('dns_007 cache tile: one number, split in the Advanced view', async () => {
   );
   await page.goto('/#/');
   await page.reload(); // the page may already show the dashboard (a hash change doesn't reload)
-  const tile = page.locator('.kpi').filter({ hasText: 'Cache hits' });
+  const tile = page.getByTestId('stat-cache');
   await expect(tile).toContainText('60.0%');
   await expect(tile).toContainText('600 answers');
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
@@ -557,6 +671,69 @@ test('obs_014 acknowledge an anomaly', async () => {
   await page.unroute('**/api/v1/analytics/anomalies/*acknowledge');
 });
 
+// REQ: OBS-038 (ADR-161) — "Mute for this device…" fills in the device and the kind, previews through
+// a dry run, and saves to the real server; the finding then counts no more (it hides, and so does
+// the badge) and shows, marked, with "Show muted"; the mute is listed and can be removed. A fresh
+// server has no findings, so the list is stubbed to follow the real mute.
+test('obs_038 mute a kind of finding for a device', async () => {
+  const muteName = '192-168-1-30-nxdomain-storm';
+  let muted = false;
+  const finding = {
+    id: '6a2c0e00a1b2c3d5',
+    kind: 'nxdomain_storm',
+    client: '192.168.1.30',
+    clientName: 'lg-tv',
+    windowStart: '2026-10-08T10:00:00.000Z',
+    windowSeconds: 60,
+    observed: 225,
+    baseline: 260,
+    spread: 0,
+    threshold: 30,
+    detail: '225 NXDOMAIN answers in a minute, 87% of its 260 queries',
+    nodes: [],
+  };
+  await page.route('**/api/v1/analytics/anomalies?*', (route) => {
+    const withMuted = new URL(route.request().url()).searchParams.get('muted') === 'true';
+    const f = muted ? { ...finding, mutedBy: muteName } : finding;
+    return route.fulfill({ json: { items: muted && !withMuted ? [] : [f] } });
+  });
+  await page.route('**/api/v1/anomaly-mutes/*', async (route) => {
+    const res = await route.fetch();
+    const dry = new URL(route.request().url()).searchParams.get('dryRun') === 'true';
+    if (res.ok() && !dry) muted = route.request().method() === 'PUT';
+    await route.fulfill({ response: res });
+  });
+  await page.goto('/#/anomalies');
+  await page.reload(); // the sidebar badge loads at start
+  const badge = page.locator('a.nav[href="#/anomalies"] .count');
+  await expect(badge).toHaveText('1');
+  await page.getByTestId('mute').click();
+  const form = page.getByTestId('mute-form');
+  await expect(form.getByLabel('Device')).toHaveValue('192.168.1.30');
+  await expect(form.getByRole('checkbox', { name: 'Burst of failed lookups' })).toBeChecked();
+  await expect(page.getByTestId('mute-preview')).toContainText('findings created from now on');
+  await form.getByLabel('Note').fill('hourly reverse-DNS sweep');
+  await page.getByTestId('mute-save').click();
+  await expect(page.getByTestId('mute-saved')).toBeVisible();
+  // It no longer counts: the finding and the badge are gone, and the page says so.
+  await expect(page.getByText('1 muted finding is hidden')).toBeVisible();
+  await expect(badge).toHaveCount(0);
+  const row = page.getByTestId('mute-row');
+  await expect(row).toContainText('192.168.1.30');
+  await expect(row).toContainText('Burst of failed lookups');
+  await expect(row).toContainText('hourly reverse-DNS sweep');
+  await page.getByTestId('show-muted').check();
+  await expect(page.getByTestId('muted')).toContainText(`by ${muteName}`);
+  await expect(page.getByTestId('muted')).toContainText('hourly reverse-DNS sweep');
+  // Removing it brings the finding back, counted.
+  await page.getByTestId('remove-mute').click();
+  await expect(page.getByTestId('mute-row')).toHaveCount(0);
+  await expect(page.getByTestId('muted')).toHaveCount(0);
+  await expect(page.getByTestId('mute')).toBeVisible();
+  await page.unroute('**/api/v1/analytics/anomalies?*');
+  await page.unroute('**/api/v1/anomaly-mutes/*');
+});
+
 // The header's icon buttons match: the pause button (its own component) is the same round,
 // borderless button as the theme toggle, on the same line (owner report 2026-10-06).
 test('header icon buttons are the same size and aligned', async () => {
@@ -702,13 +879,15 @@ test('flt_005 network groups: cards, chart, and query-log filter', async () => {
     await expect(card.locator('dd').first()).not.toHaveText('0', { timeout: 2000 });
   }).toPass({ timeout: 20_000 });
   await page.goto('/#/');
-  // Traffic by group is in the Advanced view.
-  await expect(page.getByRole('heading', { name: 'Traffic by group' })).toHaveCount(0);
+  // Traffic by group is a view of the chart in the Advanced view.
+  const groupsView = page.getByTestId('dashboard-chart').getByRole('button', { name: 'Groups', exact: true });
+  await expect(groupsView).toHaveCount(0);
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Traffic by group' })).toBeVisible();
+  await groupsView.click();
+  await expect(page.getByRole('figure', { name: 'Traffic by group' })).toBeVisible();
   await page.getByRole('button', { name: 'Simple', exact: true }).click();
   await page.getByLabel('Group').selectOption('lab');
-  await expect(page.locator('section.card', { hasText: 'Top domains' })).toContainText('nas.e2e.test');
+  await expect(listOf('Top domains')).toContainText('nas.e2e.test');
   await page.goto('/#/queries?group=lab');
   await expect(page.locator('table.log tbody tr').first().locator('.group-chip')).toHaveText('lab');
   const r = await page.request.get('/api/v1/queries?group=lab&limit=5');
@@ -717,7 +896,7 @@ test('flt_005 network groups: cards, chart, and query-log filter', async () => {
   expect((await page.request.get('/api/v1/queries?group=nope')).status()).toBe(400);
   // The clients list shows the group each client gets from its network.
   await page.goto('/#/clients');
-  const seen = page.locator('section.card', { hasText: 'Seen this hour' });
+  const seen = page.locator('section.card', { hasText: 'Seen in the last hour' });
   await expect(seen.locator('tbody tr', { hasText: '127.0.0.1' }).locator('.group-chip')).toHaveText('lab');
 });
 
@@ -734,14 +913,14 @@ test('clu_008 cluster page on a standalone node', async () => {
 test('api_010 name a device from the dashboard', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/#/');
-  const widget = page.locator('section.card', { hasText: 'Top clients' });
+  const widget = listOf('Top clients');
   // A slow form load must not wipe what was typed (CI flake on 2026-10-04): delay it.
   const slow = '**/api/v1/clients';
   await page.route(slow, async (r) => {
     await new Promise((done) => setTimeout(done, 800));
     await r.continue();
   });
-  await widget.getByRole('button', { name: '127.0.0.1' }).click();
+  await widget.getByRole('button', { name: '127.0.0.1', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Name this device…' }).click();
   await page.getByLabel('Name', { exact: true }).fill('Test laptop');
   await page.unroute(slow);
@@ -1847,7 +2026,7 @@ test('obs_033 change markers', async () => {
     .toContainEqual(expect.stringContaining(applied));
 
   await page.goto('/#/');
-  const chart = page.locator('.card.chart').filter({ hasText: 'Queries by status' });
+  const chart = page.getByTestId('dashboard-chart');
   const marker = chart.getByTestId('chart-markers').getByRole('button', { name: new RegExp(applied) });
   await expect(marker).toBeVisible({ timeout: 20_000 });
   await marker.hover();
@@ -2947,7 +3126,7 @@ test('clu_014 drill', async () => {
   // A reload: the markers are fetched at most once a minute, and the app kept the real ones.
   await page.goto('/#/');
   await page.reload();
-  const chart = page.locator('.card.chart').filter({ hasText: 'Queries by status' });
+  const chart = page.getByTestId('dashboard-chart');
   await expect(chart.getByTestId('chart-markers').getByRole('button', { name: /failover drill on pi/ })).toBeVisible({ timeout: 20_000 });
   await page.unroute('**/api/v1/annotations?**');
   // The affinity column: Advanced view, with its caveat in the help (stubbed: two nodes).
@@ -3101,7 +3280,7 @@ test('obs_037 internal names', async () => {
   await page.setViewportSize({ width: 1280, height: 800 });
   for (let i = 0; i < 3; i++) await query('20.1.168.192.in-addr.arpa', 12).catch(() => -1);
   await page.goto('/#/');
-  const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: /^Top domains/ }) });
+  const card = listOf('Top domains');
   const ptr = card.getByRole('link', { name: '20.1.168.192.in-addr.arpa', exact: true });
   await expect(card.getByRole('button', { name: 'Internet', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(async () => {

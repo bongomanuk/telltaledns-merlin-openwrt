@@ -406,7 +406,7 @@
           "stats"
         ],
         "summary": "Device anomalies: rate spikes, heavy volume to one domain, drift, beaconing (OBS-013).",
-        "description": "Each finding compares a device with its own learned baseline (after a learning period,\n7 days by default) and carries the evidence: observed value, usual value ± spread, the\nthreshold, and the window. Findings are alert-only; TelltaleDNS never blocks on them.\nNewest first. In a cluster every node's findings are included (each node learns from the\nqueries it answers), with `nodes` saying which found each. Each has a stable `id` for\nacknowledging it (OBS-014); `acknowledged` says who did and when, and `acknowledged=false`\nreturns only the ones nobody has.",
+        "description": "Each finding compares a device with its own learned baseline (after a learning period,\n7 days by default) and carries the evidence: observed value, usual value ± spread, the\nthreshold, and the window. Findings are alert-only; TelltaleDNS never blocks on them.\nNewest first. In a cluster every node's findings are included (each node learns from the\nqueries it answers), with `nodes` saying which found each. Each has a stable `id` for\nacknowledging it (OBS-014); `acknowledged` says who did and when, and `acknowledged=false`\nreturns only the ones nobody has. A finding an anomaly mute matched (OBS-038) is left out\nunless `muted=true`; it then carries `mutedBy`, the mute's name.",
         "operationId": "anomalies",
         "parameters": [
           {
@@ -422,6 +422,15 @@
             "name": "acknowledged",
             "in": "query",
             "description": "REQ: OBS-014 — `false`: only findings nobody acknowledged; `true`: only acknowledged\nones. Default: both.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "muted",
+            "in": "query",
+            "description": "REQ: OBS-038 — `true`: muted findings are listed too, each with `mutedBy`. Default:\nthey are left out, as they are from the badge and the alerts.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -6825,7 +6834,7 @@
           "stats"
         ],
         "summary": "Totals over a time range.",
-        "description": "Queries, blocked (count and percent), cache hits, forwarded, NXDOMAIN and SERVFAIL counts\nover the range (per-minute data up to 48 hours back, hourly rollups beyond), plus this\nhour's active clients and latency percentiles by answer path. Example:\n`GET /api/v1/stats/summary?from=-24h` or `?from=-30d`.",
+        "description": "Queries, blocked (count and percent), cache hits, forwarded, NXDOMAIN and SERVFAIL counts\nover the range (per-minute data up to 48 hours back, hourly rollups beyond), the devices\nseen in the hours the range overlaps (active clients), and this hour's latency\npercentiles by answer path. Example:\n`GET /api/v1/stats/summary?from=-24h` or `?from=-30d`.",
         "operationId": "stats_summary",
         "parameters": [
           {
@@ -6956,7 +6965,7 @@
           "stats"
         ],
         "summary": "Top domains, blocked domains, NXDOMAIN names, or clients.",
-        "description": "Ranked by a Space-Saving sketch per hour: `count` is an upper bound and `errorBound` how\nfar it may be over. Example: `GET /api/v1/stats/top?kind=blocked&limit=10`. With\n`kind=domains&client=192.168.1.20`, one client's top domains (recently active clients only).",
+        "description": "Ranked by a Space-Saving sketch per hour: `count` is an upper bound and `errorBound` how\nfar it may be over. Example: `GET /api/v1/stats/top?kind=blocked&limit=10`. With\n`kind=domains&client=192.168.1.20`, one client's top domains (recently active clients only).\nWith `kind=clients&hour=rolling`, the clients of the last hour (60–65 minutes, whole\n5-minute slots) rather than of the clock hour, with exact counts (`errorBound` 0); with\n`group`, the clients whose settings come from that group.\nWith `from=-24h`, the hours the window overlaps, summed per key (stored hours and the\ncurrent one).",
         "operationId": "stats_top",
         "parameters": [
           {
@@ -6981,10 +6990,10 @@
           {
             "name": "hour",
             "in": "query",
-            "description": "Default: `current`.",
+            "description": "`current` (default), `previous`, or `rolling` (the last hour, 60–65 minutes;\n`kind=clients` only).",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Hour"
+              "$ref": "#/components/schemas/TopHour"
             }
           },
           {
@@ -7009,6 +7018,24 @@
             "name": "scope",
             "in": "query",
             "description": "`cluster` (default, every node), `site:<name>`, `node:<name or ID>`, or `node:local`\n(this node). Federated reads list nodes that didn't answer in `missingNodes`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "A window instead of one hour (REQ: OBS-004): a relative offset such as `-24h`, or RFC\n3339. Every hour the window overlaps counts whole: the stored hours (400 days) plus the\ncurrent one. Not with `hour`, `client`, or `group`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The window's end (default: now). Only with `from`.",
             "required": false,
             "schema": {
               "type": "string"
@@ -8507,6 +8534,14 @@
             "description": "`rate_spike`, `domain_volume`, `drift`, `beacon`, `nxdomain_storm`, or `dga`.",
             "example": "domain_volume"
           },
+          "mutedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "REQ: OBS-038 (ADR-161) — the anomaly mute (its name) that matched this finding when it\nwas created. A muted finding is kept and listed, but not counted in\n`telltale_anomalies_total`, the sidebar badge, or the `anomaly` alert rule. Absent when no\nmute matched; listed only with `muted=true`.",
+            "example": "lg-tv-ptr-sweep"
+          },
           "nodes": {
             "type": "array",
             "items": {
@@ -9965,6 +10000,34 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ClientStatusCounts": {
+        "type": "object",
+        "description": "A top-list client's queries by how they were answered.",
+        "required": [
+          "blocked",
+          "cached",
+          "forwarded"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cached": {
+            "type": "integer",
+            "format": "int64",
+            "description": "From the cache, including stale and refreshed answers.",
+            "minimum": 0
+          },
+          "forwarded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answered by an upstream.",
+            "minimum": 0
           }
         }
       },
@@ -13402,6 +13465,14 @@
                   "description": "`rate_spike`, `domain_volume`, `drift`, `beacon`, `nxdomain_storm`, or `dga`.",
                   "example": "domain_volume"
                 },
+                "mutedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "REQ: OBS-038 (ADR-161) — the anomaly mute (its name) that matched this finding when it\nwas created. A muted finding is kept and listed, but not counted in\n`telltale_anomalies_total`, the sidebar badge, or the `anomaly` alert rule. Absent when no\nmute matched; listed only with `muted=true`.",
+                  "example": "lg-tv-ptr-sweep"
+                },
                 "nodes": {
                   "type": "array",
                   "items": {
@@ -15321,6 +15392,17 @@
                 "errorBound"
               ],
               "properties": {
+                "byStatus": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ClientStatusCounts",
+                      "description": "For clients: how its queries were answered (REQ: OBS-004). Counts cover the queries\nsince the client entered the list, `count - errorBound` of them; the rest of `count`\nis other statuses (local, special, refused, …) and that error bound."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "count": {
                   "type": "integer",
                   "format": "int64",
@@ -18901,7 +18983,7 @@
           "activeClients": {
             "type": "integer",
             "format": "int64",
-            "description": "Distinct clients seen this hour.",
+            "description": "Distinct clients seen in the hours the range overlaps (REQ: OBS-004): this hour's list,\nthe previous hour's, and each stored hour's busiest 100, so ranges past the last two\nhours undercount on networks with more than 100 devices an hour.",
             "minimum": 0
           },
           "blocked": {
@@ -19491,6 +19573,15 @@
           "agent"
         ]
       },
+      "TopHour": {
+        "type": "string",
+        "description": "Which window a top list reads: an hour, or (clients only) the last 60 minutes.",
+        "enum": [
+          "current",
+          "previous",
+          "rolling"
+        ]
+      },
       "TopItem": {
         "type": "object",
         "description": "One ranked item. Counts come from a Space-Saving sketch: the true count lies in\n`[count - errorBound, count]`.",
@@ -19500,6 +19591,17 @@
           "errorBound"
         ],
         "properties": {
+          "byStatus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClientStatusCounts",
+                "description": "For clients: how its queries were answered (REQ: OBS-004). Counts cover the queries\nsince the client entered the list, `count - errorBound` of them; the rest of `count`\nis other statuses (local, special, refused, …) and that error bound."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "count": {
             "type": "integer",
             "format": "int64",

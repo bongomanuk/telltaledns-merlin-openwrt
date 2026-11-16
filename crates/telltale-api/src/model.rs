@@ -403,7 +403,9 @@ pub struct Summary {
     pub forwarded: u64,
     pub nxdomain: u64,
     pub servfail: u64,
-    /// Distinct clients seen this hour.
+    /// Distinct clients seen in the hours the range overlaps (REQ: OBS-004): this hour's list,
+    /// the previous hour's, and each stored hour's busiest 100, so ranges past the last two
+    /// hours undercount on networks with more than 100 devices an hour.
     pub active_clients: u64,
     /// Latency percentiles this hour, by answer path (`cache`, `upstream`, ...).
     pub latency: Vec<LatencyRow>,
@@ -455,6 +457,31 @@ pub enum Hour {
     Previous,
 }
 
+/// Which window a top list reads: an hour, or (clients only) the last 60 minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TopHour {
+    /// The hour in progress.
+    #[default]
+    Current,
+    /// The last complete hour.
+    Previous,
+    /// REQ: API-005 (ADR-158) — the last hour whatever the clock hour: 60–65 minutes up to
+    /// now, in whole 5-minute slots. `kind=clients` only; counts are exact.
+    Rolling,
+}
+
+impl TopHour {
+    /// The clock hour this reads, `None` for `rolling`.
+    pub fn hour(self) -> Option<Hour> {
+        match self {
+            Self::Current => Some(Hour::Current),
+            Self::Previous => Some(Hour::Previous),
+            Self::Rolling => None,
+        }
+    }
+}
+
 /// Query parameters for `GET /stats/top`.
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -463,8 +490,9 @@ pub struct TopParams {
     pub kind: TopKind,
     /// Items to return (1–100, default 10).
     pub limit: Option<usize>,
-    /// Default: `current`.
-    pub hour: Option<Hour>,
+    /// `current` (default), `previous`, or `rolling` (the last hour, 60–65 minutes;
+    /// `kind=clients` only).
+    pub hour: Option<TopHour>,
     /// Only this client's domains (an IP address; `kind=domains` only).
     pub client: Option<String>,
     /// Only this group's queries (a group name; not with `client`, not for `nxdomain`).
@@ -472,6 +500,12 @@ pub struct TopParams {
     /// `cluster` (default, every node), `site:<name>`, `node:<name or ID>`, or `node:local`
     /// (this node). Federated reads list nodes that didn't answer in `missingNodes`.
     pub scope: Option<String>,
+    /// A window instead of one hour (REQ: OBS-004): a relative offset such as `-24h`, or RFC
+    /// 3339. Every hour the window overlaps counts whole: the stored hours (400 days) plus the
+    /// current one. Not with `hour`, `client`, or `group`.
+    pub from: Option<String>,
+    /// The window's end (default: now). Only with `from`.
+    pub to: Option<String>,
 }
 
 /// One ranked item. Counts come from a Space-Saving sketch: the true count lies in
@@ -490,6 +524,22 @@ pub struct TopItem {
     /// device's groups, else its network's group, else the default; ADR-050).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
+    /// For clients: how its queries were answered (REQ: OBS-004). Counts cover the queries
+    /// since the client entered the list, `count - errorBound` of them; the rest of `count`
+    /// is other statuses (local, special, refused, …) and that error bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_status: Option<ClientStatusCounts>,
+}
+
+/// A top-list client's queries by how they were answered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, ToSchema, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientStatusCounts {
+    pub blocked: u64,
+    /// From the cache, including stale and refreshed answers.
+    pub cached: u64,
+    /// Answered by an upstream.
+    pub forwarded: u64,
 }
 
 /// What `GET /stats/latency` groups by.
@@ -1976,6 +2026,9 @@ pub struct AnomalyParams {
     /// REQ: OBS-014 — `false`: only findings nobody acknowledged; `true`: only acknowledged
     /// ones. Default: both.
     pub acknowledged: Option<bool>,
+    /// REQ: OBS-038 — `true`: muted findings are listed too, each with `mutedBy`. Default:
+    /// they are left out, as they are from the badge and the alerts.
+    pub muted: Option<bool>,
 }
 
 /// A device anomaly and its evidence (OBS-013). Alert-only: TelltaleDNS never acts on it.
@@ -2024,6 +2077,13 @@ pub struct AnomalyFinding {
     /// badge and the `anomaly` alert rule.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub informational: bool,
+    /// REQ: OBS-038 (ADR-161) — the anomaly mute (its name) that matched this finding when it
+    /// was created. A muted finding is kept and listed, but not counted in
+    /// `telltale_anomalies_total`, the sidebar badge, or the `anomaly` alert rule. Absent when no
+    /// mute matched; listed only with `muted=true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "lg-tv-ptr-sweep")]
+    pub muted_by: Option<String>,
 }
 
 /// REQ: OBS-014 (ADR-103) — a finding's stable ID: its window start (Unix seconds, 8 hex

@@ -117,198 +117,23 @@
   let scope = $state(remembered());
   function remembered(): string {
     try {
-      return localStorage.getItem('dashboard.scope') ?? '';
+      return localStorage.getItem(KEY) === 'legacy';
     } catch {
-      return '';
+      return false;
     }
   }
+  let legacy = $state(stored());
   $effect(() => {
+    const v = route.params.get('view');
+    if (v !== 'legacy' && v !== 'new') return;
+    legacy = v === 'legacy';
     try {
-      localStorage.setItem('dashboard.scope', scope);
+      if (legacy) localStorage.setItem(KEY, 'legacy');
+      else localStorage.removeItem(KEY);
     } catch {
-      // Private windows and blocked storage: the choice just isn't remembered.
+      // Private windows and blocked storage: the choice lasts until the page is reloaded.
     }
   });
-  const nodeLabel = (n: S['ClusterView']['nodes'][number]) =>
-    (n.ephemeral ? `${n.site} pod ${n.pod ?? n.nodeId.slice(0, 8)}` : n.site) +
-    (n.role.includes('primary') ? ' (primary)' : '') +
-    (n.thisNode ? ' · this node' : '');
-  // Sites with resolver pods get a choice of their own: the pods come and go.
-  const podSites = $derived([...new Set(nodes.filter((n) => n.ephemeral).map((n) => n.site))]);
-  const scopeLabel = $derived(
-    scope.startsWith('node:')
-      ? (nodes.find((n) => `node:${n.nodeId}` === scope)?.site ?? 'one node')
-      : scope.startsWith('site:')
-        ? `site ${scope.slice(5)}`
-        : 'every node',
-  );
-  // Upstream health is each node's own: say whose when another node is shown.
-  const otherNode = $derived(
-    scope !== '' && !(scope.startsWith('node:') && nodes.find((n) => `node:${n.nodeId}` === scope)?.thisNode),
-  );
-  let error = $state<unknown>(null);
-  // REQ: OBS-030 — "Where time goes" as percentiles or as a heatmap over time.
-  let timeView = $state<'table' | 'heatmap'>('table');
-  // REQ: OBS-037 — Top domains as names on the internet or internal names (cluster, private
-  // reverse lookups), which have their own list.
-  let domainsView = $state<'internet' | 'internal'>('internet');
-
-  async function load() {
-    const r = range;
-    try {
-      const g = group || undefined;
-      const sc = scope || undefined;
-      // REQ: OBS-033 — the window's change markers, once for every chart (refetched each minute).
-      void changes.load(r.from, sc);
-      const [s, ts, d, b, c, u, st, lp, gs, cl, sl] = await Promise.all([
-        api.summary(r.summary, undefined, sc),
-        api.timeseries({ from: r.from, step: r.step, scope: sc }),
-        api.top(domainsView === 'internal' ? 'internal' : 'domains', 10, undefined, g, sc),
-        api.top('blocked', 10, undefined, g, sc),
-        api.top('clients', 10, undefined, g, sc),
-        api.upstreams(),
-        api.latency('stage', sc),
-        api.latency('path', sc),
-        api.groups(),
-        api.cluster().catch(() => null),
-        api.slo(sc).catch(() => null),
-      ]);
-      slo = sl;
-      groups = gs.items;
-      nodes = cl?.enabled ? cl.nodes : [];
-      summary = s;
-      const mins = Math.round(r.secs / 60);
-      previous = await api.summary(`-${2 * mins}m`, `-${mins}m`, sc).catch(() => null);
-      buckets = dense(ts.items, { second: 1, minute: 60, hour: 3600, day: 86400 }[r.step], r.secs);
-      topDomains = d.items;
-      topBlocked = b.items;
-      topClients = c.items;
-      upstreams = u.items;
-      stages = st.items;
-      byPath = lp.items;
-      error = null;
-    } catch (e) {
-      error = e;
-    }
-  }
-
-  /** Every bucket in the window, zeros where nothing happened (the API skips empty ones). */
-  function dense(items: S['TimeBucket'][], step: number, secs: number): S['TimeBucket'][] {
-    const now = Math.floor(Date.now() / 1000);
-    const last = Math.floor(now / step) * step;
-    const first = Math.floor((now - secs) / step) * step + step;
-    const byStart = new Map(items.map((b) => [b.startUnixSeconds, b]));
-    const out: S['TimeBucket'][] = [];
-    for (let t = first; t <= last; t += step) {
-      out.push(
-        byStart.get(t) ?? {
-          startUnixSeconds: t,
-          total: 0,
-          byStatus: {},
-          byQtype: {},
-          byRcode: {},
-          upstreamQueries: 0,
-          upstreamFailures: 0,
-          byGroup: {},
-          blockedByGroup: {},
-          slow: 0,
-        },
-      );
-    }
-    return out;
-  }
-
-  $effect(() => {
-    void range;
-    void group;
-    void scope;
-    return poll(load, range.step === 'second' ? 5000 : 15000);
-  });
-
-  // Queries over time, stacked by status (minor statuses folded into "other"). DNS-007: answers
-  // refreshed in the background count as cached; the Advanced view shows them on their own.
-  const main = $derived(
-    advanced ? (['blocked', 'cached', 'refreshed', 'forwarded', 'local'] as const) : (['blocked', 'cached', 'forwarded', 'local'] as const),
-  );
-  const colors: Record<string, string> = {
-    blocked: '--s-blocked',
-    cached: '--s-cached',
-    refreshed: '--s-refreshed',
-    forwarded: '--s-forwarded',
-    local: '--s-local',
-    other: '--s-other',
-  };
-  const times = $derived(buckets.map((b) => b.startUnixSeconds));
-  const statusSeries = $derived.by(() => {
-    const series = [...main, 'other'].map((k) => ({ label: k, color: colors[k], values: [] as number[] }));
-    for (const b of buckets) {
-      let rest = b.total;
-      main.forEach((k, i) => {
-        const extra = k === 'cached' ? (b.byStatus['stale'] ?? 0) + (advanced ? 0 : (b.byStatus['refreshed'] ?? 0)) : 0;
-        const v = (b.byStatus[k] ?? 0) + extra;
-        series[i].values.push(v);
-        rest -= v;
-      });
-      series[main.length].values.push(Math.max(0, rest));
-    }
-    return series.filter((s) => s.values.some((v) => v > 0));
-  });
-  // ADR-050 — which kinds of devices make the traffic, in each group's color.
-  const groupSeries = $derived.by(() => {
-    const names = new Set<string>();
-    for (const b of buckets) for (const k of Object.keys(b.byGroup ?? {})) names.add(k);
-    const color = (n: string) => groups.find((g) => g.name === n)?.color ?? '--s-other';
-    return [...names]
-      .sort()
-      .map((n) => ({ label: n, color: color(n), values: buckets.map((b) => b.byGroup?.[n] ?? 0) }))
-      .filter((s) => s.values.some((v) => v > 0));
-  });
-  const upstreamSeries = $derived([
-    { label: 'upstream queries', color: '--s-forwarded', values: buckets.map((b) => b.upstreamQueries) },
-    { label: 'failures', color: '--s-blocked', values: buckets.map((b) => b.upstreamFailures) },
-  ]);
-
-  // The busiest upstream path stands in for "typical answer time" until per-node p95 lands.
-  const upstreamP90 = $derived.by(() => {
-    const rows = (summary?.latency ?? []).filter((r) => r.key.startsWith('upstream'));
-    rows.sort((a, b) => b.count - a.count);
-    return rows[0];
-  });
-  const cacheP50 = $derived(
-    (summary?.latency ?? []).filter((r) => r.key.startsWith('cache')).sort((a, b) => b.count - a.count)[0] as S['LatencyRow'] | undefined,
-  );
-
-  /** Change as a fraction; null when there's nothing to compare with. */
-  function change(now: number | null | undefined, before: number | null | undefined): number | null {
-    if (now == null || before == null || !Number.isFinite(now) || !Number.isFinite(before) || before === 0) return null;
-    return (now - before) / before;
-  }
-  const prevP90 = $derived(
-    (previous?.latency ?? []).filter((r) => r.key.startsWith('upstream')).sort((a, b) => b.count - a.count)[0] as S['LatencyRow'] | undefined,
-  );
-  const share = (b: S['TimeBucket'], k: string) => (b.total ? ((b.byStatus[k] ?? 0) / b.total) * 100 : 0);
-  const sparkTotal = $derived(buckets.map((b) => b.total));
-  const sparkBlocked = $derived(buckets.map((b) => share(b, 'blocked')));
-  const sparkCached = $derived(buckets.map((b) => share(b, 'cached') + share(b, 'stale') + share(b, 'refreshed')));
-  // DNS-007 — of the answers that weren't blocked or local, the share given from an expired
-  // cached copy while it was refreshed (the Advanced view's split of the cache tile).
-  const refreshedPercent = $derived(
-    summary && summary.cached + summary.forwarded > 0 ? ((summary.refreshed ?? 0) * 100) / (summary.cached + summary.forwarded) : null,
-  );
-  const cacheSub = $derived(
-    advanced && refreshedPercent != null && (summary?.refreshed ?? 0) > 0
-      ? `${pct((summary?.cacheHitPercent ?? 0) - refreshedPercent)} fresh · ${pct(refreshedPercent)} refreshed`
-      : `${short(summary?.cached)} answers`,
-  );
-  const sparkFailures = $derived(buckets.map((b) => b.upstreamFailures));
-
-  // T6.8 — the same statuses as the chart, as totals over the range.
-  const statusParts = $derived(
-    statusSeries.map((s) => ({ label: s.label, color: s.color, value: s.values.reduce((a, v) => a + v, 0) })),
-  );
-
-  const totalUpstream = $derived(upstreams.reduce((a, u) => a + u.requests, 0));
-  const maxTop = (items: S['TopItem'][]) => Math.max(1, ...items.map((i) => i.count));
 </script>
 
 <div class="page">
@@ -510,57 +335,7 @@
 </div>
 
 <style>
-  /* The header's view controls stay together, right of the heading; they wrap as one group. */
-  .head-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-  }
-  /* REQ: OBS-030 — the heatmap takes the row's width. */
-  .card.wide {
-    grid-column: 1 / -1;
-  }
-  .status-row {
-    display: grid;
-    gap: var(--gap);
-    grid-template-columns: minmax(0, 2.2fr) minmax(240px, 1fr);
-  }
-  @media (max-width: 1000px) {
-    .status-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-  .kpis {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  }
-  .bars {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 8px;
-  }
-  .name {
-    word-break: break-all;
-    min-width: 0;
-  }
-  .bar {
-    height: 5px;
-    background: var(--surface-2);
-    border-radius: 999px;
-    margin-top: 3px;
-    overflow: hidden;
-  }
-  .bar span {
-    display: block;
-    height: 100%;
-    border-radius: 999px;
-    background: var(--accent);
-  }
-  .num {
-    font-variant-numeric: tabular-nums;
+  .switch-back {
+    margin: 18px 0 0;
   }
 </style>

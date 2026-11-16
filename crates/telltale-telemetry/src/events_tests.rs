@@ -470,6 +470,45 @@ fn obs_009_analytics_follow_the_privacy_level() {
     }
 }
 
+/// REQ: OBS-004 — Top clients says how each client's queries were answered: blocked, cached
+/// (stale and refreshed included), and forwarded; other statuses are left out. The group's
+/// list carries the same split.
+#[test]
+fn obs_004_top_clients_split_by_status() {
+    let hub = Hub::new(1 << 16);
+    let mut drainer = hub.drainer();
+    let t0 = 1_700_000_000_000_000;
+    let (tv, phone) = (ipv4(10, 0, 0, 7), ipv4(10, 0, 0, 8));
+    let name = wire("example.com");
+    let mut n = 0;
+    for (client, status, times) in [
+        (tv, Status::Blocked, 5),
+        (tv, Status::Cached, 2),
+        (tv, Status::Stale, 1),
+        (tv, Status::Refreshed, 1),
+        (tv, Status::Forwarded, 3),
+        (tv, Status::Local, 2),
+        (phone, Status::Forwarded, 1),
+    ] {
+        for _ in 0..times {
+            hub.emit_query(&query(t0 + n, client, status, 1), &name);
+            n += 1;
+        }
+    }
+    assert_eq!(hub.drain_once(&mut drainer), 15);
+    let agg = hub.aggregates();
+    let split = |x: &crate::agg::ClientStatus| (x.blocked, x.cached, x.forwarded);
+    let top = agg.top_clients(HourSel::Current, None, 5);
+    assert_eq!(top.len(), 2);
+    assert_eq!((top[0].0.key.as_str(), top[0].0.count), ("10.0.0.7", 14));
+    assert_eq!(split(&top[0].1), (5, 4, 3));
+    assert_eq!(split(&top[1].1), (0, 0, 1));
+    let in_group = agg.top_clients(HourSel::Current, Some(0), 5);
+    assert_eq!(split(&in_group[0].1), (5, 4, 3));
+    assert_eq!(agg.top_clients(HourSel::Current, Some(9), 5).len(), 0);
+    assert_eq!(agg.top_clients(HourSel::Previous, None, 5).len(), 0);
+}
+
 /// REQ: OBS-017 (T11.6, ADR-110) — a trace ID carries the query's start time and a keyed hash
 /// of its query-log fields: the same query gives the same ID, any field (or the key) another;
 /// it round-trips through hex, and nothing else parses as one.
@@ -1027,4 +1066,42 @@ fn obs_037_internal_names_have_their_own_list() {
             .len(),
         2
     );
+}
+
+// REQ: API-005 (ADR-158) — live queries and the restart replay both reach the last-hour
+// list: queries before the clock hour still count, replayed ones only within the window, and
+// a replayed query never sets the window back.
+#[test]
+fn api_005_record_and_replay_fill_the_last_hour() {
+    let (a, b, c) = (ipv4(10, 0, 0, 1), ipv4(10, 0, 0, 2), ipv4(10, 0, 0, 3));
+    let hour_s = 1_800_003_600; // a clock hour
+    let mut agg = Aggregates::new();
+    // Replayed after a restart at hour + 1 min: 30 minutes before, and 2 hours before.
+    let started_s = hour_s + 60;
+    agg.replay_hours(
+        started_s,
+        &query((hour_s - 1800) * 1_000_000, a, Status::Cached, 1),
+        &decoded("a.example"),
+    );
+    agg.replay_hours(
+        started_s,
+        &query((hour_s - 7200) * 1_000_000, c, Status::Cached, 1),
+        &decoded("c.example"),
+    );
+    // Live, after the restart.
+    for _ in 0..3 {
+        agg.record(&Record::Query(
+            query((hour_s + 120) * 1_000_000, b, Status::Cached, 1),
+            decoded("b.example"),
+        ));
+    }
+    let counts = crate::last_hour::rank(agg.last_hour_counts(hour_s + 180), 10);
+    assert_eq!(counts, vec![(b, 3), (a, 1)]);
+    // The clock-hour list only has the live ones.
+    let hourly: Vec<String> = agg
+        .top_names(TopKind::Clients, HourSel::Current, 10)
+        .into_iter()
+        .map(|t| t.key)
+        .collect();
+    assert_eq!(hourly, ["10.0.0.2"]);
 }
