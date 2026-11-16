@@ -119,6 +119,7 @@ export interface RouterStatus {
   usbFreeKb?: number | null;
   uiInstalled?: boolean | null;
   serviceEnabled?: boolean | null;
+  dnsGuard: boolean;
 }
 export type RouterAction =
   | 'restart_dnsmasq'
@@ -129,7 +130,9 @@ export type RouterAction =
   | 'disable_ui'
   | 'reboot_router'
   | 'enable_service'
-  | 'disable_service';
+  | 'disable_service'
+  | 'enable_dns_guard'
+  | 'disable_dns_guard';
 
 export const api = {
   // Instant lockdown.

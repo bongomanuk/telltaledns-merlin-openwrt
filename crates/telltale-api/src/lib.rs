@@ -570,6 +570,7 @@ pub trait Backend: Send + Sync + 'static {
             usb_free_kb: None,
             ui_installed: None,
             service_enabled: None,
+            dns_guard: false,
         }
     }
 

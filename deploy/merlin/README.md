@@ -207,6 +207,15 @@ install takes about 20 MB of the JFFS partition instead of about 34 MB.
 The installer also points dnsmasq at TelltaleDNS and restarts it (`--no-dns`
 skips that).
 
+### DNS protection
+
+Settings, Router has a **DNS protection** switch. It redirects every LAN client's UDP and
+TCP port 53 to dnsmasq, refuses DoT on port 853, and blocks the usual DoH hostnames
+(`dns.google`, `mozilla.cloudflare-dns.com`, and similar) by name. The rules live in
+`/jffs/telltale/dns-guard.sh`, are called from `/jffs/scripts/firewall-start`, and are
+re-applied at every firewall restart, so they survive a reboot. It is the answer to a TV or
+console that ignores DHCP DNS and asks 8.8.8.8 directly.
+
 ### The database and the USB drive
 
 SQLite does not belong on Asus's NTFS driver: it can hang the kernel under load, with ping

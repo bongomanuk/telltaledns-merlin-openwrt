@@ -64,6 +64,7 @@ pub(crate) fn status(data_dir: &str) -> RouterStatus {
         usb_free_kb: usb.as_deref().map(|m| df_kb(Path::new(m)).0),
         ui_installed: (platform == "merlin").then(ui_installed),
         service_enabled: (platform == "openwrt").then(service_enabled),
+        dns_guard: dns_guard_on(),
     }
 }
 
@@ -120,6 +121,20 @@ pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<Router
             let _ = uci("commit", &["telltale"]);
             run(OPENWRT_INIT, &["enable"])?;
             Ok(done("TelltaleDNS starts at boot"))
+        }
+        RouterAction::EnableDnsGuard => {
+            if platform() != "merlin" {
+                return Err(failed("DNS guard is implemented for Merlin only for now".into()));
+            }
+            set_dns_guard(true)?;
+            Ok(done("DNS guard on: port 53 redirected, DoT and known DoH names blocked"))
+        }
+        RouterAction::DisableDnsGuard => {
+            if platform() != "merlin" {
+                return Err(failed("DNS guard is implemented for Merlin only for now".into()));
+            }
+            set_dns_guard(false)?;
+            Ok(done("DNS guard off"))
         }
         RouterAction::DisableService => {
             if platform() != "openwrt" {
@@ -454,4 +469,136 @@ fn run_capture(program: &str, args: &[&str]) -> Result<String, Problem> {
             err
         }))
     }
+}
+
+/// `/jffs/telltale/dns-guard` marks the guard as wanted; the script reads it.
+const DNS_GUARD_FLAG: &str = "/jffs/telltale/dns-guard";
+const DNS_GUARD_SCRIPT: &str = "/jffs/telltale/dns-guard.sh";
+const MERLIN_FIREWALL: &str = "/jffs/scripts/firewall-start";
+const DNS_GUARD_BEGIN: &str = "# telltale dns-guard";
+const DNS_GUARD_END: &str = "# end telltale dns-guard";
+/// DoH endpoints blocked by name. The list is short on purpose: these are the ones a TV or
+/// console is likely to be configured with, not every provider on the internet.
+const DOH_NAMES: [&str; 10] = [
+    "dns.google",
+    "dns.google.com",
+    "mozilla.cloudflare-dns.com",
+    "chrome.cloudflare-dns.com",
+    "cloudflare-dns.com",
+    "one.one.one.one",
+    "dns.quad9.net",
+    "doh.opendns.com",
+    "dns.adguard-dns.com",
+    "doh.cleanbrowsing.org",
+];
+
+fn dns_guard_on() -> bool {
+    platform() == "merlin" && Path::new(DNS_GUARD_FLAG).exists()
+}
+
+fn set_dns_guard(on: bool) -> Result<(), Problem> {
+    write_dns_guard_script()?;
+    if on {
+        std::fs::write(DNS_GUARD_FLAG, "on\n")
+            .map_err(|e| failed(format!("could not write the guard flag: {e}")))?;
+    } else {
+        let _ = std::fs::remove_file(DNS_GUARD_FLAG);
+    }
+    // The rules now, and at every firewall restart (boot, WAN up, VPN changes).
+    run("/bin/sh", &[DNS_GUARD_SCRIPT])?;
+    set_doh_names(on)?;
+    ensure_firewall_hook(on)?;
+    restart_dnsmasq()
+}
+
+/// The rules live in a script so the firewall hook and the UI run the same commands.
+fn write_dns_guard_script() -> Result<(), Problem> {
+    let script = r#"#!/bin/sh
+# TelltaleDNS DNS guard: redirect port 53 to the router and refuse DoT.
+# Run from the UI (Settings, Router) and from /jffs/scripts/firewall-start.
+if [ -f /jffs/telltale/dns-guard ]; then
+    iptables -t nat -C PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || iptables -t nat -A PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53
+    iptables -t nat -C PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || iptables -t nat -A PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53
+    iptables -C FORWARD -i br0 -p tcp --dport 853 -j REJECT 2>/dev/null || iptables -A FORWARD -i br0 -p tcp --dport 853 -j REJECT
+else
+    iptables -t nat -D PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null
+    iptables -t nat -D PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null
+    iptables -D FORWARD -i br0 -p tcp --dport 853 -j REJECT 2>/dev/null
+fi
+exit 0
+"#;
+    std::fs::write(DNS_GUARD_SCRIPT, script)
+        .map_err(|e| failed(format!("could not write {DNS_GUARD_SCRIPT}: {e}")))?;
+    Command::new("chmod")
+        .args(["755", DNS_GUARD_SCRIPT])
+        .status()
+        .map_err(|e| failed(format!("chmod: {e}")))?;
+    Ok(())
+}
+
+/// Add or remove the DoH names in dnsmasq's extra config, between the markers.
+fn set_doh_names(on: bool) -> Result<(), Problem> {
+    let path = Path::new(MERLIN_DNSMASQ_ADD);
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim() == DNS_GUARD_BEGIN {
+            inside = true;
+            continue;
+        }
+        if line.trim() == DNS_GUARD_END {
+            inside = false;
+            continue;
+        }
+        if !inside {
+            lines.push(line.to_owned());
+        }
+    }
+    if on {
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        lines.push(DNS_GUARD_BEGIN.to_owned());
+        for name in DOH_NAMES {
+            lines.push(format!("address=/{name}/0.0.0.0"));
+            lines.push(format!("address=/{name}/::"));
+        }
+        lines.push(DNS_GUARD_END.to_owned());
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    write_lines(path, out.lines().map(str::to_owned).collect::<Vec<_>>().as_slice())
+}
+
+/// Keep a small hook in firewall-start, or remove it again.
+fn ensure_firewall_hook(on: bool) -> Result<(), Problem> {
+    let path = Path::new(MERLIN_FIREWALL);
+    let text = std::fs::read_to_string(path).unwrap_or_else(|_| "#!/bin/sh\n".to_owned());
+    let mut lines: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim() == DNS_GUARD_BEGIN {
+            inside = true;
+            continue;
+        }
+        if line.trim() == DNS_GUARD_END {
+            inside = false;
+            continue;
+        }
+        if !inside {
+            lines.push(line.to_owned());
+        }
+    }
+    if on {
+        lines.push(DNS_GUARD_BEGIN.to_owned());
+        lines.push(format!("[ -x {DNS_GUARD_SCRIPT} ] && /bin/sh {DNS_GUARD_SCRIPT}"));
+        lines.push(DNS_GUARD_END.to_owned());
+    }
+    write_lines(path, &lines)?;
+    Command::new("chmod")
+        .args(["755", MERLIN_FIREWALL])
+        .status()
+        .map_err(|e| failed(format!("chmod: {e}")))?;
+    Ok(())
 }

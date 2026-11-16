@@ -830,6 +830,45 @@
           </section>
 
           <section class="card">
+            <h2>DNS protection</h2>
+            {#if router.platform === 'merlin'}
+              <p>
+                {#if router.dnsGuard}
+                  <span class="badge ok">on</span> Every client's port 53 is sent to the router, and DoT plus common DoH names are blocked.
+                {:else}
+                  <span class="badge">off</span> A device with its own DNS server (8.8.8.8, Private DNS, DoH) can bypass filtering.
+                {/if}
+              </p>
+              <div class="row">
+                {#if router.dnsGuard}
+                  <button
+                    class="danger"
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('disable_dns_guard', 'Turn off DNS protection? Clients may use their own DNS again.')}
+                  >
+                    Turn off DNS protection
+                  </button>
+                {:else}
+                  <button
+                    class="primary"
+                    disabled={routerBusy !== null}
+                    onclick={() => routerRun('enable_dns_guard', 'Send every client\'s DNS to the router and block DoT/DoH?')}
+                  >
+                    Turn on DNS protection
+                  </button>
+                {/if}
+              </div>
+              <p class="muted small">
+                Redirects UDP and TCP port 53 from the LAN to dnsmasq, refuses port 853, and
+                blocks the usual DoH hostnames. The rules are re-applied at every firewall
+                restart, so they survive a reboot.
+              </p>
+            {:else}
+              <p class="muted">DNS protection is available on Merlin only for now.</p>
+            {/if}
+          </section>
+
+          <section class="card">
             <h2>Router integration</h2>
             {#if router.platform === 'merlin'}
               <p>

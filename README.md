@@ -66,7 +66,8 @@ The resolver itself is upstream's. These are the changes on top of it.
 
 - A top-level **TelltaleDNS** entry in the router menu, with its own icon, that survives a firmware update because `services-start` re-applies it.
 - The entry embeds the full dashboard, pre-authenticated from the router session, with the status line below it.
-- **Settings → Router** shows dnsmasq state, the model, firmware, uptime, memory, storage and the USB mount, and can restart dnsmasq or TelltaleDNS, switch forwarding, patch or unpatch the web UI, and reboot the router.
+- **Settings → Router** shows dnsmasq state, the model, firmware, uptime, memory, storage and the USB mount, and can restart dnsmasq or TelltaleDNS, switch forwarding, patch or unpatch the web UI, turn DNS protection on or off, and reboot the router.
+- **DNS protection** sends every client's port 53 to the router, refuses DoT (port 853), and blocks the common DoH hostnames by name. The rules are re-applied at every firewall restart, so a device that ignores DHCP cannot walk around the filter.
 - A LuCI page for OpenWrt.
 
 **Packaging and operations**
