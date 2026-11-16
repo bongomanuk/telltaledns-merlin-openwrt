@@ -519,7 +519,8 @@ fn write_dns_guard_script() -> Result<(), Problem> {
 if [ -f /jffs/telltale/dns-guard ]; then
     iptables -t nat -C PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || iptables -t nat -A PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53
     iptables -t nat -C PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null || iptables -t nat -A PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53
-    iptables -C FORWARD -i br0 -p tcp --dport 853 -j REJECT 2>/dev/null || iptables -A FORWARD -i br0 -p tcp --dport 853 -j REJECT
+    # Insert at the top: Merlin's chain accepts all br0 traffic before the end.
+    iptables -C FORWARD -i br0 -p tcp --dport 853 -j REJECT 2>/dev/null || iptables -I FORWARD 1 -i br0 -p tcp --dport 853 -j REJECT
 else
     iptables -t nat -D PREROUTING -i br0 -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null
     iptables -t nat -D PREROUTING -i br0 -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null
