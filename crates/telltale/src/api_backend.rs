@@ -779,6 +779,19 @@ impl Backend for ApiBackend {
         let Ok(text) = std::fs::read_to_string("/proc/net/nf_conntrack") else {
             return Vec::new();
         };
+        // The router's own addresses (the WAN address in particular) are not devices.
+        let mut local: std::collections::HashSet<Ipv4Addr> = std::collections::HashSet::new();
+        if let Ok(out) = std::process::Command::new("ip").args(["-4", "-o", "addr", "show"]).output() {
+            for word in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+                if let Some(ip) = word
+                    .split('/')
+                    .next()
+                    .and_then(|v| v.parse::<Ipv4Addr>().ok())
+                {
+                    local.insert(ip);
+                }
+            }
+        }
         let mut map: HashMap<Ipv4Addr, Agg> = HashMap::new();
         for line in text.lines() {
             // The line holds two half-tuples, each starting at src=.
@@ -812,8 +825,16 @@ impl Backend for ApiBackend {
                     .find_map(|t| t.strip_prefix("sport=").and_then(|v| v.parse::<u16>().ok()))
                     .unwrap_or(0);
                 let (lan, peer, port) = match (src, dst) {
-                    (Some(s), Some(d)) if s.is_private() && !d.is_private() => (s, d.to_string(), dport),
-                    (Some(s), Some(d)) if d.is_private() && !s.is_private() => (d, s.to_string(), sport),
+                    (Some(s), Some(d))
+                        if s.is_private() && !d.is_private() && !local.contains(&s) =>
+                    {
+                        (s, d.to_string(), dport)
+                    }
+                    (Some(s), Some(d))
+                        if d.is_private() && !s.is_private() && !local.contains(&d) =>
+                    {
+                        (d, s.to_string(), sport)
+                    }
                     _ => continue,
                 };
                 let e = map.entry(lan).or_default();
