@@ -41,28 +41,28 @@
   import Alerts from './pages/Alerts.svelte';
 
   // T6.8 — the sidebar in sections, each page with an icon.
-  const pages: { path: string; label: string; page: Component; icon: string; section: string }[] = [
-    { path: '/', label: 'Dashboard', page: Dashboard, icon: 'dashboard', section: 'Monitor' },
-    { path: '/traffic', label: 'Traffic map', page: Traffic, icon: 'traffic', section: 'Monitor' },
-    { path: '/heatmap', label: 'Heatmap', page: Heatmap, icon: 'heatmap', section: 'Monitor' },
-    { path: '/flow', label: 'Flow', page: Flow, icon: 'flow', section: 'Monitor' },
-    { path: '/queries', label: 'Query log', page: Queries, icon: 'queries', section: 'Monitor' },
-    { path: '/analyze', label: 'Analyze', page: Analyze, icon: 'analyze', section: 'Monitor' },
-    { path: '/explain', label: 'Explain', page: Explain, icon: 'explain', section: 'Monitor' },
-    { path: '/anomalies', label: 'Anomalies', page: Anomalies, icon: 'anomalies', section: 'Monitor' },
-    { path: '/clients', label: 'Clients', page: Clients, icon: 'clients', section: 'Devices' },
-    { path: '/groups', label: 'Groups', page: Groups, icon: 'groups', section: 'Devices' },
-    { path: '/lists', label: 'Lists', page: Lists, icon: 'lists', section: 'Filtering & DNS' },
-    { path: '/rules', label: 'Quick rules', page: Rules, icon: 'rules', section: 'Filtering & DNS' },
-    { path: '/upstreams', label: 'Upstreams', page: Upstreams, icon: 'upstreams', section: 'Filtering & DNS' },
-    { path: '/local-dns', label: 'Names on my network', page: LocalDns, icon: 'names', section: 'Filtering & DNS' },
-    { path: '/schedules', label: 'Schedules', page: Schedules, icon: 'rules', section: 'Filtering & DNS' },
-    { path: '/lockdown', label: 'Lockdown', page: Lockdown, icon: 'pause', section: 'Filtering & DNS' },
-    { path: '/cluster', label: 'Cluster', page: Cluster, icon: 'cluster', section: 'System' },
-    { path: '/alerts', label: 'Alerts', page: Alerts, icon: 'bell', section: 'System' },
-    { path: '/agent-changes', label: 'Agent changes', page: AgentChanges, icon: 'inbox', section: 'System' },
-    { path: '/cache', label: 'Cache', page: Cache, icon: 'cache', section: 'System' },
-    { path: '/settings', label: 'Settings', page: Settings, icon: 'settings', section: 'System' },
+  const pages: { path: string; label: string; page: Component; icon: string; section: string; hint: string }[] = [
+    { path: "/", label: "Dashboard", page: Dashboard, icon: "dashboard", section: "Monitor", hint: "What is happening now: queries, blocking, cache and upstream health." },
+    { path: "/traffic", label: "Traffic map", page: Traffic, icon: "traffic", section: "Monitor", hint: "Where the questions go, per client and per domain." },
+    { path: "/heatmap", label: "Heatmap", page: Heatmap, icon: "heatmap", section: "Monitor", hint: "When devices are active, hour by hour." },
+    { path: "/flow", label: "Flow", page: Flow, icon: "flow", section: "Monitor", hint: "One device's DNS journey from question to answer." },
+    { path: "/queries", label: "Query log", page: Queries, icon: "queries", section: "Monitor", hint: "Every question that arrived, with the device, rule and timing." },
+    { path: "/analyze", label: "Analyze", page: Analyze, icon: "analyze", section: "Monitor", hint: "Group and compare the query log: by device, domain or time." },
+    { path: "/explain", label: "Explain", page: Explain, icon: "explain", section: "Monitor", hint: "Why one name got the answer it did: which rule, which list, which upstream." },
+    { path: "/anomalies", label: "Anomalies", page: Anomalies, icon: "anomalies", section: "Monitor", hint: "Unusual behaviour per device: volume spikes, new domains, drift." },
+    { path: "/clients", label: "Clients", page: Clients, icon: "clients", section: "Devices", hint: "The devices on your network, the groups they belong to, and what they look like." },
+    { path: "/groups", label: "Groups", page: Groups, icon: "groups", section: "Devices", hint: "Which lists, services, schedules and upstreams apply to which devices." },
+    { path: "/lists", label: "Lists", page: Lists, icon: "lists", section: "Filtering & DNS", hint: "The blocklists and allowlists, and whether they downloaded." },
+    { path: "/rules", label: "Quick rules", page: Rules, icon: "rules", section: "Filtering & DNS", hint: "One-off allow or block rules for a name, a device or everyone." },
+    { path: "/upstreams", label: "Upstreams", page: Upstreams, icon: "upstreams", section: "Filtering & DNS", hint: "The DNS servers TelltaleDNS asks, and how they are grouped." },
+    { path: "/local-dns", label: "Names on my network", page: LocalDns, icon: "names", section: "Filtering & DNS", hint: "Names answered locally: hosts entries, records, reverse lookups." },
+    { path: "/schedules", label: "Schedules", page: Schedules, icon: "rules", section: "Filtering & DNS", hint: "Weekly windows that block services or everything for a group." },
+    { path: "/lockdown", label: "Lockdown", page: Lockdown, icon: "pause", section: "Filtering & DNS", hint: "Block the chosen groups right now, until a deadline." },
+    { path: "/cluster", label: "Cluster", page: Cluster, icon: "cluster", section: "System", hint: "The other TelltaleDNS nodes, their health and their settings." },
+    { path: "/alerts", label: "Alerts", page: Alerts, icon: "bell", section: "System", hint: "Where alerts go and what triggers them." },
+    { path: "/agent-changes", label: "Agent changes", page: AgentChanges, icon: "inbox", section: "System", hint: "What AI agents changed, when, and whether it worked." },
+    { path: "/cache", label: "Cache", page: Cache, icon: "cache", section: "System", hint: "The response cache: size, hit rate and what it holds." },
+    { path: "/settings", label: "Settings", page: Settings, icon: "settings", section: "System", hint: "Your account, tokens, the router, and this node's housekeeping." },
   ];
   const sections = [...new Set(pages.map((p) => p.section))];
 
@@ -205,7 +205,7 @@
       {#each sections as sec (sec)}
         <div class="section">{sec}</div>
         {#each pages.filter((p) => p.section === sec) as p (p.path)}
-          <a class="nav" href={href(p.path)} aria-current={current.path === p.path ? 'page' : undefined} onclick={closeMenu}>
+          <a class="nav" href={href(p.path)} title={p.hint} aria-current={current.path === p.path ? 'page' : undefined} onclick={closeMenu}>
             <Icon name={p.icon} /> <span>{p.label}</span>
             {#if badges[p.path]}
               <b class="count" class:alert={p.path === '/lists'} title={p.path === '/lists' ? 'lists failing to download' : 'new anomalies in the last 24 hours (not acknowledged)'}>{badges[p.path]}</b>
