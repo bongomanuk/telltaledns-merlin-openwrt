@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
@@ -720,6 +720,9 @@ pub fn public(auth: AuthState) -> Router {
         .route("/api/v1/auth/status", get(status))
         .route("/api/v1/auth/setup", post(setup))
         .route("/api/v1/auth/login", post(login))
+        // The Merlin page embeds the dashboard; the router's own sign-in has already
+        // happened, so a per-install token creates the session instead of a second login.
+        .route("/api/v1/auth/ui-login", get(ui_login))
         .route("/api/v1/auth/display", post(open_display))
         .route("/api/v1/auth/oidc/{id}/start", get(oidc_start))
         .route("/api/v1/auth/oidc/{id}/callback", get(oidc_callback))
@@ -958,6 +961,52 @@ pub(crate) async fn status(
         }))
     })
     .await
+}
+
+/// Sign in from the router page.
+///
+/// The page is served only to a signed-in router session and carries the token from
+/// `<data_dir>/ui-token`. A matching token creates a session for the first admin and
+/// redirects to the dashboard, so the embedded UI opens without a second sign-in.
+#[utoipa::path(get, path = "/api/v1/auth/ui-login", tag = "auth",
+    params(("token" = String, Query, description = "From <data_dir>/ui-token.")),
+    responses((status = 302, description = "Signed in; the dashboard follows."),
+        (status = 401, body = Problem, description = "Wrong token."),
+        (status = 404, body = Problem, description = "Disabled: no TELLTALE_UI_TOKEN in the environment.")))]
+pub(crate) async fn ui_login(
+    State(auth): State<AuthState>,
+    Query(q): Query<UiLogin>,
+    headers: HeaderMap,
+    req_ext: axum::http::Extensions,
+) -> Result<Response, Problem> {
+    let expected = std::env::var("TELLTALE_UI_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| Problem::not_found("pre-authenticated router access is off"))?;
+    if !crypto::ct_eq(q.token.as_bytes(), expected.as_bytes()) {
+        return Err(Problem::new(
+            crate::problem::Code::Unauthorized,
+            "wrong token",
+        ));
+    }
+    let ip = remote(&auth, &req_ext, &headers);
+    let https = is_https(&auth, &req_ext, &headers);
+    let ttl = auth.settings().session_ttl_secs;
+    let user = auth
+        .first_admin()?
+        .ok_or_else(|| Problem::unavailable("no admin exists yet"))?;
+    let sess = auth.start_session(&user, ip, now())?;
+    Ok((
+        [(header::SET_COOKIE, session_cookie(&sess, ttl, https))],
+        axum::response::Redirect::to("/"),
+    )
+        .into_response())
+}
+
+/// The router page's token.
+#[derive(serde::Deserialize)]
+pub(crate) struct UiLogin {
+    token: String,
 }
 
 /// Create the first admin.

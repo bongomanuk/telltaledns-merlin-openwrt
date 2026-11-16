@@ -886,6 +886,16 @@ impl Auth {
     }
 
     /// Starts a UI session for `user`. Blocking.
+    /// The first admin, for the router page's pre-authenticated session.
+    pub fn first_admin(&self) -> Result<Option<User>, Problem> {
+        Ok(self
+            .state
+            .users()
+            .map_err(db)?
+            .into_iter()
+            .find(|u| u.role == "admin"))
+    }
+
     pub fn start_session(
         &self,
         user: &User,

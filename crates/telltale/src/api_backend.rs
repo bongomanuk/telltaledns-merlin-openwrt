@@ -1748,9 +1748,8 @@ impl Backend for ApiBackend {
                 .into_iter()
                 .map(|i| (i.client.clone(), i))
                 .collect();
-        self.src
-            .config
-            .load()
+        let cfg = self.src.config.load();
+        let mut out: Vec<ClientInfo> = cfg
             .client
             .iter()
             .map(|c| {
@@ -1764,7 +1763,41 @@ impl Backend for ApiBackend {
                     .find_map(|a| identities.get(&a).cloned());
                 info
             })
-            .collect()
+            .collect();
+        // Devices the router knows are listed even before anyone names them here, so the
+        // page is populated from Merlin rather than starting empty. Adding one creates a
+        // client entry; until then it has no groups of its own.
+        let configured: Vec<String> = cfg
+            .client
+            .iter()
+            .flat_map(|c| c.match_keys.iter().map(|k| k.to_string().to_ascii_lowercase()))
+            .collect();
+        for (ip, lease) in self.src.pipeline.router_leases.load().iter() {
+            let ip_s = ip.to_string();
+            let mac = lease.mac.to_ascii_lowercase();
+            if configured.contains(&ip_s) || (!mac.is_empty() && configured.contains(&mac)) {
+                continue;
+            }
+            let mut matches = Vec::new();
+            if !mac.is_empty() {
+                matches.push(mac);
+            }
+            matches.push(ip_s);
+            out.push(ClientInfo {
+                name: lease
+                    .hostname
+                    .clone()
+                    .unwrap_or_else(|| ip.to_string()),
+                matches,
+                groups: Vec::new(),
+                source: "router".to_owned(),
+                effective_groups: vec!["default".to_owned()],
+                groups_from: "default".to_owned(),
+                kind: None,
+                identity: None,
+            });
+        }
+        out
     }
 
     // REQ: OBS-025 (T13.3)

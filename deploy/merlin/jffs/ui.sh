@@ -45,6 +45,9 @@ install_page() {
     [ -n "$page" ] || { echo "no free user page slot" >&2; return 1; }
 
     cp "$base/telltale.asp" "/www/user/$page"
+    # The dashboard inside the page signs in with this token instead of asking again.
+    token=$(cat "$base/ui-token" 2>/dev/null || true)
+    [ -n "$token" ] && sed -i "s/__UI_TOKEN__/$token/" "/www/user/$page"
     printf '%s\n' "$page" > "$base/ui-page"
 
     # A top-level entry, placed after AiProtection rather than first in the

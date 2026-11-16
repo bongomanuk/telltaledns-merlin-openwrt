@@ -124,6 +124,16 @@
       .catch((e) => (rhythmError = e));
   });
 
+  // A device the router knows becomes a client (and can then join groups) with one click.
+  async function adopt(c: S['ClientInfo']) {
+    try {
+      await api.putClient(c.name, { match: c.match, groups: ['default'] });
+      load();
+    } catch (e) {
+      error = e;
+    }
+  }
+
   async function remove(name: string) {
     try {
       await api.deleteClient(name);
@@ -176,7 +186,7 @@
     <section class="card">
       <h2>Devices</h2>
       {#if configured.length === 0}
-        <p class="empty">No devices yet. Click an address anywhere (here, the dashboard, or the query log) and choose “Name this device…”, or add <code>[[client]]</code> entries to the config file.</p>
+        <p class="empty">No devices yet. The router's devices appear here automatically; click Add to manage one.</p>
       {:else}
         <div class="table-wrap">
           <table>
@@ -195,10 +205,14 @@
                       <div class="muted">{fromText[c.groupsFrom ?? '']}</div>
                     {/if}
                   </td>
-                  <td class="small">{c.source === 'api' ? 'the UI / API' : 'config file'}</td>
+                  <td class="small">
+                    {c.source === 'api' ? 'the UI / API' : c.source === 'router' ? 'the router' : 'config file'}
+                  </td>
                   <td class="num">
                     {#if c.source === 'api' && canEdit}
                       <button class="link small" onclick={() => remove(c.name)} aria-label={`Forget ${c.name}`}>Forget</button>
+                    {:else if c.source === 'router' && canEdit}
+                      <button class="link small" onclick={() => adopt(c)} aria-label={`Add ${c.name}`}>Add</button>
                     {/if}
                   </td>
                 </tr>

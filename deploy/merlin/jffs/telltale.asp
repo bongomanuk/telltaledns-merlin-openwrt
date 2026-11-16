@@ -20,27 +20,28 @@
   .tt-value { font-family: Consolas, Monaco, monospace; }
   .tt-ok { color: #1a7f37; font-weight: bold; }
   .tt-bad { color: #c62828; font-weight: bold; }
-  .tt-frame { width: 100%; height: 620px; border: 0; background: #fff; margin-top: 10px; }
-  .tt-row { padding: 6px 0; }
+  .tt-frame {
+    width: 100%;
+    height: calc(100vh - 210px);
+    min-height: 520px;
+    border: 0;
+    background: #fff;
+    border-radius: 3px;
+  }
+  .tt-status { width: 100%; margin-top: 8px; }
+  .tt-status th, .tt-status td { padding: 4px 8px; }
 </style>
 <script type="text/javascript">
-var appUrl = 'http://' + location.hostname + ':8053/';
+var appBase = 'http://' + location.hostname + ':8053/';
+var appLogin = appBase + 'api/v1/auth/ui-login?token=__UI_TOKEN__';
 
 function initial() {
   show_menu();
-  document.getElementById('app').src = appUrl;
+  // No token (an older install): open the dashboard and sign in there.
+  document.getElementById('app').src =
+    appLogin.indexOf('__UI_TOKEN__') === -1 ? appLogin : appBase;
   refresh();
   setInterval(refresh, 10000);
-}
-
-function openApp() {
-  window.open(appUrl, '_blank');
-}
-
-function setText(id, text, cls) {
-  var el = document.getElementById(id);
-  el.textContent = text;
-  if (cls) el.className = 'tt-value ' + cls;
 }
 
 function formatUptime(secs) {
@@ -51,6 +52,12 @@ function formatUptime(secs) {
   if (h) return h + 'h ' + m + 'm';
   if (m) return m + 'm';
   return Math.floor(secs) + 's';
+}
+
+function setText(id, text, cls) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  if (cls) el.className = 'tt-value ' + cls;
 }
 
 function refresh() {
@@ -99,56 +106,24 @@ function down() {
 </td>
 <td valign="top">
 <div id="tabMenu" class="submenuBlock"></div>
-<table width="98%" border="0" align="left" cellpadding="0" cellspacing="0">
+<table width="100%" border="0" align="left" cellpadding="0" cellspacing="0">
 <tr>
 <td align="left" valign="top">
-<table width="760px" border="0" cellpadding="5" cellspacing="0" class="FormTitle" id="FormTitle" style="border-radius:3px;">
-<tbody>
-<tr>
-<td bgcolor="#4D595D" valign="top">
-<div class="formfonttitle">TelltaleDNS</div>
-<div class="splitLine"></div>
-<p class="formfontdesc">
-  The resolver behind port 53. dnsmasq keeps DHCP and the local names and sends public
-  queries here, where they are filtered and resolved over DNS over TLS.
-</p>
+<iframe id="app" class="tt-frame" src="about:blank" title="TelltaleDNS"></iframe>
 
-<table class="FormTable" width="100%" cellpadding="4" cellspacing="0">
+<table class="FormTable tt-status" cellpadding="0" cellspacing="0">
   <tr>
-    <th width="28%">Status</th>
+    <th>Status</th>
     <td><span id="state" class="tt-value">checking...</span></td>
-  </tr>
-  <tr>
     <th>Version</th>
     <td><span id="version" class="tt-value">-</span></td>
-  </tr>
-  <tr>
     <th>Uptime</th>
     <td><span id="uptime" class="tt-value">-</span></td>
-  </tr>
-  <tr>
     <th>Queries</th>
     <td><span id="queries" class="tt-value">-</span></td>
-  </tr>
-  <tr>
     <th>Blocked</th>
     <td><span id="blocked" class="tt-value">-</span></td>
   </tr>
-</table>
-
-<div class="tt-row">
-  <input type="button" class="button_gen" value="Open in a new tab" onclick="openApp()">
-  <input type="button" class="button_gen" value="Refresh" onclick="refresh()">
-</div>
-
-<p class="formfontdesc">
-  Restart, forwarding and the web UI patch are under Settings, Router in the dashboard.
-</p>
-
-<iframe id="app" class="tt-frame" src="about:blank" title="TelltaleDNS"></iframe>
-</td>
-</tr>
-</tbody>
 </table>
 </td>
 </tr>

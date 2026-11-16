@@ -78,6 +78,12 @@ cp "$here/telltale.gz" "$dest/telltale.gz"
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
 cp "$here/telltale_icon.png" "$dest/telltale_icon.png"
+# The router page signs the embedded dashboard in with this token. It is readable only
+# by root and only sent to sessions that already signed in to the router.
+if [ ! -s "$dest/ui-token" ]; then
+    dd if=/dev/urandom bs=16 count=1 2>/dev/null | md5sum | cut -d' ' -f1 > "$dest/ui-token"
+    chmod 600 "$dest/ui-token"
+fi
 chmod 755 "$dest/ui.sh"
 chmod 644 "$dest/telltale.asp"
 
@@ -128,7 +134,9 @@ if [ -x /jffs/telltale/telltale ]; then
     fi
     mkdir -p "$data"
     sed "s#^data_dir = .*#data_dir = \"$data\"#" "$cfg" > /tmp/telltale-run.toml
-    /jffs/telltale/telltale run -c /tmp/telltale-run.toml >>/tmp/telltale.log 2>&1 &
+    ui_token=""
+    [ -s /jffs/telltale/ui-token ] && ui_token=$(cat /jffs/telltale/ui-token)
+    TELLTALE_UI_TOKEN="$ui_token" /jffs/telltale/telltale run -c /tmp/telltale-run.toml >>/tmp/telltale.log 2>&1 &
 fi
 START
 
