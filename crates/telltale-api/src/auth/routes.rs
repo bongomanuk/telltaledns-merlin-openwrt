@@ -996,17 +996,51 @@ pub(crate) async fn ui_login(
         .first_admin()?
         .ok_or_else(|| Problem::unavailable("no admin exists yet"))?;
     let sess = auth.start_session(&user, ip, now())?;
-    Ok((
-        [(header::SET_COOKIE, session_cookie(&sess, ttl, https))],
-        axum::response::Redirect::to("/"),
-    )
-        .into_response())
+    // The router page fetches this from its own origin (a different port), so the
+    // response allows exactly that origin, with credentials, and returns no redirect.
+    let host_of = |u: &str| {
+        u.split("://")
+            .nth(1)
+            .unwrap_or(u)
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .to_owned()
+    };
+    let request_host = host_of(
+        headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .filter(|o| !request_host.is_empty() && host_of(o) == request_host);
+    let mut out_headers = HeaderMap::new();
+    out_headers.insert(header::SET_COOKIE, session_cookie(&sess, ttl, https));
+    if let Some(origin) = origin {
+        out_headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin).unwrap_or(HeaderValue::from_static("")),
+        );
+        out_headers.insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
+    }
+    if q.json.unwrap_or(false) {
+        return Ok((StatusCode::NO_CONTENT, out_headers).into_response());
+    }
+    Ok((out_headers, axum::response::Redirect::to("/")).into_response())
 }
 
 /// The router page's token.
 #[derive(serde::Deserialize)]
 pub(crate) struct UiLogin {
     token: String,
+    /// Return 204 and set the cookie, instead of redirecting (for the router page's fetch).
+    json: Option<bool>,
 }
 
 /// Create the first admin.

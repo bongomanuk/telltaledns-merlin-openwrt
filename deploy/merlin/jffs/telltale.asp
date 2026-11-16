@@ -33,13 +33,21 @@
 </style>
 <script type="text/javascript">
 var appBase = 'http://' + location.hostname + ':8053/';
-var appLogin = appBase + 'api/v1/auth/ui-login?token=__UI_TOKEN__';
+var appLogin = appBase + 'api/v1/auth/ui-login?json=1&token=__UI_TOKEN__';
 
 function initial() {
   show_menu();
+  var frame = document.getElementById('app');
   // No token (an older install): open the dashboard and sign in there.
-  document.getElementById('app').src =
-    appLogin.indexOf('__UI_TOKEN__') === -1 ? appLogin : appBase;
+  if (appLogin.indexOf('__UI_TOKEN__') !== -1) {
+    frame.src = appBase;
+  } else {
+    // The cookie is set from this page, a first-party context. Setting it from the
+    // frame itself is rejected as a third-party cookie by Chrome.
+    fetch(appLogin, { credentials: 'include' })
+      .catch(function () {})
+      .then(function () { frame.src = appBase; });
+  }
   refresh();
   setInterval(refresh, 10000);
 }
