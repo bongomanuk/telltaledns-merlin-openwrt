@@ -35,6 +35,7 @@ pub mod rhythm_api;
 pub mod rollout_api;
 pub mod simulate_api;
 pub mod slo;
+pub mod support_api;
 pub mod time;
 pub mod timeline;
 pub mod ui;
@@ -107,6 +108,23 @@ pub trait Backend: Send + Sync + 'static {
         Err(Problem::unavailable(
             "backups aren't available on this node",
         ))
+    }
+    /// REQ: OPS-011 (ADR-156) — a support package: the archive (or, with `dry_run`, only its
+    /// manifest). May take a few seconds (each part has a deadline); called on a blocking thread.
+    fn support_package(
+        &self,
+        req: &model::SupportPackageRequest,
+        dry_run: bool,
+    ) -> Result<SupportPackageOutput, Problem> {
+        let _ = (req, dry_run);
+        Err(Problem::unavailable(
+            "support packages aren't available on this node",
+        ))
+    }
+    /// REQ: OPS-011 — the pseudonym map of the package `id`, once, if it is still held.
+    fn support_map(&self, id: &str) -> Option<String> {
+        let _ = id;
+        None
     }
     /// A Git push webhook (ADR-049): checks the signature, then the ref at once.
     fn git_hook(&self, signature: Option<String>, body: Vec<u8>) -> Result<(), Problem> {
@@ -244,7 +262,15 @@ pub trait Backend: Send + Sync + 'static {
         limit: usize,
     ) -> Result<QueryPage, Problem>;
     fn explain(&self, p: &ExplainParams) -> Result<Explanation, Problem>;
+    /// Configured lists; `GET /api/v1/lists` fills each one's `hits` from
+    /// [`Backend::list_hits`].
     fn lists(&self) -> Vec<ListInfo>;
+    /// REQ: OBS-009 (T7.14) — queries each list blocked or allowed since start, by list name:
+    /// this node's, and in a cluster every node's added up (the nodes serving DNS needn't be
+    /// the one serving the API).
+    fn list_hits(&self) -> std::collections::BTreeMap<String, u64> {
+        self.lists().into_iter().map(|l| (l.name, l.hits)).collect()
+    }
     fn groups(&self) -> Vec<GroupInfo>;
     fn clients(&self) -> Vec<ClientInfo>;
     fn upstreams(&self) -> Vec<UpstreamInfo>;
@@ -327,6 +353,11 @@ pub trait Backend: Send + Sync + 'static {
     /// REQ: OBS-032 — the query log's privacy level (0 to 3; a device's flow needs 1 or lower).
     fn qlog_privacy_level(&self) -> u8 {
         0
+    }
+    /// REQ: OBS-029 (ADR-129) — the network's queries (or blocked queries) per slot, from the
+    /// time buckets (every node's, summed; each node sums its own).
+    fn heatmap_network(&self, q: &heatmap::NetworkQuery) -> Vec<u64> {
+        q.slots_of(&self.timeseries(q.step(), q.from_s, q.to_s))
     }
     /// REQ: OBS-029 (ADR-129) — a device's or a name's hours from the hourly top lists (every
     /// node's, summed); `privacy_level` when the privacy level hides them.
@@ -793,6 +824,19 @@ pub enum DrillWrite {
 
 pub type Shared = Arc<dyn Backend>;
 
+/// REQ: OPS-011 — a support package made by the backend.
+#[derive(Debug)]
+pub struct SupportPackageOutput {
+    /// `telltale-support-<node>-<time>.tar.gz`: letters, digits, `-`, and `.`.
+    pub file_name: String,
+    /// Set when the pseudonym map is being held (`keepMap`): the ID that fetches it.
+    pub id: Option<String>,
+    /// `MANIFEST.json`'s content.
+    pub manifest: serde_json::Value,
+    /// The archive (empty for a dry run).
+    pub archive: Vec<u8>,
+}
+
 /// A boxed future returned by backend writes.
 pub type BoxFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'static>>;
 
@@ -1121,6 +1165,11 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
             config_api::admin_routes(Arc::clone(&backend), Arc::clone(&auth))
                 .route_layer(from_fn(auth::routes::require_admin)),
         )
+        // REQ: OPS-011 (ADR-156) — a support package reads logs and state: admin, no agent scope.
+        .merge(
+            support_api::admin_routes(Arc::clone(&backend), Arc::clone(&auth))
+                .route_layer(from_fn(auth::routes::require_admin)),
+        )
         .layer(from_fn_with_state(
             Arc::clone(&auth),
             auth::routes::authenticate,
@@ -1162,7 +1211,7 @@ async fn fallback(
         license(name = "Apache-2.0 OR MIT")
     ),
     paths(
-        system_info, system_health, system_probes, maintenance_api::start, maintenance_api::end, drill_api::start, drill_api::end, drill_api::active, drill_api::list, drill_api::report, drill_api::affinity, upstream_checks, shadow_lists, overblocking, update_check, plans::list, plans::approve, plans::reject, cluster, compare::cluster_compare, rhythm_api::client_rhythm, timeline::client_timeline, config_api::cluster_promote, config_api::backup_download, git_hook, stats_summary, stats_timeseries, stats_top, stats_latency, stats_slo, attribution::slo_attribution, heatmap::stats_heatmap, flow::stats_flow, latency_heatmap::latency_heatmap, latency_heatmap::latency_exemplars, queries,
+        system_info, system_health, system_probes, maintenance_api::start, maintenance_api::end, drill_api::start, drill_api::end, drill_api::active, drill_api::list, drill_api::report, drill_api::affinity, upstream_checks, shadow_lists, overblocking, update_check, plans::list, plans::approve, plans::reject, cluster, compare::cluster_compare, rhythm_api::client_rhythm, timeline::client_timeline, config_api::cluster_promote, config_api::backup_download, support_api::make, support_api::map, git_hook, stats_summary, stats_timeseries, stats_top, stats_latency, stats_slo, attribution::slo_attribution, heatmap::stats_heatmap, flow::stats_flow, latency_heatmap::latency_heatmap, latency_heatmap::latency_exemplars, queries,
         queries_stream,
         explain, lists, groups, services, clients, upstreams,
         auth::routes::status, auth::routes::setup, auth::routes::login, auth::routes::logout,
@@ -1173,14 +1222,14 @@ async fn fallback(
         auth::routes::user_tokens, auth::routes::revoke_user_token,
         auth::routes::audit_log, auth::routes::audit_verify, auth::routes::oidc_start,
         auth::routes::oidc_callback, config_api::put_client, config_api::delete_client,
-        local_names, zones, alerts_status, config_api::put_alert_destination, config_api::delete_alert_destination, config_api::put_alert_rule, config_api::delete_alert_rule, config_api::test_alert_destination, config_api::check_upstream, config_api::check_list, config_api::put_schedule, config_api::delete_schedule, config_api::put_ratelimit, config_api::delete_ratelimit, config_api::put_exclusions, config_api::delete_exclusions, config_api::put_simulate_settings, config_api::delete_simulate_settings, config_api::put_rollout_settings, config_api::delete_rollout_settings, rollout_api::rollout_status, rollout_api::cluster_versions, rollout_api::rollout_promote, rollout_api::rollout_abort, rollout_api::pin_version, rollout_api::unpin_cluster, cluster_nodes_api::remove_node, simulate_api::simulate, identify_api::identities, identify_api::identity, kubernetes_api::workloads, kubernetes_api::status, config_api::put_kubernetes_map, config_api::delete_kubernetes_map, forwards, rules, anomalies, annotations_api::list_annotations, annotations_api::add_note, anomaly_api::acknowledge, anomaly_api::unacknowledge, new_domains, vqlog_query, dhcp_leases, cache_api::stats, cache_api::lookup, cache_api::entries, cache_api::flush, blocking_api::state, blocking_api::pause, blocking_api::resume, config_entries, config_api::put_upstream, config_api::delete_upstream, config_api::put_upstream_group, config_api::delete_upstream_group, config_api::put_list, config_api::delete_list, config_api::put_group, config_api::delete_group, config_api::put_records, config_api::delete_records, config_api::put_rule, config_api::delete_rule,
+        local_names, zones, alerts_status, config_api::put_alert_destination, config_api::delete_alert_destination, config_api::put_alert_rule, config_api::delete_alert_rule, config_api::test_alert_destination, config_api::check_upstream, config_api::check_list, config_api::put_schedule, config_api::delete_schedule, config_api::put_anomaly_mute, config_api::delete_anomaly_mute, config_api::put_ratelimit, config_api::delete_ratelimit, config_api::put_exclusions, config_api::delete_exclusions, config_api::put_simulate_settings, config_api::delete_simulate_settings, config_api::put_rollout_settings, config_api::delete_rollout_settings, rollout_api::rollout_status, rollout_api::cluster_versions, rollout_api::rollout_promote, rollout_api::rollout_abort, rollout_api::pin_version, rollout_api::unpin_cluster, cluster_nodes_api::remove_node, simulate_api::simulate, identify_api::identities, identify_api::identity, kubernetes_api::workloads, kubernetes_api::status, config_api::put_kubernetes_map, config_api::delete_kubernetes_map, forwards, rules, anomalies, annotations_api::list_annotations, annotations_api::add_note, anomaly_api::acknowledge, anomaly_api::unacknowledge, new_domains, vqlog_query, dhcp_leases, cache_api::stats, cache_api::lookup, cache_api::entries, cache_api::flush, blocking_api::state, blocking_api::pause, blocking_api::resume, config_entries, config_api::put_upstream, config_api::delete_upstream, config_api::put_upstream_group, config_api::delete_upstream_group, config_api::put_list, config_api::delete_list, config_api::put_group, config_api::delete_group, config_api::put_records, config_api::delete_records, config_api::put_rule, config_api::delete_rule,
         config_api::put_forward, config_api::delete_forward
     ),
     components(schemas(
         Problem, problem::Code, SystemInfo, MaskedClients, ClusterInfo, ClusterPeer, ClusterView, ClusterNode, ClusterEvent, ClusterCheck, ClusterConflict, ClusterFailover, ClusterSource, HostReport, HostInfo, HostPoint, model::RuleInput, model::RuleInfo, model::CacheNodeStats, model::CacheEntry, model::CacheLookup, model::CacheFlushRequest, model::CacheFlushNode, model::CacheFlushResult, model::CacheSettings, model::CacheWarmStart, model::CachePoint, model::CacheSizing, model::CacheSizingStep, model::CacheMakeup, model::CacheTopEntry, model::CacheNodeEntries, model::BlockingRequest, model::BlockingNode, model::PauseInfo, model::ConfigEntry, plans::Plan, model::ServiceInfo, PromoteRequest, model::PromotePlan, Summary, TimeBucket, TopItem, model::ClientStatusCounts, LatencyRow, QueryPage, QueryRow,
         TailDropped,
         ScanStats, Explanation, ExplainClient, ExplainBlock, ExplainFilter, ExplainRule,
-        ExplainLine, ExplainRoute, ListInfo, GroupInfo, ClientInfo, ClientInput, ClientChange, LocalName, RecordInput, RecordsInput, ForwardInfo, ForwardInput, ConfigChange, AnomalyFinding, model::AnomalyAckInfo, model::AnomalyAckRequest, model::AnomalyAckResult, model::Annotation, model::AnnotationPage, model::NoteRequest, model::Health, model::HealthReason, model::NodeMaintenance, model::MaintenanceRequest, model::MaintenanceResult, model::DrillAll, model::DrillTargets, model::DrillRequest, model::DrillMode, model::DrillCheck, model::DrillTargetDevice, model::DrillStart, model::ActiveDrill, model::DrillDevice, model::DrillNodeCount, model::DrillSummary, model::DrillReport, model::DrillPage, model::AffinityNode, model::AffinityRow, model::AffinityPage, model::GuardReadings, model::ClusterPin, model::ClusterRollout, model::RolloutFailure, model::RolloutNode, model::RolloutStatus, model::ClusterVersion, model::ClusterVersions, model::PinRequest, model::RolloutAction, model::NodeRemoval, model::DeviceIdentity, model::IdentityEvidence, model::WorkloadEvidence, model::ExplainWorkload, model::WorkloadInfo, model::WorkloadPod, model::WorkloadPage, model::KubernetesStatus, model::MatchedDomain, model::IdentityRunnerUp, model::Simulation, model::SimulatedClass, model::SimulatedName, model::SimulatedDevice, model::SimulatedGroup, model::SimulateRequest, model::SloStatus, attribution::SloAttribution, attribution::AttributionBudget, attribution::AttributionPoint, attribution::AttributionRow, attribution::AttributionCoverage, heatmap::Heatmap, flow::QueryFlow, flow::FlowNode, flow::FlowLink, compare::NodeCompare, compare::NodeNumbers, compare::NodeSeries, compare::NodeFinding, rhythm_api::ClientRhythm, rhythm_api::RhythmDomain, timeline::DeviceTimeline, timeline::TimelineLane, timeline::TimelineEvent, latency_heatmap::LatencyHeatmap, latency_heatmap::LatencyExemplar, latency_heatmap::LatencyExemplars, model::SloObjective, model::SloBurn, model::ProbeResult, model::UpstreamChecks, model::UpstreamQuality, model::EdeCount, model::UpstreamDisagreement, model::ShadowListStats, model::NameCount, model::OverblockSuspect, NewDomain, VqlogResult, VqlogCost, ZoneInfo, model::RewriteInfo, model::AlertsStatus, model::FiringAlert, model::AlertDelivery, model::AlertTest, model::CheckResult, ListShare, DhcpLease, UpstreamInfo, Step, TopKind,
+        ExplainLine, ExplainRoute, ListInfo, GroupInfo, ClientInfo, ClientInput, ClientChange, LocalName, RecordInput, RecordsInput, ForwardInfo, ForwardInput, ConfigChange, AnomalyFinding, model::AnomalyAckInfo, model::AnomalyAckRequest, model::AnomalyAckResult, model::Annotation, model::AnnotationPage, model::NoteRequest, model::Health, model::HealthReason, model::NodeMaintenance, model::MaintenanceRequest, model::MaintenanceResult, model::DrillAll, model::DrillTargets, model::DrillRequest, model::DrillMode, model::DrillCheck, model::DrillTargetDevice, model::DrillStart, model::ActiveDrill, model::DrillDevice, model::DrillNodeCount, model::DrillSummary, model::DrillReport, model::DrillPage, model::AffinityNode, model::AffinityRow, model::AffinityPage, model::GuardReadings, model::ClusterPin, model::ClusterRollout, model::RolloutFailure, model::RolloutNode, model::RolloutStatus, model::ClusterVersion, model::ClusterVersions, model::PinRequest, model::RolloutAction, model::NodeRemoval, model::SupportPackageRequest, model::DeviceIdentity, model::IdentityEvidence, model::WorkloadEvidence, model::ExplainWorkload, model::WorkloadInfo, model::WorkloadPod, model::WorkloadPage, model::KubernetesStatus, model::MatchedDomain, model::IdentityRunnerUp, model::Simulation, model::SimulatedClass, model::SimulatedName, model::SimulatedDevice, model::SimulatedGroup, model::SimulateRequest, model::SloStatus, attribution::SloAttribution, attribution::AttributionBudget, attribution::AttributionPoint, attribution::AttributionRow, attribution::AttributionCoverage, heatmap::Heatmap, flow::QueryFlow, flow::FlowNode, flow::FlowLink, compare::NodeCompare, compare::NodeNumbers, compare::NodeSeries, compare::NodeFinding, rhythm_api::ClientRhythm, rhythm_api::RhythmDomain, timeline::DeviceTimeline, timeline::TimelineLane, timeline::TimelineEvent, latency_heatmap::LatencyHeatmap, latency_heatmap::LatencyExemplar, latency_heatmap::LatencyExemplars, model::SloObjective, model::SloBurn, model::ProbeResult, model::UpstreamChecks, model::UpstreamQuality, model::EdeCount, model::UpstreamDisagreement, model::ShadowListStats, model::NameCount, model::OverblockSuspect, NewDomain, VqlogResult, VqlogCost, ZoneInfo, model::RewriteInfo, model::AlertsStatus, model::FiringAlert, model::AlertDelivery, model::AlertTest, model::CheckResult, ListShare, DhcpLease, UpstreamInfo, Step, TopKind,
         Hour, model::TopHour, LatencyBy, NameMatch, auth::Role, auth::Scope, auth::routes::Me,
         auth::routes::AuthStatus, auth::routes::SetupRequest, auth::routes::LoginRequest,
         auth::routes::LoginResponse, auth::routes::PasswordChange, auth::routes::TotpSetup,
@@ -1236,9 +1285,18 @@ impl utoipa::Modify for Security {
     }
 }
 
-/// The document as pretty JSON (what `GET /api/v1/openapi.json` serves and what the
-/// committed `docs/api/openapi.json` must equal).
-pub fn openapi_document() -> String {
+/// The document as pretty JSON, what `GET /api/v1/openapi.json` serves. REQ: API-001, NFR-001
+/// (ADR-168) — it is the committed `docs/api/openapi.json`, compiled in, and not built from
+/// [`ApiDoc`] while running: building it linked utoipa's whole document builder (about 0.6 MiB
+/// of the compressed image) and made a 677 KB document on every request. The test
+/// `api_001_committed_openapi_matches_the_code` keeps the file equal to what the code generates.
+pub fn openapi_document() -> &'static str {
+    include_str!("../../../docs/api/openapi.json").trim_end()
+}
+
+/// What the code generates (tests only: the drift check, and `UPDATE_OPENAPI=1`).
+#[cfg(test)]
+pub(crate) fn generated_openapi_document() -> String {
     ApiDoc::openapi().to_pretty_json().unwrap_or_default()
 }
 
@@ -1885,13 +1943,26 @@ async fn explain(
 ///
 /// Every configured list with its kind (block/allow), source, download state (`ok`, `failed`,
 /// `pending`) and last error, size, and how many names it contributes to the active snapshot.
+/// `hits` adds up every node's in a cluster.
 #[utoipa::path(get, path = "/api/v1/lists", tag = "config",
     responses((status = 200, body = Items<ListInfo>, description = "The result.")))]
-async fn lists(State(b): State<Shared>) -> Json<Items<ListInfo>> {
-    Json(Items {
-        missing_nodes: Vec::new(),
-        items: b.lists(),
+async fn lists(State(b): State<Shared>) -> Result<Json<Items<ListInfo>>, Problem> {
+    let bk = Arc::clone(&b);
+    // REQ: OBS-009 (T7.14) — hits from every node: in a cluster the API's node may answer
+    // few or no queries itself.
+    let items = blocking(move || {
+        let hits = bk.list_hits();
+        let mut items = bk.lists();
+        for l in &mut items {
+            l.hits = hits.get(&l.name).copied().unwrap_or(0);
+        }
+        Ok(items)
     })
+    .await?;
+    Ok(Json(Items {
+        missing_nodes: b.missing_nodes(),
+        items,
+    }))
 }
 
 /// Blockable services.

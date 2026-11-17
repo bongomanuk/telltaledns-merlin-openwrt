@@ -51,6 +51,7 @@ pub(crate) fn validate(cfg: &Config, errors: &mut Vec<ConfigError>) -> Vec<Strin
     services(cfg, &mut r);
     schedules(cfg, &mut r);
     anomaly_mutes(cfg, &mut r);
+    watchdog(cfg, &mut r);
     alerts(cfg, &mut r);
     slo(cfg, &mut r);
     probes(cfg, &mut r);
@@ -277,6 +278,12 @@ fn routers(cfg: &Config, r: &mut Report<'_>) {
         }
         if x.interval_secs < 30 {
             r.err(format!("{p}.interval_secs"), "at least 30 seconds");
+        }
+        if x.offline_days > 365 {
+            r.err(
+                format!("{p}.offline_days"),
+                "at most 365 days (0: only the connected clients)",
+            );
         }
         if x.tls_insecure_skip_verify {
             r.warn(format!("{p}.tls_insecure_skip_verify: the router's certificate isn't checked (prefer tls_ca, with tls_server_name if the certificate doesn't name the address)"));
@@ -946,6 +953,23 @@ fn schedules(cfg: &Config, r: &mut Report<'_>) {
 
 // REQ: OBS-038 (ADR-161) — anomaly mutes: unique names, at least one device or group and one
 // kind, devices and groups that exist and have addresses, a readable end time.
+/// REQ: OPS-012 (ADR-163) — the watchdog's limits.
+fn watchdog(cfg: &Config, r: &mut Report<'_>) {
+    let w = &cfg.watchdog;
+    if !(20..=600).contains(&w.stall_secs) {
+        r.err(
+            "watchdog.stall_secs",
+            "use 20 to 600 seconds: a busy node still answers within a few seconds, and a longer wait only delays the restart",
+        );
+    }
+    if w.max_restarts_per_hour > 60 {
+        r.err(
+            "watchdog.max_restarts_per_hour",
+            "use 0 to 60 (0 never restarts)",
+        );
+    }
+}
+
 fn anomaly_mutes(cfg: &Config, r: &mut Report<'_>) {
     if cfg.anomaly_mute.len() > crate::schema::MAX_ANOMALY_MUTES {
         r.err(

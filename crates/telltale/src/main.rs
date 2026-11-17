@@ -58,6 +58,9 @@ mod ship;
 mod simulate;
 mod sinks;
 mod smtp;
+mod support;
+mod support_cli;
+mod support_log;
 mod tail;
 mod technitium;
 mod traces;
@@ -65,6 +68,7 @@ mod updates;
 mod upstream_checks;
 mod vqlog;
 mod warm;
+mod watchdog;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -222,6 +226,48 @@ enum Command {
         json: bool,
         /// Config files (same defaults as `telltale run`), to find the API address.
         #[arg(short, long = "config", global = true)]
+        config: Vec<PathBuf>,
+    },
+    /// Make a support package: one redacted `.tar.gz` for a bug report (settings without
+    /// secrets, cluster and health, upstreams, a metrics snapshot, the node's recent log).
+    /// Nothing is uploaded. `--level strict` (the default) replaces addresses and names with
+    /// pseudonyms and keeps only warnings and errors from the log. Asks a running node (needs
+    /// an admin's API token: `TELLTALE_TOKEN` or `--token-file`); without one, or with
+    /// `--offline`, it is made from the config files and the log files instead.
+    // REQ: OPS-011
+    SupportPackage {
+        /// `strict` (default), `standard`, or `none`.
+        #[arg(long, default_value = "strict")]
+        level: String,
+        /// A name (device, group, node, host) to keep readable; repeat for several.
+        #[arg(long = "reveal", value_name = "NAME")]
+        reveal: Vec<String>,
+        /// Include this many recent queries, pseudonymized (not at `strict`; at most 1,000).
+        #[arg(long, default_value_t = 0, value_name = "N")]
+        query_sample: u32,
+        /// Write the pseudonym map here. It holds the real names and addresses: keep it.
+        #[arg(long, value_name = "FILE")]
+        keep_map: Option<PathBuf>,
+        /// Show what the package would hold, and write nothing.
+        #[arg(long)]
+        list: bool,
+        /// Where to write it (default: `telltale-support-<node>-<time>.tar.gz` here).
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// Make it from the config files and the log files, without asking a running node.
+        #[arg(long)]
+        offline: bool,
+        /// The node's API address (default: from the config files' `[api] listen`).
+        #[arg(long)]
+        url: Option<String>,
+        /// Also trust the certificate(s) in this PEM file (a node with a self-signed `[api] tls`).
+        #[arg(long)]
+        ca_file: Option<PathBuf>,
+        /// Read the API token from this file instead of `TELLTALE_TOKEN`.
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        /// Config files (same defaults as `telltale run`).
+        #[arg(short, long = "config")]
         config: Vec<PathBuf>,
     },
     /// Back up this node's configuration and data to one file, or restore one.
@@ -731,6 +777,33 @@ fn main() -> ExitCode {
             json,
             config,
         )),
+        Command::SupportPackage {
+            level,
+            reveal,
+            query_sample,
+            keep_map,
+            list,
+            output,
+            offline,
+            url,
+            ca_file,
+            token_file,
+            config,
+        } => Ok(support_cli::run(
+            &support_cli::Args {
+                level,
+                reveal,
+                query_sample,
+                keep_map,
+                list,
+                output,
+                offline,
+            },
+            url,
+            ca_file,
+            token_file.as_deref(),
+            config,
+        )),
         Command::Health { url } => Ok(match health(&url) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -1233,6 +1306,7 @@ fn run_self_update(channel: selfupdate::Channel, check: bool, restart: bool) -> 
 }
 
 fn init_logging() {
+    use tracing_subscriber::Layer as _;
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
     let level = std::env::var("TELLTALE_LOG")
@@ -1250,13 +1324,17 @@ fn init_logging() {
     let targets = tracing_subscriber::filter::Targets::new()
         .with_default(level)
         .with_target("hickory_net::dnssec", library);
-    tracing_subscriber::fmt()
-        .with_max_level(level)
+    // The console follows `TELLTALE_LOG`. REQ: OPS-011 (ADR-156) — the support package's own log
+    // keeps INFO and above whatever it says, from the first line on.
+    let console = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_ansi(io::IsTerminal::is_terminal(&io::stderr()))
         .with_writer(io::stderr)
-        .finish()
-        .with(targets)
+        .with_filter(targets);
+    let support = support_log::layer().with_filter(support_log::filter(library));
+    tracing_subscriber::registry()
+        .with(console)
+        .with(support)
         .init();
 }
 
@@ -1299,6 +1377,11 @@ fn run(config: Vec<PathBuf>) -> io::Result<ExitCode> {
             None
         }
     };
+    // REQ: OPS-011 (ADR-156) — the support package's log files, under the data directory (only
+    // with the lock: two processes would write over each other). From here on, lines reach them.
+    if lock.is_some() {
+        support_log::global().attach(data_dir, cfg.support.persist_logs);
+    }
     // REQ: OBS-002 (T9.13) — restart counts, kept in the data directory (only with the lock:
     // two processes would count each other).
     let runs = if lock.is_some() {
@@ -1334,6 +1417,8 @@ fn run(config: Vec<PathBuf>) -> io::Result<ExitCode> {
     }
     served?;
     info!("stopped");
+    // REQ: OPS-011 — the last lines (why it stopped) reach the log files before the process exits.
+    support_log::global().flush();
     Ok(ExitCode::SUCCESS)
 }
 

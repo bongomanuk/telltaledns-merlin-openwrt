@@ -717,6 +717,8 @@ test('obs_038 mute a kind of finding for a device', async () => {
   await expect(page.getByTestId('mute-saved')).toBeVisible();
   // It no longer counts: the finding and the badge are gone, and the page says so.
   await expect(page.getByText('1 muted finding is hidden')).toBeVisible();
+  // The confirmation outlives the finding it was about (it sits on the page, not in the card).
+  await expect(page.getByTestId('mute-saved')).toBeVisible();
   await expect(badge).toHaveCount(0);
   const row = page.getByTestId('mute-row');
   await expect(row).toContainText('192.168.1.30');
@@ -732,6 +734,38 @@ test('obs_038 mute a kind of finding for a device', async () => {
   await expect(page.getByTestId('mute')).toBeVisible();
   await page.unroute('**/api/v1/analytics/anomalies?*');
   await page.unroute('**/api/v1/anomaly-mutes/*');
+});
+
+// REQ: OPS-011 (ADR-156) — Settings → System → Support package: a preview of what it would hold, a
+// download that is a real gzip, and a pseudonym map that can be fetched once.
+test('ops_011 support package', async () => {
+  await page.goto('/#/settings?tab=system');
+  const card = page.getByTestId('support-package');
+  await expect(card).toBeVisible();
+  await expect(card.getByTestId('level-strict')).toBeChecked();
+  // The sample of queries is offered above strict only.
+  await expect(card.getByLabel('Query sample')).toHaveCount(0);
+  await card.getByTestId('level-standard').check();
+  await expect(card.getByLabel('Query sample')).toBeVisible();
+  await card.getByTestId('level-strict').check();
+  await card.getByTestId('support-preview').click();
+  const files = card.getByTestId('support-file');
+  await expect(files.filter({ hasText: 'config/effective.json' })).toBeVisible();
+  await expect(files.filter({ hasText: 'logs/node.log' })).toBeVisible();
+  await expect(files.filter({ hasText: 'node/host.json' })).toBeVisible();
+  await expect(card.getByTestId('support-manifest')).toContainText('nothing was saved');
+  // Make it: a download that is a gzip, then the map once.
+  await card.getByTestId('keep-map').check();
+  const [pkg] = await Promise.all([page.waitForEvent('download'), card.getByTestId('support-make').click()]);
+  expect(pkg.suggestedFilename()).toMatch(/^telltale-support-.+\.tar\.gz$/);
+  const bytes = readFileSync(await pkg.path());
+  expect([bytes[0], bytes[1]]).toEqual([0x1f, 0x8b]);
+  await expect(card.getByTestId('support-made')).toContainText('telltale-support-');
+  await expect(files.filter({ hasText: 'MANIFEST' })).toHaveCount(0);
+  await expect(files.filter({ hasText: 'config/effective.json' })).toBeVisible();
+  const [map] = await Promise.all([page.waitForEvent('download'), card.getByTestId('support-map').click()]);
+  expect(map.suggestedFilename()).toBe('telltale-support-map.txt');
+  await expect(card.getByTestId('support-map')).toBeDisabled();
 });
 
 // The header's icon buttons match: the pause button (its own component) is the same round,
@@ -1111,6 +1145,53 @@ test('flt_005 quick rule: allow for 1 hour from the query log', async () => {
   await page.getByTestId('rules-table').getByRole('button', { name: 'Remove' }).click();
   await expect(page.locator('main')).toContainText('No quick rules');
   expect(await query('ads.e2e.test')).toBe(0);
+});
+
+// REQ: FLT-005 (T20.1, ADR-162, GitHub issue #57) — Edit a quick rule in place: the form starts
+// from the rule, the end time stays unless a new duration is picked, the rule keeps its ID and
+// its start, DNS follows at once (the old domain is no longer allowed, and there is no second
+// rule), and the confirmation stays on the page after the row is redrawn.
+test('flt_005 edit a quick rule in place', async () => {
+  const r = page.request;
+  const csrf = (await (await r.get('/api/v1/auth/status')).json()).csrfToken as string;
+  const h = { 'x-csrf-token': csrf };
+  const put = await r.put('/api/v1/rules/e2e-edit', {
+    headers: h,
+    data: { action: 'allow', domain: 'ads.e2e.test', forMinutes: 120, note: 'first' },
+  });
+  expect(put.status()).toBe(200);
+  expect(await query('ads.e2e.test').catch(() => -1)).not.toBe(0); // allowed by the rule
+  const before = (await (await r.get('/api/v1/rules')).json()).items[0];
+  expect(before.id).toBe('e2e-edit');
+  await page.waitForTimeout(1100); // a refreshed start would differ by a second
+
+  await page.goto('/#/rules');
+  await page.getByTestId('rules-table').getByRole('button', { name: 'Edit' }).click();
+  const form = page.getByTestId('quick-rule-edit-form');
+  await expect(form.getByRole('textbox', { name: 'Domain' })).toHaveValue('ads.e2e.test');
+  await expect(form.getByRole('textbox', { name: 'Note' })).toHaveValue('first');
+  await expect(form.getByRole('combobox', { name: 'Duration' })).toHaveValue('keep');
+  await form.getByRole('textbox', { name: 'Domain' }).fill('other.e2e.test');
+  await form.getByRole('textbox', { name: 'Note' }).fill('second');
+  await form.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByTestId('rule-edited')).toContainText('Rule updated.');
+  await expect(page.getByTestId('rule-edited')).toContainText('other.e2e.test'); // the new domain, not the old
+  await expect(page.getByTestId('rule-edit-row')).toHaveCount(0);
+
+  const after = (await (await r.get('/api/v1/rules')).json()).items;
+  expect(after).toHaveLength(1);
+  expect(after[0]).toMatchObject({ id: 'e2e-edit', domain: 'other.e2e.test', note: 'second' });
+  expect(after[0].created).toBe(before.created);
+  expect(after[0].createdBy).toBe(before.createdBy);
+  expect(after[0].expires).toBe(before.expires);
+  expect(await query('ads.e2e.test')).toBe(0); // the list blocks it again: the old rule is gone
+
+  // Cancel leaves the rule alone.
+  await page.getByTestId('rules-table').getByRole('button', { name: 'Edit' }).click();
+  await page.getByTestId('quick-rule-edit-form').getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByTestId('rule-edit-row')).toHaveCount(0);
+  await page.getByTestId('rules-table').getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator('main')).toContainText('No quick rules');
 });
 
 // REQ: FLT-005 (ADR-067) — an expiring rule stops applying at its expiry without a restart,
@@ -2172,6 +2253,35 @@ test('obs_029 heatmap', async () => {
   await canvas.click({ position: { x: 112, y: 26 } });
   await expect(page).toHaveURL(/#\/queries\?.*client=192\.168\.2\.14/);
   await page.unroute('**/api/v1/stats/heatmap*');
+});
+
+// REQ: OBS-029 — a refused grain doesn't loop: hiding the grid after an error once flipped the
+// grain to hours (its width read 0), which succeeded, showed the grid, flipped back and failed
+// again, endlessly. Now one request, the error alone, and the prompt comes back for a device.
+test('obs_029 heatmap error does not loop', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const grains: string[] = [];
+  await page.route('**/api/v1/stats/heatmap*', (route) => {
+    const grain = new URL(route.request().url()).searchParams.get('grain') ?? '';
+    grains.push(grain);
+    if (grain === 'minute') {
+      return route.fulfill({ status: 422, json: { type: 'about:blank', title: 'too many slots', status: 422, detail: 'too many slots', code: 'heatmap_window' } });
+    }
+    return route.fulfill({
+      json: { from: new Date().toISOString(), to: new Date().toISOString(), grain, slotSeconds: grain === 'hour' ? 3600 : 900, kind: 'network', measure: 'queries', starts: [], values: [], precision: 'exact' },
+    });
+  });
+  await page.goto('/#/heatmap?grain=minute');
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.waitForTimeout(1000);
+  expect(grains).toEqual(['minute']);
+  await expect(page.getByText('Loading…')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Device', exact: true }).click();
+  await expect(page.getByText('Enter one above.')).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.unroute('**/api/v1/stats/heatmap*');
+  // The refusal above is expected: not a page problem.
+  for (let i = problems.length - 1; i >= 0; i--) if (problems[i].includes('status of 422')) problems.splice(i, 1);
 });
 
 // REQ: OBS-030 (T14.4) — the latency heatmap: the Dashboard's tab draws the grid from the real
@@ -3290,4 +3400,75 @@ test('obs_037 internal names', async () => {
   }).toPass({ timeout: 20_000 });
   await card.getByRole('button', { name: 'Internet', exact: true }).click();
   await expect(ptr).toHaveCount(0);
+});
+
+// REQ: OBS-039 (ADR-167) — domain icons: a brand tile for a name the map knows (Netflix), a monogram
+// or a house for the rest. The Domain icons card (Settings → Account) picks Brand and monogram,
+// Monogram only (no brand tile) or Off, and Default (20 px) or Small (16 px); the choice is kept for
+// this user in this browser. The glyphs are a lazy chunk: loading it must not trip the CSP.
+test('obs_039 domain icons', async () => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await query('www.netflix.com').catch(() => -1);
+  const row = () => page.locator('tbody tr').filter({ hasText: 'www.netflix.com' }).first();
+  const mark = () => row().getByTestId('domain-icon');
+  await page.goto('/#/queries?name=www.netflix.com');
+  await expect(async () => {
+    await page.reload();
+    await expect(mark()).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 20_000 });
+  await expect(mark()).toHaveAttribute('data-kind', 'brand');
+  await expect(mark()).toHaveAttribute('data-size', '20');
+  await expect(mark()).toHaveAttribute('title', 'Netflix');
+
+  await page.goto('/#/settings?tab=account');
+  const card = page.getByTestId('icons-card');
+  const icons = card.getByTestId('domain-icon');
+  await expect(icons).toHaveCount(3);
+  await expect(icons.nth(0)).toHaveAttribute('data-kind', 'brand');
+  await expect(icons.nth(1)).toHaveAttribute('data-kind', 'mono');
+  await expect(icons.nth(2)).toHaveAttribute('data-kind', 'house');
+  await card.getByRole('button', { name: 'Monogram only' }).click();
+  await expect(icons.nth(0)).toHaveAttribute('data-kind', 'mono');
+  await card.getByRole('button', { name: 'Small', exact: true }).click();
+  for (let i = 0; i < 3; i++) await expect(icons.nth(i)).toHaveAttribute('data-size', '16');
+  await card.getByRole('button', { name: 'Off', exact: true }).click();
+  await expect(icons).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Small', exact: true })).toBeDisabled();
+
+  // Kept for this user in this browser, and drawn nowhere while it is Off.
+  await page.reload();
+  await expect(card.getByRole('button', { name: 'Off', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.goto('/#/queries?name=www.netflix.com');
+  await expect(row()).toBeVisible();
+  await expect(mark()).toHaveCount(0);
+
+  // Back to the defaults, for whatever runs next.
+  await page.goto('/#/settings?tab=account');
+  await card.getByRole('button', { name: 'Brand and monogram', exact: true }).click();
+  await card.getByRole('button', { name: 'Default', exact: true }).click();
+  await expect(icons.nth(0)).toHaveAttribute('data-kind', 'brand');
+  await expect(icons.nth(0)).toHaveAttribute('data-size', '20');
+});
+
+// REQ: API-005, NFR-001 (ADR-168) — the UI is embedded gzipped only: a browser gets the stored
+// file with `Content-Encoding: gzip`, and a client that doesn't accept gzip gets the same file
+// inflated. Both are the page, and the page's script comes either way.
+test('api_005 the UI is served gzipped, and plain to a client that does not accept gzip', async () => {
+  const r = page.request;
+  const gz = await r.get('/', { headers: { 'accept-encoding': 'gzip' } });
+  expect(gz.status()).toBe(200);
+  expect(gz.headers()['content-encoding']).toBe('gzip');
+  const plain = await r.get('/', { headers: { 'accept-encoding': 'identity' } });
+  expect(plain.status()).toBe(200);
+  expect(plain.headers()['content-encoding']).toBeUndefined();
+  const html = await plain.text();
+  expect(html).toContain('<title>TelltaleDNS');
+  expect(await gz.text()).toBe(html);
+  const src = /src="(\/assets\/[^"]+\.js)"/.exec(html)?.[1];
+  expect(src, 'index.html names its script').toBeTruthy();
+  const js = await r.get(src as string, { headers: { 'accept-encoding': 'identity' } });
+  expect(js.status()).toBe(200);
+  expect(js.headers()['content-encoding']).toBeUndefined();
+  expect(js.headers()['content-type']).toContain('javascript');
+  expect((await js.body()).length).toBeGreaterThan(100_000);
 });

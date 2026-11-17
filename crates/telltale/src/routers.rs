@@ -2,8 +2,9 @@
 //! names and addresses read from the router's DHCP, so devices show up by name without
 //! TelltaleDNS running DHCP itself.
 //! - **UniFi** (UniFi OS consoles: UDM, UCG, Cloud Key Gen2+; and the classic Network
-//!   application): the active clients (`stat/sta`), named by their UniFi alias, else their
-//!   host name. An API key (`X-API-KEY`), or a local username and password.
+//!   application): the active clients (`stat/sta`), then the offline clients it still knows
+//!   (v2 `clients/history`, `rest/user`), named by their UniFi alias, else their host name.
+//!   An API key (`X-API-KEY`), or a local username and password.
 //! - **OPNsense**: the DHCP leases (Dnsmasq, Kea, or ISC, whichever the box runs), with an
 //!   API key and secret.
 //!
@@ -19,15 +20,40 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use serde_json::Value;
 use telltale_config::{RouterConfig, RouterKind};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::devices::{Lease, Leases};
 
 /// Most bytes one answer may have.
 const MAX_ANSWER: u64 = 16 << 20;
 
-/// What a router reported: (MAC, IPv4 address, name).
-pub(crate) type Seen = Vec<(String, Ipv4Addr, Option<String>)>;
+/// What a router reported, one entry per device.
+pub(crate) type Seen = Vec<Device>;
+
+/// One device a router reported: (MAC, IPv4 address, name).
+pub(crate) type Device = (String, Ipv4Addr, Option<String>);
+
+/// REQ: T8.2 (ADR-166) — most offline clients one UniFi poll keeps (most recently seen first),
+/// whatever `offline_days` says: they ride in every node's answer to `devices.names` (about
+/// 130 bytes each, against the cluster channel's 1 MiB frame) and sit in memory on every node.
+pub(crate) const OFFLINE_MAX: usize = 1024;
+
+/// What one poll of a router found: the devices it reports now, and (UniFi) the offline clients
+/// it remembers, kept apart because only the first are "seen" (ADR-166).
+pub(crate) struct Polled {
+    pub(crate) now: Seen,
+    pub(crate) offline: Seen,
+}
+
+impl Polled {
+    /// A router that only reports what it has now (OPNsense).
+    fn now(now: Seen) -> Self {
+        Self {
+            now,
+            offline: Seen::new(),
+        }
+    }
+}
 
 fn secret(path: Option<&telltale_config::SafeString>) -> Result<Option<String>, String> {
     path.map(|p| {
@@ -88,30 +114,103 @@ fn cookies(h: &http::HeaderMap) -> String {
         .join("; ")
 }
 
+/// The client objects of a UniFi answer: `data` in the classic API, a bare array in v2.
+fn unifi_rows(v: &Value) -> &[Value] {
+    v.get("data")
+        .and_then(Value::as_array)
+        .or_else(|| v.as_array())
+        .map_or(&[], Vec::as_slice)
+}
+
+/// One UniFi client object: its MAC, IPv4 address (current, else last, else reserved), and
+/// name (the UniFi alias, else the host name).
+fn unifi_client(c: &Value) -> Option<Device> {
+    let mac = c.get("mac")?.as_str()?.to_ascii_lowercase();
+    // A `fixed_ip` counts only while the reservation is on (`use_fixedip`); UniFi keeps the
+    // field after it's turned off.
+    let fixed = c
+        .get("use_fixedip")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ip: Ipv4Addr = ["ip", "last_ip", "fixed_ip"]
+        .iter()
+        .filter(|k| **k != "fixed_ip" || fixed)
+        .filter_map(|k| c.get(*k).and_then(Value::as_str))
+        .find_map(|s| s.parse().ok())?;
+    let name = ["name", "hostname"]
+        .iter()
+        .filter_map(|k| c.get(*k).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(str::to_owned);
+    Some((mac, ip, name))
+}
+
 /// UniFi clients in a `stat/sta` (or `rest/user`) answer.
 pub(crate) fn unifi_clients(v: &Value) -> Seen {
-    let Some(data) = v.get("data").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    data.iter()
+    unifi_rows(v).iter().filter_map(unifi_client).collect()
+}
+
+/// UniFi's known clients that aren't connected now (v2 `clients/history`, `rest/user`): only
+/// those with a name, the most recently seen first, at most [`OFFLINE_MAX`]. REQ: T8.2
+/// (ADR-166): a row last seen before `not_before` (Unix seconds) is dropped; one with no date
+/// can't be judged and stays (the cap bounds those).
+pub(crate) fn unifi_known(v: &Value, not_before: u64) -> Seen {
+    let mut rows: Vec<(u64, Device)> = unifi_rows(v)
+        .iter()
         .filter_map(|c| {
-            let mac = c.get("mac")?.as_str()?.to_ascii_lowercase();
-            let ip: Ipv4Addr = c
-                .get("ip")
-                .or_else(|| c.get("last_ip"))
-                .or_else(|| c.get("fixed_ip"))?
-                .as_str()?
-                .parse()
-                .ok()?;
-            let name = ["name", "hostname"]
-                .iter()
-                .filter_map(|k| c.get(*k).and_then(Value::as_str))
-                .map(str::trim)
-                .find(|s| !s.is_empty())
-                .map(str::to_owned);
-            Some((mac, ip, name))
+            let seen = c.get("last_seen").and_then(Value::as_u64);
+            if seen.is_some_and(|t| t < not_before) {
+                return None;
+            }
+            let client = unifi_client(c)?;
+            client.2.is_some().then_some((seen.unwrap_or(0), client))
         })
-        .collect()
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
+    rows.truncate(OFFLINE_MAX);
+    rows.into_iter().map(|(_, c)| c).collect()
+}
+
+/// REQ: T8.2 — the connected clients, then the known ones UniFi has names for, so an offline
+/// device's queries still show its name. A connected client keeps its address; a known one
+/// only names it when it has none, and adds a device only for an address no one else holds
+/// (an offline device's last address may since have gone to another one), and for at most
+/// [`OFFLINE_MAX`] devices.
+pub(crate) fn unifi_merge(mut active: Seen, known: Seen) -> Seen {
+    let mut macs: HashMap<String, usize> = active
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.0.clone(), i))
+        .collect();
+    let mut ips: std::collections::HashSet<Ipv4Addr> = active.iter().map(|c| c.1).collect();
+    let mut added = 0;
+    for (mac, ip, name) in known {
+        if let Some(&i) = macs.get(&mac) {
+            if let Some(c) = active.get_mut(i)
+                && c.2.is_none()
+            {
+                c.2 = name;
+            }
+            continue;
+        }
+        if added >= OFFLINE_MAX || !ips.insert(ip) {
+            continue;
+        }
+        macs.insert(mac.clone(), active.len());
+        active.push((mac, ip, name));
+        added += 1;
+    }
+    active
+}
+
+/// REQ: T8.2 (ADR-166) — [`unifi_merge`], with the offline devices it appended (after the
+/// connected ones, which keep their order) set apart.
+pub(crate) fn unifi_split(active: Seen, known: Seen) -> Polled {
+    let connected = active.len();
+    let mut now = unifi_merge(active, known);
+    let offline = now.split_off(connected);
+    Polled { now, offline }
 }
 
 /// OPNsense leases in a search answer (Dnsmasq, Kea, or ISC field names).
@@ -194,16 +293,67 @@ async fn poll_unifi(
     if let Some(key) = secret(c.api_key_file.as_ref())? {
         let url = format!("{base}/proxy/network/api/s/{site}/stat/sta");
         let req = http::Request::get(url.as_str())
-            .header("x-api-key", key)
+            .header(self.auth.0, self.auth.1.as_str())
             .header("accept", "application/json")
             .body(Vec::new())
             .map_err(|e| e.to_string())?;
         let (status, _, v) = call(client, req).await?;
-        return if status.is_success() {
-            Ok(unifi_clients(&v))
+        if status.is_success() {
+            Ok(v)
         } else {
             Err(format!("{url}: HTTP {status}"))
+        }
+    }
+
+    /// The connected clients (`stat/sta`), then the known clients that are offline and were seen
+    /// within `offline_days`, so their names still show (none when it's 0). The known clients
+    /// are best effort: a console that can't list them (an older Network application has no v2
+    /// API) gives just the connected ones.
+    async fn clients(&self, client: &telltale_filter::fetch::Client) -> Result<Polled, String> {
+        let active = unifi_clients(&self.get(client, "/api/s/{site}/stat/sta").await?);
+        if self.offline_days == 0 {
+            return Ok(Polled::now(active));
+        }
+        // REQ: T8.2 (ADR-166) — the window goes to the console (it filters the history before
+        // answering) and is applied to every row that has a date.
+        let days = u64::from(self.offline_days);
+        let not_before = crate::pipeline::unix_now().saturating_sub(days * 86_400);
+        let mut known = Seen::new();
+        for path in [
+            // The clients the console remembers within the window, with their last address
+            // (Network 7+).
+            format!(
+                "/v2/api/site/{{site}}/clients/history?onlyNonBlocked=true&includeUnifiDevices=false&withinHours={}",
+                days * 24
+            ),
+            // The configured clients: aliases and fixed addresses.
+            "/api/s/{site}/rest/user".to_owned(),
+        ] {
+            match self.get(client, &path).await {
+                Ok(v) => known.extend(unifi_known(&v, not_before)),
+                Err(e) => debug!(error = %e, "router integration: UniFi known clients"),
+            }
+        }
+        Ok(unifi_split(active, known))
+    }
+}
+
+/// One poll of a UniFi console or Network application.
+async fn poll_unifi(
+    client: &telltale_filter::fetch::Client,
+    c: &RouterConfig,
+) -> Result<Polled, String> {
+    let base = c.url.trim_end_matches('/');
+    let site = c.site.as_deref().unwrap_or("default");
+    if let Some(key) = secret(c.api_key_file.as_ref())? {
+        let s = UnifiSession {
+            base,
+            site,
+            prefix: "/proxy/network",
+            auth: ("x-api-key", key),
+            offline_days: c.offline_days,
         };
+        return s.clients(client).await;
     }
     let user = c
         .username
@@ -228,19 +378,14 @@ async fn poll_unifi(
                 "{base}{login}: HTTP {status} (check the username and password)"
             ));
         }
-        let cookie = cookies(&headers);
-        let url = format!("{base}{prefix}/api/s/{site}/stat/sta");
-        let req = http::Request::get(url.as_str())
-            .header("cookie", cookie)
-            .header("accept", "application/json")
-            .body(Vec::new())
-            .map_err(|e| e.to_string())?;
-        let (status, _, v) = call(client, req).await?;
-        return if status.is_success() {
-            Ok(unifi_clients(&v))
-        } else {
-            Err(format!("{url}: HTTP {status}"))
+        let s = UnifiSession {
+            base,
+            site,
+            prefix,
+            auth: ("cookie", cookies(&headers)),
+            offline_days: c.offline_days,
         };
+        return s.clients(client).await;
     }
     Err(format!(
         "{base}: neither a UniFi OS console nor a Network application"
@@ -251,7 +396,7 @@ async fn poll_unifi(
 async fn poll_opnsense(
     client: &telltale_filter::fetch::Client,
     c: &RouterConfig,
-) -> Result<Seen, String> {
+) -> Result<Polled, String> {
     let base = c.url.trim_end_matches('/');
     let key = secret(c.api_key_file.as_ref())?.ok_or("set api_key_file")?;
     let sec = secret(c.api_secret_file.as_ref())?.ok_or("set api_secret_file")?;
@@ -269,7 +414,7 @@ async fn poll_opnsense(
             .map_err(|e| e.to_string())?;
         let (status, _, v) = call(client, req).await?;
         if status.is_success() && v.get("rows").is_some() {
-            return Ok(opnsense_leases(&v));
+            return Ok(Polled::now(opnsense_leases(&v)));
         }
         if status == http::StatusCode::UNAUTHORIZED || status == http::StatusCode::FORBIDDEN {
             return Err(format!(
@@ -317,17 +462,14 @@ async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
 /// The leases view from every router's last answer.
 fn rebuild(parts: &HashMap<String, Seen>, view: &ArcSwap<Leases>) {
     let mut m = Leases::new();
-    for seen in parts.values() {
-        for (mac, ip, name) in seen {
-            m.insert(
-                *ip,
-                Lease {
-                    mac: mac.clone(),
-                    ip: *ip,
-                    hostname: name.clone(),
-                    expires: 0,
-                },
-            );
+    for p in parts.values() {
+        for d in &p.now {
+            m.insert(d.1, lease(d, false));
+        }
+    }
+    for p in parts.values() {
+        for d in &p.offline {
+            m.entry(d.1).or_insert_with(|| lease(d, true));
         }
     }
     view.store(Arc::new(m));
@@ -347,7 +489,7 @@ pub(crate) async fn run(
     }
     let resolver: Arc<dyn telltale_filter::fetch::Resolve> =
         Arc::new(telltale_filter::fetch::SystemResolver);
-    let mut parts: HashMap<String, Seen> = HashMap::new();
+    let mut parts: HashMap<String, Polled> = HashMap::new();
     let mut failing: HashMap<String, bool> = HashMap::new();
     let interval = routers
         .iter()
@@ -394,7 +536,7 @@ pub(crate) async fn run(
             match result {
                 Ok(seen) => {
                     if was_failing || !parts.contains_key(r.name.as_str()) {
-                        info!(router = %r.name, devices = seen.len(), "router integration: devices read");
+                        info!(router = %r.name, devices = seen.now.len(), offline = seen.offline.len(), "router integration: devices read");
                     }
                     parts.insert(r.name.to_string(), seen);
                     failing.insert(r.name.to_string(), false);
@@ -501,6 +643,161 @@ mod tests {
                     None
                 ),
             ]
+        );
+    }
+
+    /// REQ: T8.2 — UniFi's offline known clients keep their names: v2 history (a bare array)
+    /// and `rest/user` give the named ones, most recently seen first; a connected client keeps
+    /// its address and only takes a name it lacks; an offline client never takes an address a
+    /// connected one holds.
+    #[test]
+    fn unifi_offline_clients_named() {
+        let active = unifi_clients(&serde_json::json!({"data": [
+            {"mac": "aa:bb:cc:00:00:01", "ip": "192.168.1.20", "name": "Kitchen tablet"},
+            {"mac": "aa:bb:cc:00:00:02", "ip": "192.168.1.21"}
+        ]}));
+        let history = serde_json::json!([
+            {"mac": "aa:bb:cc:00:00:10", "last_ip": "192.168.1.30", "hostname": "old-laptop", "last_seen": 100},
+            {"mac": "AA:BB:CC:00:00:11", "last_ip": "192.168.1.30", "name": "Work laptop", "last_seen": 200},
+            {"mac": "aa:bb:cc:00:00:12", "last_ip": "192.168.1.20", "name": "Old phone", "last_seen": 300},
+            {"mac": "aa:bb:cc:00:00:13", "last_ip": "192.168.1.31", "last_seen": 400},
+            {"mac": "aa:bb:cc:00:00:02", "last_ip": "192.168.1.21", "name": "Living room TV"},
+            {"hostname": "phone", "fixed_ip": "192.168.1.62", "use_fixedip": false, "last_ip": "192.168.1.63",
+             "mac": "aa:bb:cc:00:00:17", "display_name": "Spare phone", "name": "Spare phone",
+             "last_seen": 150, "status": "offline", "type": "WIRELESS", "fingerprint": {"has_override": false}}
+        ]);
+        let users = serde_json::json!({"meta": {"rc": "ok"}, "data": [
+            {"mac": "aa:bb:cc:00:00:14", "fixed_ip": "192.168.1.40", "use_fixedip": true, "name": "Printer"},
+            {"mac": "aa:bb:cc:00:00:15", "name": "No address"},
+            {"mac": "aa:bb:cc:00:00:16", "fixed_ip": "192.168.1.41", "use_fixedip": false, "name": "Reservation off"}
+        ]});
+        let mut known = unifi_known(&history, 0);
+        known.extend(unifi_known(&users, 0));
+        assert_eq!(
+            unifi_merge(active, known),
+            vec![
+                (
+                    "aa:bb:cc:00:00:01".into(),
+                    Ipv4Addr::new(192, 168, 1, 20),
+                    Some("Kitchen tablet".into())
+                ),
+                (
+                    "aa:bb:cc:00:00:02".into(),
+                    Ipv4Addr::new(192, 168, 1, 21),
+                    Some("Living room TV".into())
+                ),
+                (
+                    "aa:bb:cc:00:00:11".into(),
+                    Ipv4Addr::new(192, 168, 1, 30),
+                    Some("Work laptop".into())
+                ),
+                (
+                    "aa:bb:cc:00:00:17".into(),
+                    Ipv4Addr::new(192, 168, 1, 63),
+                    Some("Spare phone".into())
+                ),
+                (
+                    "aa:bb:cc:00:00:14".into(),
+                    Ipv4Addr::new(192, 168, 1, 40),
+                    Some("Printer".into())
+                ),
+            ]
+        );
+    }
+
+    /// REQ: T8.2 (ADR-166) — `offline_days`: a row last seen before the window is dropped, one with
+    /// no date stays, the most recently seen come first, and no more than `OFFLINE_MAX` are kept.
+    #[test]
+    fn unifi_known_window_and_cap() {
+        let rows = serde_json::json!([
+            {"mac": "aa:bb:cc:00:01:01", "last_ip": "10.0.1.1", "name": "recent", "last_seen": 2_000_000},
+            {"mac": "aa:bb:cc:00:01:02", "last_ip": "10.0.1.2", "name": "old", "last_seen": 1_000_000},
+            {"mac": "aa:bb:cc:00:01:03", "last_ip": "10.0.1.3", "name": "undated"},
+            {"mac": "aa:bb:cc:00:01:04", "last_ip": "10.0.1.4", "name": "newest", "last_seen": 2_500_000},
+        ]);
+        let names = |s: Seen| s.into_iter().filter_map(|d| d.2).collect::<Vec<_>>();
+        assert_eq!(
+            names(unifi_known(&rows, 0)),
+            ["newest", "recent", "old", "undated"]
+        );
+        assert_eq!(
+            names(unifi_known(&rows, 1_500_000)),
+            ["newest", "recent", "undated"]
+        );
+        // A site that remembers thousands: the most recent ones.
+        let many: Vec<Value> = (0..2 * OFFLINE_MAX)
+            .map(|i| {
+                serde_json::json!({
+                    "mac": format!("02:00:00:00:{:02x}:{:02x}", i / 256, i % 256),
+                    "last_ip": format!("10.1.{}.{}", i / 250, i % 250 + 1),
+                    "name": format!("c{i}"),
+                    "last_seen": 1_000 + i,
+                })
+            })
+            .collect();
+        let known = unifi_known(&Value::Array(many), 0);
+        assert_eq!(known.len(), OFFLINE_MAX);
+        let newest = format!("c{}", 2 * OFFLINE_MAX - 1);
+        assert_eq!(known[0].2.as_deref(), Some(newest.as_str()));
+    }
+
+    /// REQ: T8.2 (ADR-166) — a poll's connected clients (named from the history when they lack a
+    /// name) stay apart from the offline ones, and the offline ones are capped.
+    #[test]
+    fn unifi_split_keeps_offline_apart_and_capped() {
+        let ip = |n: u32| Ipv4Addr::from(0x0a00_0000 + n);
+        let active: Seen = vec![("aa:aa:aa:00:00:01".into(), ip(1), None)];
+        let mut known: Seen = vec![("aa:aa:aa:00:00:01".into(), ip(1), Some("TV".into()))];
+        known.extend((2..3000_u32).map(|n| {
+            (
+                format!("bb:00:00:00:{:02x}:{:02x}", n / 256, n % 256),
+                ip(n),
+                Some(format!("off{n}")),
+            )
+        }));
+        let polled = unifi_split(active, known);
+        assert_eq!(
+            polled.now,
+            vec![("aa:aa:aa:00:00:01".to_owned(), ip(1), Some("TV".to_owned()))]
+        );
+        assert_eq!(polled.offline.len(), OFFLINE_MAX);
+        assert_eq!(polled.offline[0].2.as_deref(), Some("off2"));
+    }
+
+    /// REQ: T8.2 (ADR-166) — an offline client names an address, marked as offline, only where no
+    /// router reports a connected device; connected ones are not marked.
+    #[test]
+    fn offline_clients_never_replace_a_connected_device() {
+        let dev = |mac: &str, ip: [u8; 4], name: &str| -> Device {
+            (mac.to_owned(), Ipv4Addr::from(ip), Some(name.to_owned()))
+        };
+        let mut parts = HashMap::new();
+        parts.insert(
+            "udm".to_owned(),
+            Polled {
+                now: vec![dev("aa:00:00:00:00:01", [10, 0, 0, 5], "Desk")],
+                offline: vec![dev("aa:00:00:00:00:02", [10, 0, 0, 9], "Old phone")],
+            },
+        );
+        parts.insert(
+            "other".to_owned(),
+            Polled {
+                now: Seen::new(),
+                offline: vec![dev("aa:00:00:00:00:03", [10, 0, 0, 5], "Gone laptop")],
+            },
+        );
+        let view = ArcSwap::from_pointee(Leases::new());
+        rebuild(&parts, &view);
+        let leases = view.load_full();
+        let desk = &leases[&Ipv4Addr::new(10, 0, 0, 5)];
+        assert_eq!(
+            (desk.hostname.as_deref(), desk.offline),
+            (Some("Desk"), false)
+        );
+        let phone = &leases[&Ipv4Addr::new(10, 0, 0, 9)];
+        assert_eq!(
+            (phone.hostname.as_deref(), phone.offline),
+            (Some("Old phone"), true)
         );
     }
 

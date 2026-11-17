@@ -617,6 +617,14 @@ fn restart_only_changes(old: &Config, new: &Config) -> Vec<&'static str> {
     if old.telemetry != new.telemetry {
         v.push("[telemetry]");
     }
+    // REQ: OPS-011 — the log files are opened once, at start.
+    if old.support != new.support {
+        v.push("[support]");
+    }
+    // REQ: OPS-012 — the watchdog thread reads its settings once, at start.
+    if old.watchdog != new.watchdog {
+        v.push("[watchdog]");
+    }
     if old.node != new.node {
         v.push("[node]");
     }
@@ -1024,6 +1032,15 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
     crate::maintenance::spawn_expiry(Arc::clone(&sources), http_stopped.clone());
     // REQ: OBS-020 (T11.3) — synthetic probes of every listener, off the DNS path.
     crate::probes::spawn(Arc::clone(&sources), http_stopped.clone());
+    // REQ: OPS-012 (ADR-163) — the watchdog: a thread outside the runtime that restarts a node
+    // that stops answering, after a dump of why.
+    crate::watchdog::spawn(
+        &cfg,
+        tokio::runtime::Handle::current(),
+        http_stopped.clone(),
+    );
+    #[cfg(feature = "wedge-test")]
+    crate::watchdog::wedge_for_test(&tokio::runtime::Handle::current());
     // REQ: OBS-033 — breaker markers and the daily compaction, off the DNS path.
     crate::annotations::spawn(Arc::clone(&sources), annotations, http_stopped.clone());
     // REQ: CLU-003 — the Git config source polls on the primary (ADR-049).

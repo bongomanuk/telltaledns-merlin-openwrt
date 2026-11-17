@@ -223,6 +223,67 @@ The file is zstd-compressed tar with a manifest of BLAKE3 checksums, written own
 - Files are given the data directory's owner, so a restore run as root works for the `telltale` service user.
 - If you restore into a different data directory, the restored config still names the old one: restore says so, and you set `data_dir` (or add a small file that does).
 
+## Support package
+When something goes wrong, the most useful thing to attach to an issue is a **support package**: one `.tar.gz` with what a maintainer needs to see, and nothing that identifies you. It holds build and platform facts; your settings without secrets; the cluster view and its timeline; health checks and listener checks; upstream state; list names and counts (no domains); a snapshot of the metrics; aggregate statistics; this node's recent log; and the newest [watchdog dump](#when-a-node-stops-answering-the-watchdog), if the node wrote one (without its log lines at the `strict` level). Nothing is uploaded: you make it, look it over, and attach it yourself.
+
+**Making one**
+- In the web UI: **Settings → System → Support package** (admins). **Preview what it holds** lists every file with its size and what would be replaced; **Make the package** downloads it.
+- From a shell: `telltale support-package` (it asks the running node, with an admin's API token in `TELLTALE_TOKEN` or `--token-file`). Add `--list` to see what it would hold and write nothing.
+- With no token, or with `--offline`, it is made from the configuration files and the log files instead, without asking a running node: use that when the node won't start. It has no live state (no cluster, health, upstreams, or metrics), and says so.
+- Over the API: `POST /api/v1/system/support-package` with `{"level": "strict"}` (admin; `?dryRun=true` answers with the manifest only). It isn't an MCP tool and no agent scope covers it.
+
+```sh
+telltale support-package                               # strict (the default): ./telltale-support-<node>-<time>.tar.gz
+telltale support-package --level standard --query-sample 200 --reveal pi
+telltale support-package --keep-map map.txt            # also write what each pseudonym stands for (keep it private)
+telltale support-package --offline -c /etc/telltale/telltale.toml
+```
+
+**Levels** (`--level`, or the choice on the page)
+| Level | What it does |
+|---|---|
+| `strict` (default) | IP and MAC addresses, host, device, client, group, node, pod and namespace names, e-mail addresses, URL hosts, and home paths become pseudonyms (`device-1`, `group-2`, `10.4.7.9`). No query names, no local zone contents, no free text; the log has warnings and errors only. |
+| `standard` | As strict, plus the log's INFO lines, top lists with pseudonymized names, and (with `--query-sample N`, up to 1,000) a sample of recent queries with their names pseudonymized. |
+| `none` | Real values. Secrets are still removed. Read it before you share it. |
+
+In every level **secrets are removed**: passwords and hashes, API and session tokens, two-factor secrets, OIDC client secrets, private keys, the bootstrap secret, and credentials in URLs. A setting that holds a secret (an OIDC `client_secret`, an upstream's extra headers) is dropped, a `*_file` setting keeps its path and never the file's content, and a setting nobody classified is dropped and named in the manifest. `--reveal NAME` (repeat for several) keeps one name readable.
+
+**Pseudonyms** are the same inside one package (`device-3` is one device in every file) and can't be turned back into the real value from the package. They keep what triage needs: two addresses on one /24 (or /64) stay on one, a private address stays private and a public one stays public, loopback, link-local and the well-known public resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9, ...) stay as they are, and a MAC keeps its maker (its first three bytes) unless it is a randomized one. A public domain name keeps its last label (`site-4.com`); URL paths keep their words (`/dns-query`) and lose anything with a digit or a capital. `--keep-map FILE` writes the pseudonym map (`pseudonym<TAB>real value`) to a file only you hold; in the web UI **Let me download the key to the pseudonyms** keeps it in the node's memory for one download within ten minutes (never on disk). It has your real names: don't attach it.
+
+**What's inside**
+- `MANIFEST.json` lists every file, which part wrote it, whether it is whole (`ok`, `truncated`, or `missing`, with the reason), and how many values of each kind were replaced or removed (counts, never the values); `README.txt` says what the level means.
+- A part that is slow or fails (each has five seconds; the whole run, 30) is marked `missing` and the rest is complete. The package is at most 20 MiB: over that, the largest files are cut first (the newest log lines are kept). It runs on a worker thread and never touches the query path.
+- Free text (log lines, error messages) is redacted by pattern: the names and secrets your settings hold are replaced wherever they appear, then addresses, MACs, e-mail addresses, URLs, host names, home paths, PEM blocks and long token-looking strings are caught by shape. That is best effort, not a guarantee: look it over.
+
+**The log.** No platform lets a process read its own stderr back (a systemd unit has no journal access, a container's log is outside it, the Helm chart's root file system is read-only), so TelltaleDNS keeps its own small log: the last 2,000 lines at INFO and above in memory from the first line it logs, whatever `TELLTALE_LOG` says, and two rotating files of about 1 MiB under `<data_dir>/logs/` (directory `0750`, files `0640`), so lines from before a restart reach the package. About 21 KB a day on a quiet node. The files are **not** redacted (they hold client addresses): the package redacts when it is made. `[support] persist_logs = false` keeps only the in-memory lines (read at start); a read-only data directory does the same on its own and the manifest says so. Writing the log never blocks DNS: a full queue drops the line and counts it.
+
+**Who can, and the record.** Admins only. Each package is recorded in the audit log as `support.package` (the level and counts, never the content) and each map download as `support.package.map`. One package at a time per node (a second request gets 409).
+
+## When a node stops answering (the watchdog)
+Rarely, a process can hang with its service still `active`: DNS, the web UI, the metrics and the cluster port all go quiet and nothing exits, so nothing restarts it. A **watchdog** looks for that. A thread of its own, outside the runtime that serves everything, makes two checks every 5 seconds: the runtime can run a task, and this node's own first UDP listener answers a question (`probe.telltale.invalid`, the name the listener checks use; it is answered without asking an upstream and kept out of the query log and analytics). When a check hasn't passed for `stall_secs` (60 by default), the node is called stuck. The watchdog then writes a **dump** and, by default, ends the process with exit status 70 so its supervisor starts it again: systemd (`Restart=on-failure`, which the unit has), Docker or Podman Compose (`restart: unless-stopped`), or Kubernetes (a container restarts). A node started by hand in a terminal just exits.
+
+```toml
+[watchdog]                  # restart-only; each node has its own
+enabled = true
+stall_secs = 60             # 20 to 600
+action = "restart"          # "dump": write the dump and keep running
+max_restarts_per_hour = 6   # past it, only the dump is written; 0 never restarts
+```
+
+It watches only whether the node answers. A node that is slow, or busy for a few seconds, still passes; one that is stuck never does. A restart is limited to `max_restarts_per_hour` (counted from `<data_dir>/watchdog/restarts`), so a false alarm can't become an endless loop.
+
+**The dump** is `<data_dir>/watchdog/hang-<UTC time>.txt` (directory `0750`, files `0640`, the newest five kept). It says which check failed and for how long, the build, the uptime, memory and load, every thread (its name, state, what the kernel has it waiting on, its CPU time), **each thread's stack as raw addresses**, the executable's mappings, and the last 200 lines of the log (see Support package). It holds no client data and no settings. A support package includes the newest dump. The log says at start when the previous run ended by the watchdog, and `telltale_watchdog_last_action_timestamp_seconds` holds the time.
+
+**Reading the stacks.** The release binary is stripped, so the dump has addresses, not names. Every release and edge build publishes the matching debug file next to the binary, `telltale-<arch>-linux.debug.zst` (`x86_64`, `aarch64`, or `armv7`), covered by the signed `SHA256SUMS`. Take the one from the same release or edge build as `telltale --version` shows, then:
+
+```sh
+zstd -d telltale-x86_64-linux.debug.zst -o telltale.debug
+addr2line -e telltale.debug -f -C -i 0x4a1b2c3 0x4a1b2d4      # function and file:line for each address
+```
+The addresses are the ones in the dump, as they are in a static (non-relocated) binary; if the mappings show the binary loaded at a base other than `00400000`, subtract that base first. The first frame of each thread is the call it is stuck in, and the next ones are who called it. A thread that shows "no answer" couldn't run the handler at all, which means it is stuck inside the kernel. Attach the dump (or the support package) to an issue.
+
+**Metrics:** `telltale_watchdog_enabled`, `telltale_watchdog_check_age_seconds{check="runtime"|"listener"}` (seconds since each check last passed: near `stall_secs` means the node is about to be called stuck), and `telltale_watchdog_last_action_timestamp_seconds`.
+
 ## Kubernetes (Helm)
 The chart is published with every release as an OCI artifact (k8s 1.26+, amd64 and arm64).
 Use a release version, or `0.1.0-edge.<n>` builds that follow `main`. Its source is in
@@ -700,7 +761,7 @@ flowchart LR
   U -- all failed --> SF[SERVFAIL + EDE 22]
 ```
 - **Cache:** answers are cached for their TTL (clamped by `[cache] min_ttl`/`max_ttl`). Negative answers are cached when the upstream includes an SOA. SERVFAIL is cached for 5 seconds, and never served stale afterwards: an expired failure is asked again. Hot entries are refreshed in the background just before they expire.
-- **Upstreams:** if an upstream is slow, the next one is tried *in parallel* rather than after a timeout, and the first good answer wins. An upstream that fails 3 times in a row (or more than half the time) is benched for 10 seconds, doubling up to 5 minutes, then probed again. A SERVFAIL or REFUSED answer counts toward "more than half the time" but not toward "3 in a row", so a client retrying one broken domain can't bench a healthy upstream. Identical concurrent questions share one upstream request.
+- **Upstreams:** if an upstream is slow, the next one is tried *in parallel* rather than after a timeout, and the first good answer wins. The last healthy upstream left to try (the only one, in a group of one) may wait for its answer for the rest of the query's 2 s (not just `timeout_ms`, 400 ms by default), so a name the upstream has to look up itself (often several hundred milliseconds) isn't cut short and answered SERVFAIL. An upstream that fails 3 times in a row (or more than half the time) is benched for 10 seconds, doubling up to 5 minutes, then probed again. A SERVFAIL or REFUSED answer counts toward "more than half the time" but not toward "3 in a row", so a client retrying one broken domain can't bench a healthy upstream. Identical concurrent questions share one upstream request.
 - **Serve-stale:** if upstreams don't answer within 1.8 s (`[cache] stale_answer_client_timeout_ms`) and an expired answer is still in the cache (up to a day old by default), it's served with TTL 30 and Extended DNS Error 3 ("Stale Answer"), while the refresh continues in the background.
 - **Answering recently expired names at once:** devices keep answers themselves, so most repeat questions reach the resolver just after the answer expired, and a plain cache misses them. With `stale_answer_client_timeout_ms = 0` an expired answer is given at once (TTL 30, EDE 3) while it's refreshed in the background, the way Pi-hole's cache optimizer works by default. `stale_max_age` bounds how old it may be (an hour matches Pi-hole), and `min_ttl` keeps short-lived answers a little longer (Technitium's default is 10 s):
   ```toml
@@ -875,7 +936,7 @@ telltale lists compile -c telltale.toml     # compile now and show per-list numb
 ```
 `unique` counts the names no other list has. A list with few unique names adds little beyond your other lists.
 
-The **Lists** page and `GET /api/v1/lists` show the same per list: `unique`, `hits` (queries it decided on this node since it started), and `overlap` (the lists it shares names with, and how many). A list that's 95% or more inside another is marked, and one with no hits is marked "none yet".
+The **Lists** page and `GET /api/v1/lists` show the same per list: `unique`, `hits` (queries it decided since each node started; in a cluster, every node's added up), and `overlap` (the lists it shares names with, and how many). A list that's 95% or more inside another is marked, and one with no hits is marked "none yet".
 
 ### Blocking
 A query is checked against the filter after local records and before the cache, so a blocked name never reaches an upstream:
@@ -915,7 +976,7 @@ Among rules of the same kind, the one reported is an exact-name rule first, then
 
 Lookups take well under a microsecond: about 0.3 µs typically and under 1 µs at p99 on an x86 server with 2.6M blocked names. They use an in-memory index built from the snapshot (about 10 bytes per name, on top of the snapshot's 9). A new snapshot is served the moment it's loaded, and the index is swapped in about a second later, without pausing queries. Memory with HaGeZi Pro + TIF + OISD big + StevenBlack + AdGuard (2.7M names): about 85 MiB in total; HaGeZi Pro alone (227k names): about 10 MiB.
 
-Metrics: `telltale_queries_total{status="blocked"}` (including CNAME blocks), `telltale_filter_paused_until_seconds{group}`, `telltale_filter_lookup_index_bytes` (0 while the index is being built), `telltale_filter_snapshot_version`, `telltale_filter_rules`, `telltale_filter_compile_seconds`, `telltale_list_entries{list}`, `telltale_list_source_bytes`, `telltale_list_last_success_timestamp_seconds`, `telltale_list_last_change_timestamp_seconds`, and `telltale_list_fetch_consecutive_failures`, each labeled `{list}`. To alert on a list that has failed for two days:
+Metrics: `telltale_queries_total{status="blocked"}` (including CNAME blocks), `telltale_filter_paused_until_seconds{group}`, `telltale_filter_lookup_index_bytes` (0 while the index is being built), `telltale_filter_snapshot_version`, `telltale_filter_rules`, `telltale_filter_compile_seconds`, `telltale_list_entries{list}`, `telltale_list_source_bytes`, `telltale_list_last_success_timestamp_seconds`, `telltale_list_last_change_timestamp_seconds`, and `telltale_list_fetch_consecutive_failures`, each labeled `{list}`. Inline lists (`rules = [...]`) are never fetched, so they have no `telltale_list_last_success_timestamp_seconds`. To alert on a list that has failed for two days:
 ```
 time() - telltale_list_last_success_timestamp_seconds > 172800
 ```
@@ -1234,6 +1295,7 @@ api_key_file = "/etc/telltale/unifi-key"   # UniFi Network 9+ (Settings → Cont
 # username = "telltale"                # or a local read-only user...
 # password_file = "/etc/telltale/unifi-pass"
 # site = "default"
+# offline_days = 30                    # also name clients that are offline now, if UniFi saw them this recently (0: only connected ones)
 tls_ca = "/etc/telltale/udm.pem"       # the console's own certificate (self-signed)
 tls_server_name = "unifi.local"        # the name in it (UniFi consoles name themselves unifi.local)
 
@@ -1244,7 +1306,7 @@ url = "https://opnsense.lan"
 api_key_file = "/etc/telltale/opn-key"     # System → Access → Users → API keys
 api_secret_file = "/etc/telltale/opn-secret"
 ```
-- UniFi: the connected clients, named by the alias you gave them in UniFi, else their host name. OPNsense: the DHCP leases (Dnsmasq, Kea, or ISC, whichever is running).
+- UniFi: the connected clients, plus the offline clients UniFi still knows (its client history and configured clients), named by the alias you gave them in UniFi, else their host name. An offline client is one UniFi saw within `offline_days` (30 by default; 0 for only the connected clients; at most 365), and at most the 1,024 most recently seen are kept. It is listed only when it has a name, at its last or fixed address, and never over a connected client's address. It names the device in the query log, but it doesn't count as seen for device identification. A console without the client history (Network before 7) gives the configured clients. OPNsense: the DHCP leases (Dnsmasq, Kea, or ISC, whichever is running).
 - A self-signed console: save its certificate (`openssl s_client -connect 192.168.1.1:443 </dev/null | openssl x509 > udm.pem`) as `tls_ca`. Its certificate names `unifi.local`, not the address you reach it at, so set `tls_server_name` to the name in it (`openssl x509 -in udm.pem -noout -ext subjectAltName` shows it): the console is then verified, and only that certificate is trusted. `tls_insecure_skip_verify = true` also works, but then anything on your network could pose as the console and receive the API key.
 - Read every `interval_secs` (300); a router that doesn't answer is asked again after 15 seconds and keeps its last list meanwhile.
 - Names you give devices in TelltaleDNS win; then the routers'. `GET /api/v1/dhcp/leases` lists them (`source = router`).
@@ -1322,7 +1384,9 @@ A quick rule allows or blocks a site, and everything under it, for one device, a
 
 **Making one:**
 - In the **query log**, press **Why?** on a query and use **Make a quick rule**. The site, the device, and its group are filled in.
-- On the **Quick rules** page (Filtering & DNS), which also lists what's in effect with a countdown, who made each rule, and a Remove button.
+- On the **Quick rules** page (Filtering & DNS), which also lists what's in effect with a countdown, who made each rule, and Edit and Remove buttons.
+
+**Changing one:** press **Edit** on the rule. The form opens filled in, with the same preview as for a new rule, and **Save changes** replaces the rule under the same ID, so it applies on the next query. The rule keeps who made it and when (the audit log records who changed it, with the rule before and after). The end time stays as it was (**Keep the current end**) unless you pick a new duration, which counts from now. There is no Edit for rules in a config file (change the file), or for a rule made through the API for several devices or groups (use `PUT /api/v1/rules/{id}`).
 
 **How they decide:**
 - Quick rules decide **before any list**, on the next query. The lists aren't recompiled.
@@ -1682,7 +1746,11 @@ advertises; if none answers, it attaches to another eligible node, so it still g
 cluster's state. While it is attached to a node that isn't the primary, it looks for the
 primary again every 2 to 30 seconds (jittered, backing off) and moves back as soon as it
 answers, with `cluster: the primary answers again` in the log. It never moves to an address
-of a node it knows is not the primary.
+of a node it knows is not the primary. Only the node's own link counts: the primary also opens
+links to eligible nodes, and one of those doesn't stop the search. Configuration and blocklist
+files always come from the primary (another replica has none to give), over the node's own
+link when that's to the primary, else from the primary's addresses directly. Each time the
+link comes up the log says where: `cluster: linked to a peer` with its URL and node ID.
 
 **One view of the whole cluster.** Open any node's UI and the dashboard, top lists, latency,
 groups, query log, and live query stream cover every node:
@@ -2874,11 +2942,17 @@ Open `http://<server>:8053/` in a browser. On first start it asks for the setup 
 | Query log | search by name (contains, exact, subdomains, wildcard, regex), client, status, type, response code, slowness, and time; each row shows how long it took and how much of that was the upstream; **Why?** explains the decision. Filters live in the URL, so a search can be bookmarked or shared. **Live** streams new matching queries as they happen (the newest 500 stay on screen) |
 | Explain | why any name is or isn't blocked for any device |
 | Clients, Groups, Lists, Upstreams | devices seen and configured; groups and their lists; list download state and size; upstream health (Healthy, Benched, or Probing: the circuit breaker's closed, open, and half-open), traffic, failures by kind (timeouts, connection errors, SERVFAIL, ...), and latency |
-| Settings | your password and two-factor sign-in, API tokens, users and the audit log (admins), system information, and the cache ([Cache tools](#cache-tools)) |
+| Settings | your password and two-factor sign-in, how domain names are drawn ([Domain icons](#domain-icons)), API tokens, users and the audit log (admins), system information, and the cache ([Cache tools](#cache-tools)) |
 
 Every chart has a **Table** view. The UI follows the system's light or dark theme (or pick one in the header) and works on phones. Upstreams, lists, and groups can be added and changed on their pages ([Changing the configuration in the UI](#changing-the-configuration-in-the-ui)).
 
 The menu ends with the health icon ([Health](#health)), links to the project on GitHub and its site (plain links: the UI fetches nothing from the internet), then this node's name and version.
+
+### Domain icons
+A small mark sits left of each name in the dashboard's **Top domains** and **Top blocked** lists and in the query log. The page draws it from data it already has, so nothing is fetched and nothing about your queries is sent to anyone: no favicon service is involved, and the page's content security policy still allows images only from itself.
+- A **brand** TelltaleDNS knows gets its colour and logo mark: `netflix.com`, `www.youtube.com`, and a CDN name such as `nflxso.net` (Netflix). About a hundred brands are known, from [Simple Icons](https://simpleicons.org) (CC0; see the [third-party notices](third-party-notices.md)). Some large companies' marks aren't in that set (Microsoft, Amazon and AWS, LinkedIn, Slack, Disney+, Hulu, OpenAI, and a few more): their names get a monogram.
+- Every other name gets a **monogram**: its owner's first letter, in a colour that is always the same for that owner. A name of your own network (`.arpa`, `.lan`, `.local`, Kubernetes) gets a small house. A blocked name's mark is drained of most of its colour. When a privacy level hides names, there are no icons.
+- **Settings → Account → Domain icons** picks the style (**Brand and monogram**, **Monogram only**, or **Off**) and the size (**Default**, 20 px, or **Small**, 16 px). The choice is kept for you in this browser. With **Monogram only** or **Off**, the brand marks aren't even downloaded.
 
 ### Health
 The icon at the bottom of the menu says how TelltaleDNS is doing, for every node of a cluster, and changes shape as well as color:

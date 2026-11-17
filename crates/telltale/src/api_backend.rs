@@ -1058,6 +1058,19 @@ impl Backend for ApiBackend {
         Ok((name.display().to_string(), bytes))
     }
 
+    // REQ: OPS-011 (ADR-156) — a support package, and its map for one download.
+    fn support_package(
+        &self,
+        req: &telltale_api::model::SupportPackageRequest,
+        dry_run: bool,
+    ) -> Result<telltale_api::SupportPackageOutput, Problem> {
+        crate::support::build(self, req, dry_run)
+    }
+
+    fn support_map(&self, id: &str) -> Option<String> {
+        crate::support::take_map(id)
+    }
+
     // REQ: AGT-002 — the promotion checks without promoting.
     fn promote_plan(
         &self,
@@ -1670,11 +1683,10 @@ impl Backend for ApiBackend {
                 .as_ref()
                 .map(|c| c.manifest.clone())
         });
-        // REQ: OBS-009 (T7.14) — hits per list ID on this node since it started.
-        let mut hits: std::collections::HashMap<u16, u64> = std::collections::HashMap::new();
-        for ((_, list), n) in &self.src.pipeline.telemetry.aggregates().exported.blocked {
-            *hits.entry(*list).or_insert(0) += n;
-        }
+        // REQ: OBS-009 — this node's own hits by list name. `GET /api/v1/lists` replaces them with
+        // the cluster's (`list_hits`); a caller that reads this directly, like the support
+        // package, still gets this node's.
+        let decided = self.src.shadow.decided();
         cfg.list
             .iter()
             .map(|l| {
@@ -1689,10 +1701,6 @@ impl Backend for ApiBackend {
                 let entries = per.map_or(0, |s| s.entries);
                 let unique = per.map_or(0, |s| s.unique);
                 let regex_skipped = per.map_or(0, |s| s.regex_skipped);
-                let list_hits = id
-                    .and_then(|i| u16::try_from(i).ok())
-                    .and_then(|i| hits.get(&i).copied())
-                    .unwrap_or(0);
                 let mut overlap: Vec<telltale_api::model::ListShare> = match (&compiled, id) {
                     (Some(m), Some(i)) => {
                         let i = u16::try_from(i).unwrap_or(u16::MAX);
@@ -1742,7 +1750,7 @@ impl Backend for ApiBackend {
                     entries,
                     unique,
                     regex_skipped,
-                    hits: list_hits,
+                    hits: decided.get(&*l.name).copied().unwrap_or(0),
                     overlap,
                     last_checked_unix_seconds: meta.and_then(|m| m.last_attempt),
                     last_changed_unix_seconds: meta.and_then(|m| m.last_changed),
@@ -1750,6 +1758,13 @@ impl Backend for ApiBackend {
                 }
             })
             .collect()
+    }
+
+    // REQ: OBS-009 (T7.14) — this node's blocks and allows by list name, counted on the
+    // telemetry thread (`shadow::ShadowSink`): a replica that only receives the snapshot
+    // counts too, and the counts survive lists being renumbered.
+    fn list_hits(&self) -> std::collections::BTreeMap<String, u64> {
+        self.src.shadow.decided()
     }
 
     fn groups(&self) -> Vec<GroupInfo> {
@@ -3765,11 +3780,14 @@ pub(crate) fn spawn_rule_sweep(
 }
 
 /// REQ: FLT-005 (T6.12, ADR-067) — a rule body as stored: validated shape, the expiry as an
-/// absolute time (from `expires` or `forMinutes`), and who made it and when.
+/// absolute time (from `expires` or `forMinutes`), and who made it and when. REQ: FLT-005
+/// (T20.1, ADR-162) — a rule that replaces one with the same ID (an edit) keeps who made it and
+/// when (`before`); the editor is in the audit entry, which holds the rule before and after.
 fn rule_of(
     v: &serde_json::Value,
     id: &str,
     by: &str,
+    before: Option<&telltale_config::RuleConfig>,
 ) -> Result<telltale_config::RuleConfig, Problem> {
     use telltale_config::{RuleAction, RuleConfig, SafeString};
     let input: telltale_api::model::RuleInput =
@@ -3833,11 +3851,17 @@ fn rule_of(
             .filter(|n| !n.is_empty())
             .map(|n| safe("note", n))
             .transpose()?,
-        created_by: Some(safe("createdBy", by)?),
-        created: Some(safe(
-            "created",
-            &format_us(u64::try_from(now).unwrap_or(0) * 1_000_000),
-        )?),
+        created_by: match before.and_then(|b| b.created_by.clone()) {
+            Some(kept) => Some(kept),
+            None => Some(safe("createdBy", by)?),
+        },
+        created: match before.and_then(|b| b.created.clone()) {
+            Some(kept) => Some(kept),
+            None => Some(safe(
+                "created",
+                &format_us(u64::try_from(now).unwrap_or(0) * 1_000_000),
+            )?),
+        },
     })
 }
 
@@ -4177,7 +4201,7 @@ fn plan_managed(
             let after = match &w.body {
                 None => None,
                 Some(v) => {
-                    let r = rule_of(v, &name, &w.by)?;
+                    let r = rule_of(v, &name, &w.by, before.as_ref())?;
                     entries.rules.push(r.clone());
                     Some(r)
                 }
@@ -5951,6 +5975,7 @@ mod top_client_name_tests {
             ip: std::net::Ipv4Addr::from(ip),
             hostname: Some(name.into()),
             expires: 0,
+            offline: false,
         }
     }
 
@@ -6071,5 +6096,71 @@ mod top_range_tests {
         );
         assert_eq!(list(h0, h1), pairs(&[("10.0.0.1", 5), ("10.0.0.3", 4)]));
         assert_eq!(api.top_range(TopKind::Clients, h0, now + 1, 2).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod rule_edit_tests {
+    use super::*;
+
+    fn maker(r: &telltale_config::RuleConfig) -> Option<&str> {
+        r.created_by
+            .as_ref()
+            .map(telltale_config::SafeString::as_str)
+    }
+
+    /// REQ: FLT-005 (T20.1, ADR-162) — an edit replaces the rule but keeps who made it and when;
+    /// a new rule is made by the writer, now.
+    #[test]
+    fn flt_005_editing_a_rule_keeps_its_maker_and_creation_time() {
+        let made = rule_of(
+            &serde_json::json!({ "action": "allow", "domain": "Game.Example.com", "devices": ["phone"] }),
+            "r-1",
+            "alice",
+            None,
+        )
+        .unwrap();
+        assert_eq!(maker(&made), Some("alice"));
+        assert_eq!(made.domain.as_str(), "game.example.com");
+        let first_created = made.created.clone();
+        assert!(first_created.is_some());
+
+        let mut earlier = made.clone();
+        earlier.created = Some(telltale_config::SafeString::new("2026-10-05T10:00:00Z").unwrap());
+        let edited = rule_of(
+            &serde_json::json!({
+                "action": "block", "domain": "game.example.com", "groups": ["kids"], "note": "later"
+            }),
+            "r-1",
+            "bob",
+            Some(&earlier),
+        )
+        .unwrap();
+        assert_eq!(maker(&edited), Some("alice"), "the editor isn't the maker");
+        assert_eq!(
+            edited
+                .created
+                .as_ref()
+                .map(telltale_config::SafeString::as_str),
+            Some("2026-10-05T10:00:00Z"),
+            "and the rule keeps its creation time"
+        );
+        assert_eq!(edited.action, telltale_config::RuleAction::Block);
+        assert!(edited.devices.is_empty(), "the body is the whole rule");
+        assert_eq!(edited.groups.len(), 1);
+
+        // A stored rule with no maker (older data) takes the writer and now.
+        let mut anonymous = made;
+        anonymous.created_by = None;
+        anonymous.created = None;
+        let taken = rule_of(
+            &serde_json::json!({ "action": "allow", "domain": "game.example.com" }),
+            "r-1",
+            "bob",
+            Some(&anonymous),
+        )
+        .unwrap();
+        assert_eq!(maker(&taken), Some("bob"));
+        assert!(taken.created.is_some());
     }
 }

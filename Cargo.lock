@@ -3455,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "telltale"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "allocation-counter",
  "arc-swap",
@@ -3489,6 +3489,7 @@ dependencies = [
  "telltale-policy",
  "telltale-proto",
  "telltale-store",
+ "telltale-support",
  "telltale-telemetry",
  "telltale-upstream",
  "tempfile",
@@ -3504,7 +3505,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-api"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "argon2",
  "axum",
@@ -3512,6 +3513,7 @@ dependencies = [
  "blake3",
  "chrono",
  "futures-util",
+ "miniz_oxide",
  "openidconnect",
  "rand 0.10.3",
  "rust-embed",
@@ -3528,7 +3530,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-cache"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "allocation-counter",
  "criterion",
@@ -3539,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-cluster"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "blake3",
  "bytes",
@@ -3566,7 +3568,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-config"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "jiff",
  "schemars 1.2.3",
@@ -3579,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-filter"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "allocation-counter",
  "blake3",
@@ -3613,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-git"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.23.1",
  "miniz_oxide",
@@ -3624,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-net"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "h3",
@@ -3648,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-policy"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "allocation-counter",
  "arc-swap",
@@ -3661,7 +3663,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-proto"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "criterion",
  "hickory-proto",
@@ -3672,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-recursor"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "parking_lot 0.13.0",
  "rand 0.10.3",
@@ -3684,7 +3686,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-store"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "blake3",
  "memchr",
@@ -3700,8 +3702,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "telltale-support"
+version = "0.8.0"
+dependencies = [
+ "blake3",
+ "miniz_oxide",
+ "regex-automata",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "telltale-config",
+]
+
+[[package]]
 name = "telltale-telemetry"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "allocation-counter",
  "blake3",
@@ -3713,7 +3728,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-upstream"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "crypto_box",

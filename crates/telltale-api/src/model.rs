@@ -919,7 +919,8 @@ pub struct ListInfo {
     /// REQ: FLT-003 (review 02-08) — regex rules this list ships that the active snapshot
     /// leaves out: over `[filter] max_regexes`, too large for the matcher, or not valid.
     pub regex_skipped: u64,
-    /// Queries it blocked (or allowed, for an allow list) on this node since it started.
+    /// Queries it blocked (or allowed, for an allow list) since each node started; in a
+    /// cluster, every node's added up.
     pub hits: u64,
     /// Lists it shares names with, most shared first.
     pub overlap: Vec<ListShare>,
@@ -2141,6 +2142,24 @@ pub struct AnomalyFinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "lg-tv-ptr-sweep")]
     pub muted_by: Option<String>,
+}
+
+/// REQ: OPS-011 (ADR-156) — `POST /system/support-package`: what the package should hold.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupportPackageRequest {
+    /// `strict` (the default), `standard`, or `none`: how much is obfuscated.
+    #[schema(example = "strict")]
+    pub level: Option<String>,
+    /// Names (a device, a group, a node, a host) to keep readable. At most 50.
+    #[serde(default)]
+    pub reveal: Vec<String>,
+    /// Rows of the query log to include, newest first (0 to 1,000; `standard` and `none` only).
+    #[serde(default)]
+    pub query_sample: u32,
+    /// Keep the pseudonym map in memory for one download (`GET /system/support-package/{id}/map`).
+    #[serde(default)]
+    pub keep_map: bool,
 }
 
 /// REQ: OBS-014 (ADR-103) — a finding's stable ID: its window start (Unix seconds, 8 hex
