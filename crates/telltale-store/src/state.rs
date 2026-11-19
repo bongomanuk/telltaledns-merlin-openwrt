@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// Schema migrations, applied in order; `meta.schema` records how many ran.
 const MIGRATIONS: &[&str] = &[
@@ -297,28 +297,12 @@ impl State {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         // ADR-124 — no temp files (read-only root filesystems have nowhere to put them).
         conn.pragma_update(None, "temp_store", "MEMORY")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(OPEN_WAIT)?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
             [],
         )?;
-        let done: usize = conn
-            .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        for (n, sql) in MIGRATIONS.iter().enumerate().skip(done) {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(sql)?;
-            tx.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [(n + 1).to_string()],
-            )?;
-            tx.commit()?;
-        }
+        migrate(&mut conn, MIGRATIONS)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -848,6 +832,141 @@ mod tests {
             .query_row("PRAGMA temp_store", [], |x| x.get(0))
             .unwrap();
         assert_eq!(store, 2, "temp_store = MEMORY");
+    }
+
+    /// The schema version `init` recorded in `meta`.
+    fn applied_schema(s: &State) -> usize {
+        s.with(|c| {
+            c.query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
+                r.get::<_, String>(0)
+            })
+        })
+        .unwrap()
+        .parse()
+        .unwrap()
+    }
+
+    // REQ: API-003 (ADR-040, ADR-068) — `state.db` is opened by more than one thread or process
+    // at start-up: the server's API listener, and CLI commands (`telltale cluster status` merges
+    // the config made in the UI, so it opens `state.db` too) that a script starts right after
+    // `telltale run`. Openers of one fresh file must not apply a migration twice (CI saw
+    // "duplicate column name: oidc_provider" and the node's API stayed off), nor lose the race
+    // to switch the new file to WAL ("database is locked"). Many openers are released together,
+    // round after round, each on a fresh file; every one must succeed and the schema must end
+    // complete.
+    #[test]
+    fn api_003_concurrent_opens_of_a_fresh_state_db_all_succeed() {
+        use std::collections::BTreeMap;
+        use std::sync::Barrier;
+
+        const OPENERS: usize = 16;
+        const ROUNDS: usize = 40;
+        let mut failed_rounds = 0;
+        let mut errors: BTreeMap<String, usize> = BTreeMap::new();
+        for _ in 0..ROUNDS {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("state.db");
+            let gate = Barrier::new(OPENERS);
+            let opened: Vec<Result<usize>> = std::thread::scope(|scope| {
+                let openers: Vec<_> = (0..OPENERS)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            gate.wait();
+                            State::open(&path).map(|s| applied_schema(&s))
+                        })
+                    })
+                    .collect();
+                openers.into_iter().map(|h| h.join().unwrap()).collect()
+            });
+            let mut failed = false;
+            for r in opened {
+                match r {
+                    Ok(v) => assert_eq!(v, MIGRATIONS.len(), "an opener saw a partial schema"),
+                    Err(e) => {
+                        failed = true;
+                        *errors.entry(e.to_string()).or_default() += 1;
+                    }
+                }
+            }
+            failed_rounds += usize::from(failed);
+            // However the openers fared, the file ends complete and opens again.
+            if !failed {
+                let again = State::open(&path).unwrap();
+                assert_eq!(applied_schema(&again), MIGRATIONS.len());
+            }
+        }
+        assert!(
+            failed_rounds == 0,
+            "{failed_rounds} of {ROUNDS} rounds had an opener fail ({OPENERS} openers each): {errors:?}"
+        );
+    }
+
+    // REQ: API-003 — the common start-up opens a file that is already up to date. That takes one
+    // read, never the write lock: a writer holding it (the running server) must not delay or fail
+    // a CLI command's open.
+    #[test]
+    fn api_003_opening_an_up_to_date_state_db_does_not_need_the_write_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.db");
+        drop(State::open(&path).unwrap());
+        // Another connection takes the write lock and keeps it. The busy timeout is 5 s, so an
+        // open that wanted the lock would fail after that wait with "database is locked".
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let s = State::open(&path).unwrap();
+        assert_eq!(applied_schema(&s), MIGRATIONS.len());
+        writer.execute_batch("ROLLBACK").unwrap();
+    }
+
+    // REQ: API-003 — a migration that fails leaves the file as it was and says why; a newer file
+    // than this build knows is left alone.
+    #[test]
+    fn api_003_a_failing_migration_rolls_back_and_returns_its_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut conn = Connection::open(tmp.path().join("m.db")).unwrap();
+        conn.execute(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        let tables = |c: &Connection| -> Vec<String> {
+            let mut q = c
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+                .unwrap();
+            q.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let good = ["CREATE TABLE a (x)", "CREATE TABLE b (x)"];
+        migrate(&mut conn, &good).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 2);
+
+        // Two more: the second fails after the first one's statements ran.
+        let bad = [
+            good[0],
+            good[1],
+            "CREATE TABLE c (x)",
+            "CREATE TABLE d (x); ALTER TABLE nowhere ADD COLUMN y",
+        ];
+        let err = migrate(&mut conn, &bad).unwrap_err();
+        assert!(err.to_string().contains("nowhere"), "{err}");
+        assert_eq!(schema_version(&conn).unwrap(), 2, "the version didn't move");
+        assert_eq!(
+            tables(&conn),
+            ["a", "b", "meta"],
+            "neither c nor d was kept"
+        );
+
+        // The same file opens once the migrations are right, and runs only what is pending.
+        let fixed = [good[0], good[1], "CREATE TABLE c (x)", "CREATE TABLE d (x)"];
+        migrate(&mut conn, &fixed).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 4);
+        assert_eq!(tables(&conn), ["a", "b", "c", "d", "meta"]);
+
+        // A file written by a newer build (more migrations) is not touched.
+        migrate(&mut conn, &good).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 4);
     }
 
     #[test]
