@@ -421,6 +421,8 @@ pub struct Auth {
     audit_gap: Mutex<Option<(u64, String)>>,
     /// Password checks in flight (at most [`MAX_PASSWORD_CHECKS`]).
     password_checks: std::sync::atomic::AtomicU32,
+    /// REQ: API-004 (issue #63, ADR-175) — when the hint about a same-host proxy was last logged.
+    proxy_hint: routes::ProxyHint,
 }
 
 /// A slot for one password check; given back when dropped.
@@ -503,6 +505,7 @@ impl Auth {
             identity_primary: Mutex::new(None),
             password_checks: std::sync::atomic::AtomicU32::new(0),
             audit_gap: Mutex::new(None),
+            proxy_hint: routes::ProxyHint::new(),
         }
     }
 

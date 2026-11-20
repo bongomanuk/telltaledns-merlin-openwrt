@@ -166,14 +166,16 @@ pub(crate) fn routes(backend: Arc<dyn Backend>, auth: Arc<Auth>) -> Router {
 /// e.g. `{"url": "tls://9.9.9.9", "tls_server_name": "dns.quad9.net"}`. A name the config files use is overridden: this definition replaces theirs
 /// until it's deleted again (`GET /api/v1/config/overrides` lists such changes). The whole
 /// configuration is checked before anything is stored. On a node whose configuration comes from
-/// Git, the response's `toml` says what to add to the repository to keep the change.
+/// Git, the response's `toml` says what to add to the repository to keep the change. Plugin
+/// upstreams (`exec://`, `unix://`, and `args`) are defined in the config file: such a body is
+/// refused for everyone, an administrator included (422, ADR-180).
 #[utoipa::path(put, path = "/api/v1/upstreams/{name}", tag = "config",
     params(("name" = String, Path, description = "The name."), DryRun),
     request_body = Object,
     responses(
         (status = 200, body = ConfigChange, description = "Applied (or, with dryRun, what would change)."),
         (status = 412, body = Problem, description = "The configuration changed since the If-Match version: re-read it and retry."),
-        (status = 422, body = Problem, description = "A field is wrong, or the configuration wouldn't be valid: problem+json says which."),
+        (status = 422, body = Problem, description = "A field is wrong, the configuration wouldn't be valid, or the upstream is a plugin (`exec://`, `unix://`): problem+json says which."),
     ))]
 pub(crate) async fn put_upstream(
     State((backend, auth)): State<Ctx>,
@@ -316,12 +318,16 @@ pub(crate) async fn delete_upstream_group(
 /// e.g. `{"url": "https://example.com/hosts.txt"}`. A name the config files use is overridden: this definition replaces theirs
 /// until it's deleted again (`GET /api/v1/config/overrides` lists such changes). The whole
 /// configuration is checked before anything is stored. On a node whose configuration comes from
-/// Git, the response's `toml` says what to add to the repository to keep the change.
+/// Git, the response's `toml` says what to add to the repository to keep the change. A list read
+/// from a local file (`path`) is added, or pointed at another file, only by an administrator (an
+/// admin's sign-in or API token; no agent token); the operator role covers URL lists, inline
+/// rules, a file list's other settings, and deleting any list (ADR-180).
 #[utoipa::path(put, path = "/api/v1/lists/{name}", tag = "config",
     params(("name" = String, Path, description = "The name."), DryRun),
     request_body = Object,
     responses(
         (status = 200, body = ConfigChange, description = "Applied (or, with dryRun, what would change)."),
+        (status = 403, body = Problem, description = "The list names a local file (`path`) it didn't read before, and the caller isn't an administrator."),
         (status = 412, body = Problem, description = "The configuration changed since the If-Match version: re-read it and retry."),
         (status = 422, body = Problem, description = "A field is wrong, or the configuration wouldn't be valid: problem+json says which."),
     ))]
@@ -660,12 +666,19 @@ async fn group_guard(
 /// `{"type": "email", "url": "smtp://smtp.gmail.com:587", "from": "me@gmail.com", "to":
 /// ["me@gmail.com"], "username": "me@gmail.com", "password_file": "/run/secrets/smtp"}`.
 /// Secrets stay in files on the node (`token_file`, `password_file`): only the path is sent.
+/// A destination that names either file, before or after the change, is added or changed only
+/// by an administrator (an admin's sign-in or API token; agent tokens can't); without one, or to
+/// delete one, the operator role is enough. The file is an absolute path under `/run/secrets/`,
+/// `/etc/telltale-secrets/` or the data directory's `secrets/` folder (not
+/// `/run/secrets/kubernetes.io/`), written without `.` or `..`; links are followed. It needn't
+/// exist yet.
 /// A destination the config files define is overridden until this one is deleted.
 #[utoipa::path(put, path = "/api/v1/alerts/destinations/{name}", tag = "config",
     params(("name" = String, Path, description = "The name."), DryRun),
     request_body = Object,
     responses(
         (status = 200, body = ConfigChange, description = "Applied (or, with dryRun, what would change)."),
+        (status = 403, body = Problem, description = "The destination names a credential file (`token_file`, `password_file`), before or after the change, and the caller isn't an administrator."),
         (status = 412, body = Problem, description = "The configuration changed since the If-Match version: re-read it and retry."),
         (status = 422, body = Problem, description = "A field is wrong, or the configuration wouldn't be valid: problem+json says which."),
     ))]
@@ -801,7 +814,8 @@ pub(crate) async fn delete_alert_rule(
 ///
 /// Sends a message marked as a test, from this node, and answers with what happened: `ok`, or
 /// the destination's error (a wrong password, an unreachable server). Nothing is stored, but
-/// the test is audited. Needs the operator role.
+/// the test is audited. Needs the operator role. When the private CA file (`tls_ca`) can't be
+/// used, only an administrator is told why; anyone else gets that it couldn't be (ADR-180).
 #[utoipa::path(post, path = "/api/v1/alerts/destinations/{name}/test", tag = "config",
     params(("name" = String, Path, description = "The destination.")),
     responses(
@@ -815,7 +829,7 @@ pub(crate) async fn test_alert_destination(
     ext: axum::http::Extensions,
 ) -> Result<Json<crate::model::AlertTest>, Problem> {
     let p = principal(&ext)?;
-    let r = backend.alert_test(&name).await?;
+    let r = backend.alert_test(&name, by_admin(&p)).await?;
     let actor = auth.actor(&p, remote(&auth, &ext, &headers), reason(&headers));
     auth.record(
         &actor,
@@ -832,12 +846,15 @@ pub(crate) async fn test_alert_destination(
 /// builds it and asks it for the root's NS records, as health checks do, and answers with what
 /// happened: `ok` with the rcode, records, and time, or the error (a bad URL, a TLS name that
 /// doesn't match, a timeout). Nothing is saved; the check is audited. Needs the operator role
-/// (agents: `config:write:upstreams`).
+/// (agents: `config:write:upstreams`). A plugin draft (`exec://`, `unix://`, `args`) is refused
+/// before anything is built, for everyone: plugin upstreams are defined in the config file
+/// (ADR-180). When a TLS file the draft names (`tls_ca`, `tls_client_cert`, `tls_client_key`)
+/// can't be used, only an administrator is told why; anyone else gets that it couldn't be.
 #[utoipa::path(post, path = "/api/v1/checks/upstream", tag = "config",
     request_body = Object,
     responses(
         (status = 200, body = crate::model::CheckResult, description = "Answered, or why not."),
-        (status = 422, body = Problem, description = "The body isn't an upstream (an unknown or mistyped field)."),
+        (status = 422, body = Problem, description = "The body isn't an upstream (an unknown or mistyped field), or it's a plugin (`exec://`, `unix://`)."),
     ))]
 pub(crate) async fn check_upstream(
     State((backend, auth)): State<Ctx>,
@@ -848,7 +865,7 @@ pub(crate) async fn check_upstream(
     let p = principal(&ext)?;
     let input = body(b)?;
     let url = input.get("url").cloned().unwrap_or_default();
-    let mut r = backend.check_upstream(input).await?;
+    let mut r = backend.check_upstream(input, by_admin(&p)).await?;
     let actor = auth.actor(&p, remote(&auth, &ext, &headers), reason(&headers));
     auth.record(
         &actor,
@@ -1664,7 +1681,8 @@ pub(crate) async fn delete_records(
 /// Every name under `domain` is asked of `servers` (in order, failing over) instead of the
 /// public upstreams: a work network's DNS over a VPN, a router that knows your devices, another
 /// lab. A bare address means plain DNS; `tls://` and `https://` URLs work too. Local names still
-/// answer first. Domains routed in the config files are read-only here (409).
+/// answer first. Domains routed in the config files are read-only here (409). A server can't be a
+/// plugin (`exec://`, `unix://`): those are defined in the config file (422, ADR-180).
 #[utoipa::path(put, path = "/api/v1/forwards/{domain}", tag = "config",
     params(("domain" = String, Path, description = "The domain, e.g. corp.example (its whole subtree is sent)."), DryRun),
     request_body = ForwardInput,
@@ -1672,7 +1690,7 @@ pub(crate) async fn delete_records(
         (status = 200, body = ConfigChange, description = "Applied (or, with dryRun, what would change)."),
         (status = 409, body = Problem, description = "Conflicts with the current state: problem+json says what to change."),
         (status = 412, body = Problem, description = "The configuration changed since the If-Match version: re-read it and retry."),
-        (status = 422, body = Problem, description = "A server isn't an address or a supported URL."),
+        (status = 422, body = Problem, description = "A server isn't an address or a supported URL, or it's a plugin (`exec://`, `unix://`)."),
     ))]
 pub(crate) async fn put_forward(
     State((backend, auth)): State<Ctx>,
@@ -1811,6 +1829,13 @@ pub(crate) async fn delete_rule(
     .await
 }
 
+/// REQ: OBS-010, API-002, FLT-004, OBS-024 (ADR-179, ADR-180) — the caller is an administrator:
+/// an admin's own sign-in (a session or HTTP Basic) or an admin-scoped API token. An agent token
+/// never is, whoever owns it and whatever else it may do.
+pub(crate) fn by_admin(p: &crate::auth::Principal) -> bool {
+    p.role == crate::auth::Role::Admin && p.agent.is_none()
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one path for every write
 async fn write(
     backend: Arc<dyn Backend>,
@@ -1896,6 +1921,9 @@ async fn write(
                 expect,
                 by: actor.name.clone(),
                 simulate,
+                // REQ: OBS-010, API-002 (ADR-179) — an agent token is never an administrator
+                // here, whoever owns it and whatever else it may do.
+                by_admin: by_admin(&p),
             })
             .await
             .map(|c| serde_json::to_value(c).unwrap_or_default()),

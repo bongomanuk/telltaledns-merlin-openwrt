@@ -17,6 +17,8 @@ struct Fake {
     notes: Mutex<Vec<crate::model::Annotation>>,
     /// REQ: OPS-011 — the fake's one pseudonym map has been handed out.
     map_taken: std::sync::atomic::AtomicBool,
+    /// REQ: OBS-010 (ADR-179) — each managed write's name and whether an admin made it.
+    by_admin: Mutex<Vec<(String, bool)>>,
 }
 
 /// The one finding the fake reports.
@@ -35,6 +37,10 @@ impl Backend for Fake {
         &self,
         w: crate::ManagedWrite,
     ) -> crate::BoxFuture<Result<crate::model::ConfigChange, Problem>> {
+        self.by_admin
+            .lock()
+            .unwrap()
+            .push((w.name.clone(), w.by_admin));
         self.seen.lock().unwrap().push(format!(
             "managed {:?} {} {}",
             w.kind,
@@ -286,6 +292,7 @@ impl Backend for Fake {
             enabled: true,
             mode: "enforce".into(),
             source: "inline".into(),
+            local: false,
             state: "ok".into(),
             error: None,
             bytes: 0,
@@ -3464,5 +3471,105 @@ fn clu_004_direct_handlers_never_park_a_runtime_worker() {
         failed.is_empty(),
         "these requests did not complete on a runtime of one worker:\n{}",
         failed.join("\n")
+    );
+}
+
+/// REQ: OBS-010, API-002 (ADR-179) — a configuration write tells the backend whether an
+/// administrator made it: an admin's session or admin-scoped token is; an operator, an admin's
+/// token capped below admin, and any agent token (an admin's, even with `cluster:admin`) aren't.
+#[tokio::test]
+async fn obs_010_a_write_says_whether_an_administrator_made_it() {
+    let (app, fake) = app();
+    let olga = app
+        .auth
+        .create_user(
+            "olga",
+            "an operator password",
+            auth::Role::Operator,
+            false,
+            NOW,
+        )
+        .unwrap();
+    let root = app.auth.state().user_by_name("root").unwrap().unwrap();
+    let token = |user: i64, scope: &str, agent: Option<&str>| {
+        let (id, secret) = (auth::crypto::random_id(), auth::crypto::random_secret());
+        app.auth
+            .state()
+            .create_token(
+                &id,
+                user,
+                "t",
+                &auth::crypto::secret_hash(&secret),
+                scope,
+                None,
+                NOW,
+            )
+            .unwrap();
+        if let Some(s) = agent {
+            app.auth
+                .state()
+                .set_token_agent(&id, s, None, None)
+                .unwrap();
+        }
+        format!("tt_{id}_{secret}")
+    };
+    let body = serde_json::json!({ "type": "webhook", "url": "https://hooks.example.com/x" });
+    let put = |bearer: String, name: &str| {
+        Request::put(format!("/api/v1/alerts/destinations/{name}"))
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("x-telltale-reason", "tests")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    for (name, req) in [
+        ("admin-token", put(app.bearer.clone(), "admin-token")),
+        (
+            "admin-session",
+            app.signed_in(
+                "PUT",
+                "/api/v1/alerts/destinations/admin-session",
+                body.clone(),
+            ),
+        ),
+        ("operator", put(token(olga.id, "write", None), "operator")),
+        (
+            "admin-write-scope",
+            put(token(root.id, "write", None), "admin-write-scope"),
+        ),
+        (
+            "admin-agent",
+            put(
+                token(root.id, "write", Some("config:write:alerts cluster:admin")),
+                "admin-agent",
+            ),
+        ),
+        (
+            "operator-agent",
+            put(
+                token(olga.id, "write", Some("config:write:alerts")),
+                "operator-agent",
+            ),
+        ),
+    ] {
+        let (s, _, v) = send(&app, req).await;
+        assert_eq!(
+            s,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{name}: reached the backend: {v}"
+        );
+    }
+    let seen = fake.by_admin.lock().unwrap().clone();
+    let admin: Vec<(&str, bool)> = seen.iter().map(|(n, a)| (n.as_str(), *a)).collect();
+    assert_eq!(
+        admin,
+        [
+            ("admin-token", true),
+            ("admin-session", true),
+            ("operator", false),
+            ("admin-write-scope", false),
+            ("admin-agent", false),
+            ("operator-agent", false),
+        ]
     );
 }

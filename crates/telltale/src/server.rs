@@ -45,6 +45,20 @@ pub(crate) fn load_files(files: &[PathBuf]) -> Option<Config> {
     load_files_logging(files, true)
 }
 
+/// REQ: OBS-010 (ADR-179) — the config files as start-up keeps them (`file_config`), and whether
+/// they couldn't be read: they were read once already to make `cfg`, and a change since can
+/// make them unreadable. The running configuration then stands in for them until a reload reads
+/// them, and the alert check counts nothing in it as this node's own (logged once, here).
+pub(crate) fn files_at_start(files: &[PathBuf], cfg: &Config) -> (Config, bool) {
+    if let Some(f) = load_files(files) {
+        return (f, false);
+    }
+    warn!(
+        "the config files couldn't be read again at start-up: until a reload reads them, every alert destination with a credential file is held to the folder rule (ADR-179)"
+    );
+    (cfg.clone(), true)
+}
+
 /// Like [`load_files`], logging only errors: for re-checking the node's own files on every
 /// replicated change, where its warnings (a replica's file has no upstreams, by design)
 /// would repeat what start-up already said.
@@ -972,6 +986,7 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         cluster.clone(),
         crate::maintenance::now_ms(),
     ));
+    let (own_files, files_unread) = files_at_start(&files, &cfg);
     let sources = Arc::new(http::Sources {
         metrics: Arc::clone(&pipeline.metrics),
         cache: Arc::clone(&cache),
@@ -992,7 +1007,8 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         lists: ArcSwapOption::empty(),
         qlog: qlog_stats,
         config: ArcSwap::from_pointee(cfg.clone()),
-        file_config: ArcSwap::from_pointee(load_files(&files).unwrap_or_else(|| cfg.clone())),
+        file_config: ArcSwap::from_pointee(own_files),
+        files_unread: std::sync::atomic::AtomicBool::new(files_unread),
         config_files: files.clone(),
         update: Arc::new(std::sync::Mutex::new(crate::updates::initial(
             cfg.updates.check,
@@ -1442,8 +1458,13 @@ async fn reload(
         .telemetry
         .set_privacy(new.telemetry.qlog.privacy_level);
     config_marker(sources, current, &new);
-    sources.config.store(Arc::new(new.clone()));
+    // REQ: OBS-010 (ADR-179) — the files before the configuration made from them, so whoever
+    // reads the new configuration also reads its files (the alert check compares the two).
     sources.file_config.store(Arc::new(file));
+    sources
+        .files_unread
+        .store(false, std::sync::atomic::Ordering::Release);
+    sources.config.store(Arc::new(new.clone()));
     *current = new;
     // REQ: FLT-017 — a `[[kubernetes.map]]` rule or a group change reaches the workload table
     // before the next query, not on the watcher's next tick.

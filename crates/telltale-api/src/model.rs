@@ -936,6 +936,10 @@ pub struct ListInfo {
     pub mode: String,
     /// URL, file path, or `inline`.
     pub source: String,
+    /// REQ: FLT-004 (ADR-180) — the list reads a local file (`path`), whatever its `source`
+    /// looks like. Not sent: it decides who sees the list's `error`.
+    #[serde(skip)]
+    pub local: bool,
     /// `ok`, `failed`, or `pending` (not downloaded yet).
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
