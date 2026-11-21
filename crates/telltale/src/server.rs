@@ -856,6 +856,15 @@ async fn start_http(
 // The startup sequence and the main loop read best in one place.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
+    // REQ: OPS-007, OPS-009 — the signals are this process's from the start, before DNS answers
+    // (review round 3, F2): one that arrives during start-up (a stop, `systemctl reload`) is kept
+    // by the runtime and acted on once the node is up, a drained stop or a reload, rather than
+    // ending the process by the signal's default action (systemd counts a death by SIGHUP as
+    // clean, so `Restart=on-failure` wouldn't bring it back).
+    let mut term = signal(SignalKind::terminate())?;
+    let mut hup = signal(SignalKind::hangup())?;
+    let mut usr1 = signal(SignalKind::user_defined1())?;
+    let mut int = signal(SignalKind::interrupt())?;
     // spec/04 §7: tag outbound queries so a forwarding loop back to us is detectable.
     telltale_upstream::set_node_tag(rand::random());
     let workers = workers(&cfg);
@@ -970,7 +979,42 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
     let (stop_http, http_stopped) = tokio::sync::watch::channel(false);
     // REQ: CLU-009 — create or join the cluster on first start (the Helm chart's controller
     // and resolver pods). A resolver pod that can't join exits, so Kubernetes retries it.
-    if let Err(e) = crate::cluster::bootstrap(&cfg, Duration::from_secs(120)).await {
+    // REQ: OPS-007 (review round 4, N1) — a stop during the join (it waits up to two minutes)
+    // ends the join and the node at once: nothing is ready yet, so there is nothing to drain,
+    // and systemd's or Kubernetes' stop timeout would otherwise kill it first. A SIGHUP or
+    // SIGUSR1 meanwhile stays queued for the loop. `biased`: with no join to make, the
+    // bootstrap is ready at once and a stop already queued is drained by the loop as before.
+    let joined = tokio::select! {
+        biased;
+        r = crate::cluster::bootstrap(&cfg, Duration::from_secs(120)) => Some(r),
+        _ = term.recv() => {
+            info!(signal = "SIGTERM", "shutting down during the cluster join");
+            None
+        }
+        _ = int.recv() => {
+            info!(signal = "SIGINT", "shutting down during the cluster join");
+            None
+        }
+    };
+    let Some(joined) = joined else {
+        // What runs so far: the DNS listeners (stopped here), the health checks, the
+        // aggregator thread (joined when its guard drops) and the rollups writer (a task the
+        // runtime drops). Not yet opened or started: the state database, the API, the cluster
+        // channel, the lists; a join that was cut short saved no identity (it saves only once
+        // the primary has answered, in one step). The warm cache is kept, as on any stop.
+        for (_, s) in listeners.streams.drain(..) {
+            s.shutdown().await;
+        }
+        for (_, l) in listeners.udp.drain(..) {
+            l.shutdown();
+        }
+        health.abort();
+        if cfg.cache.persist {
+            save_cache(&cfg, &cache);
+        }
+        return Ok(());
+    };
+    if let Err(e) = joined {
         if cfg.cluster.ephemeral {
             return Err(io::Error::other(format!("cluster: {e}")));
         }
@@ -1112,9 +1156,10 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         Arc::clone(&sources),
         http_stopped.clone(),
     ));
-    // REQ: T8.2 — device names from the routers' DHCP (read at startup).
+    // REQ: T8.2 — device names from the routers' DHCP (ADR-181: the routers in effect, so
+    // ones added or changed in the UI are read without a restart).
     tokio::spawn(crate::routers::run(
-        cfg.router.clone(),
+        Arc::clone(&sources),
         Arc::clone(&pipeline.router_leases),
         http_stopped.clone(),
         cfg.cluster.ephemeral,
@@ -1197,14 +1242,11 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         );
     }
 
-    let mut term = signal(SignalKind::terminate())?;
-    let mut hup = signal(SignalKind::hangup())?;
-    let mut usr1 = signal(SignalKind::user_defined1())?;
     let mut current = cfg;
     loop {
         tokio::select! {
             _ = term.recv() => { info!(signal = "SIGTERM", "shutting down"); break; }
-            _ = tokio::signal::ctrl_c() => { info!(signal = "SIGINT", "shutting down"); break; }
+            _ = int.recv() => { info!(signal = "SIGINT", "shutting down"); break; }
             _ = hup.recv() => { reload(&files, &mut current, &mut listeners, &mut health, &pipeline, &sources, &mut lists, false).await; }
             // ADR-040 — a change made through the API: re-read files + state.db and apply.
             Some(done) = reload_rx.recv() => {

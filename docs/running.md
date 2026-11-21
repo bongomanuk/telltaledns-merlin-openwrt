@@ -81,7 +81,7 @@ A summary comes before anything is installed. The answers become `/etc/telltale/
 - **Automation:** `--interactive` asks even without a terminal and reads the answers from stdin; `--config-only FILE` writes the config and stops (no root needed), to see what the answers produce.
 - **The first admin "now"** is created on the service's first start from an Argon2id hash in a root-only systemd drop-in, which the installer removes once the service is up. The password itself isn't stored.
 
-Re-running it upgrades the binary in place. `sudo telltale self-update --restart` does the same check-and-swap from the binary itself (`--channel edge` for builds from main, `--check` to only look): it verifies the signature with the release key built into the binary and the binary's SHA-256, test-runs the download, swaps it in atomically, and keeps the previous binary as `telltale.old`. In containers it refuses (pull a new image instead).
+Re-running it upgrades the binary in place. `sudo telltale self-update --restart` does the same check-and-swap from the binary itself (`--channel edge` for builds from main, `--check` to only look): it verifies the signature with the release key built into the binary and the binary's SHA-256, test-runs the download, swaps it in atomically, and keeps the previous binary as `telltale.old`. In containers it refuses (pull a new image instead). `--to 0.8.0` installs that version only, from its own release page (older than the running one too: that's how to go back), and `--to 0.8.0-edge.393` an edge build while it is still the newest on the edge channel (edge binaries are replaced on every build, so an older one can't be downloaded); the release's signed `releases.json` must name the version and list the same checksum. To let the cluster upgrade the node for you, see [Upgrading from the cluster](#upgrading-from-the-cluster) (`install.sh --cluster-updates`).
 
 **Uninstalling:** `sudo sh install.sh --uninstall` stops and disables the service and removes its unit and the binary (`telltale.old` too).
 - **The system resolver:** if the install turned off systemd-resolved's stub listener, it asks to restore it (the default). `/etc/resolv.conf` is put back as the install found it (the install records the link it replaced, or keeps a copy of the file), and systemd-resolved is restarted, so the machine resolves names again without TelltaleDNS. Without a terminal or with `--yes` it restores without asking; `--keep-resolver` leaves it as the install set it. Installs from before this was recorded get the usual stub link (`/run/systemd/resolve/stub-resolv.conf`).
@@ -185,12 +185,12 @@ The same build identity, and how the node was installed (`native`, `container`, 
 - **What's inside:** each binary carries its dependency list (`cargo audit bin telltale` reads it), and every release has a CycloneDX SBOM per binary (`telltale-<arch>-linux.cdx.json`, listed in the signed `SHA256SUMS`).
 - **Rebuilding:** a release builds the same bytes from the same commit. The build date in `--version` is the commit's time. To compare, build the Dockerfile's `bin` stage with the build arguments `--version` shows (`TELLTALE_BUILD_VERSION`, `TELLTALE_BUILD_COMMIT`, `TELLTALE_BUILD_DATE`, `TELLTALE_BUILD_CHANNEL`) and `SOURCE_DATE_EPOCH` set to the commit's Unix time, then compare checksums. A nightly job builds every commit twice from scratch and fails if the two differ.
 
-TelltaleDNS never updates itself from the UI. The panel shows the step for your install:
+The UI never replaces a node's binary itself. The panel shows the step for your install:
 - **Native:** `sudo telltale self-update --restart` (`--channel edge` for edge).
 - **Container:** `docker compose pull && docker compose up -d`.
 - **Helm:** `helm upgrade`, or bump the chart version in your GitOps values.
 
-In a cluster, upgrade replicas first.
+In a cluster, upgrade replicas first. A cluster can do this for its native nodes: see [Upgrading from the cluster](#upgrading-from-the-cluster).
 
 ## Backups and moving to a new machine
 ```sh
@@ -211,7 +211,8 @@ Admins can also download one in the web UI (**Settings → System → Download a
 **Left out:**
 - sign-in sessions (everyone signs in again);
 - downloaded lists, compiled snapshots, and the cache, which are rebuilt;
-- the cluster identity and its CA key. A restored cluster member starts on its own: run `telltale cluster init` or join it again.
+- the cluster identity and its CA key. A restored cluster member starts on its own: run `telltale cluster init` or join it again;
+- router keys pasted in the UI (`secrets/` in the data folder): after a restore, each such router says **key missing: enter it again** until an administrator pastes it again. A copy of the whole data folder, a volume snapshot, or a Kubernetes PVC snapshot does hold those keys in plain text: keep `secrets/` at mode 0700 and its files at 0600, keep such copies private, and encrypt the volume or the snapshot storage.
 
 The file is zstd-compressed tar with a manifest of BLAKE3 checksums, written owner-only (`0600`); keep it private.
 
@@ -1312,15 +1313,28 @@ window = [{ days = ["weekdays"], start = "08:00", end = "15:00" }]
 - **In the UI:** **Groups → Schedules** adds, changes, or removes schedules (windows one per line, like `weekdays 21:00-07:00`), and a group's editor picks the schedules it follows. Through the API: `PUT`/`DELETE /api/v1/schedules/{name}` with the same fields as `[[schedule]]` (agents need `config:write:groups`, and AI agents can plan one with the MCP tool `plan_set_schedule`).
 
 ### Names from your router (UniFi, OPNsense)
-TelltaleDNS doesn't hand out addresses: your router's DHCP does that, and TelltaleDNS can read its client list, so devices show up by name:
+TelltaleDNS doesn't hand out addresses: your router's DHCP does that, and TelltaleDNS can read its client list, so devices show up by name.
+
+**In the UI (admins):** **Clients → Discovered → Routers → Add router**. Pick UniFi or OPNsense, give its `https://` address, and paste the API key (for OPNsense, the key and the secret; for UniFi without a key, Advanced shows a username and password). TelltaleDNS saves each pasted value to a new file only it can read, `secrets/router-<name>.<key>.<random>` in the data folder (mode 0600, folder 0700), and never shows it again; the router's row says **key saved**. Editing the router later keeps the key unless you type a new one, except that changing the address, the type, the site, or the TLS settings needs the key typed again, so a saved key isn't sent to a router address or TLS setting other than the one it was entered with (where a host name resolves is another matter: see the next points). A router added or changed is read within 5 seconds after the reads in progress end, and a removed router's names go after the next round of reads, without a restart.
+- **Only administrators** add, change, or remove routers: their own sign-in or an admin API token. Agent tokens can't, whatever scopes they hold. Others see the routers without their key files or user names, and whether each key is saved.
+- **Paste the key; don't name a file.** The UI and the API take the key itself. A key that lives in a file elsewhere (a Docker secret in `/run/secrets/`, a Kubernetes Secret through the chart's `secretMounts`) is named in the configuration file instead.
+- **`https://` only for a pasted key** (or a loopback address such as `http://127.0.0.1`): over `http://` the key could be read on the way. A self-signed console works over `https://` with `tls_ca` and `tls_server_name`, below.
+- **With "Don't check the certificate", give the address as a number** (`https://192.168.1.1`, not a host name): with the certificate unchecked, whoever can change where the name resolves (a local name or a forward on this resolver, say) could choose who receives the key. A host name works with the certificate checked (`tls_ca` and `tls_server_name`).
+- **The request key.** Changes sent with an `Idempotency-Key` keep a hash of a pasted key, keyed with `secrets/.request-key` in the data folder (made on the first start). On a filesystem without hard links (some SMB or FUSE volumes) that file can't be made: the node logs a warning at every start and uses a key for that run only, so a retry after a restart gets 409 instead of the first answer.
+- **Open the UI over `https://` to paste a key.** On a plain-HTTP page reached from another machine, what you paste crosses the network unencrypted; the Routers editor says so ("You are on a plain-HTTP page..."). A page on the machine itself (`http://127.0.0.1`, `http://localhost`) doesn't leave it.
+- **A pasted key is on the node that saved it,** the primary. It isn't copied to other nodes, and it isn't in backups. After a restore on another machine, or a failover to another primary, the router says **key missing: enter it again**, and isn't read there until an administrator pastes the key again on the node that takes configuration changes. A key kept in `/run/secrets/` or `/etc/telltale-secrets/` on every node (below) needs no re-entry. Each node removes the key files it saved once no router names them (a key replaced or a router removed): only files in the data folder's `secrets/` itself that are named like the ones it makes (`router-<name>.<key>.<random>`) and listed in its `secrets/.written`, plus the temporary files a stopped write left there (`.written.<random>.tmp`, `.request-key.<random>.tmp`) once they are ten minutes old. Anything else there (an alert's token file, `.request-key`) is never removed. While a router entry in `state.db` can't be read (a hand edit), no key file is removed, and each try logs "router keys: the sweep of key files no router names didn't run".
+- Through the API: `PUT`/`DELETE /api/v1/routers/{name}` with the fields below, plus `api_key`, `api_secret`, or `password` instead of their files. `GET /api/v1/config/entries?kind=router` lists them, with each key's status in `credentials` as the node that answered sees it: `saved`; `missing` (enter it again); `file_missing` (a key file a platform mounts or a config file names isn't there: put the file there); or `not_used` (a file there that that node doesn't send for that router). A router without its key is refused by the name to paste (`api_key`, `api_secret`, `password`).
+- In a cluster, upgrade every node before adding routers in the UI: an older primary refuses a router change a replica sends it.
+
+**In the configuration file:**
 ```toml
 [[router]]
 name = "udm"
 type = "unifi"                         # UniFi OS consoles (UDM, UCG, Cloud Key) and the Network application
 url = "https://192.168.1.1"            # the classic Network application: https://controller:8443
-api_key_file = "/etc/telltale/unifi-key"   # UniFi Network 9+ (Settings → Control Plane → Integrations)
+api_key_file = "/etc/telltale-secrets/udm/api_key"   # UniFi Network 9+ (Settings → Control Plane → Integrations)
 # username = "telltale"                # or a local read-only user...
-# password_file = "/etc/telltale/unifi-pass"
+# password_file = "/etc/telltale-secrets/udm/password"
 # site = "default"
 # offline_days = 30                    # also name clients that are offline now, if UniFi saw them this recently (0: only connected ones)
 tls_ca = "/etc/telltale/udm.pem"       # the console's own certificate (self-signed)
@@ -1330,15 +1344,18 @@ tls_server_name = "unifi.local"        # the name in it (UniFi consoles name the
 name = "firewall"
 type = "opnsense"
 url = "https://opnsense.lan"
-api_key_file = "/etc/telltale/opn-key"     # System → Access → Users → API keys
-api_secret_file = "/etc/telltale/opn-secret"
+api_key_file = "/etc/telltale-secrets/firewall/api_key"     # System → Access → Users → API keys
+api_secret_file = "/etc/telltale-secrets/firewall/api_secret"
 ```
 - UniFi: the connected clients, plus the offline clients UniFi still knows (its client history and configured clients), named by the alias you gave them in UniFi, else their host name. An offline client is one UniFi saw within `offline_days` (30 by default; 0 for only the connected clients; at most 365), and at most the 1,024 most recently seen are kept. It is listed only when it has a name, at its last or fixed address, and never over a connected client's address. It names the device in the query log, but it doesn't count as seen for device identification. A console without the client history (Network before 7) gives the configured clients. OPNsense: the DHCP leases (Dnsmasq, Kea, or ISC, whichever is running).
 - A self-signed console: save its certificate (`openssl s_client -connect 192.168.1.1:443 </dev/null | openssl x509 > udm.pem`) as `tls_ca`. Its certificate names `unifi.local`, not the address you reach it at, so set `tls_server_name` to the name in it (`openssl x509 -in udm.pem -noout -ext subjectAltName` shows it): the console is then verified, and only that certificate is trusted. `tls_insecure_skip_verify = true` also works, but then anything on your network could pose as the console and receive the API key.
 - Read every `interval_secs` (300); a router that doesn't answer is asked again after 15 seconds and keeps its last list meanwhile.
 - Names you give devices in TelltaleDNS win; then the routers'. `GET /api/v1/dhcp/leases` lists them (`source = router`).
-- Credentials stay in files, out of the configuration. Changes to `[[router]]` need a restart.
+- Credentials stay in files, out of the configuration (a key pasted in the UI is saved to a file too). Keep them in `/etc/telltale-secrets/<router>/` (mode 0600, owned by the service user; the folder 0700), as above, or in `/run/secrets/` for Docker: in a cluster those are the folders a replica reads a key from (below). Routers in the file apply at start and on reload (`SIGHUP`), within 5 seconds after the reads in progress end, as do ones added or changed in the UI, and a router made in the UI with the name of one in the file replaces it until it's removed (**Revert to the file**).
 - In a cluster, only one node needs to read the router (or hear mDNS). Every node asks the others for the device names they know, once a minute, so a resolver pod without the router's key names devices the same way the primary does.
+- **Which key files a node sends.** A node reads a router with a key file only if, for each of its key files: the file is in `/run/secrets/` (Docker, Compose) or `/etc/telltale-secrets/` (the Helm chart's `secretMounts`), on any node, links followed; or this node's own configuration files define that router with that file at the same address; or this node saved that key itself, through the UI, for that router and address. A key in those folders is read whatever the node's own file says (a replica's older copy of the primary's `[[router]]`, which it ignores anyway, doesn't stop it). A router made or changed in the UI may name only a key pasted there (in the data folder's `secrets/`) or the very key file and address the config file gives that router. So an override made in the UI that kept a key from the config file (in those folders or anywhere else) is used only while the config file gives that router the same key file and address: once the file moves the router to another address or removes it, the node that applies the UI's changes (a standalone node, or the primary) leaves the override out, logs a warning saying why, and the config file's router (if any) is the one in effect; the configuration it shares never carries the override, so no replica sends the key to the old address. (On a primary promoted after a failover, the configuration it was promoted with stands in for the config file.) Edit the router in the UI to save it for the new address, or remove the override (`DELETE /api/v1/routers/{name}`). An entry from the UI that names some other file in the data folder's `secrets/` (restored from a backup or edited in `state.db`, say) isn't left out: it stays in effect in place of the config file's router of that name, but no node reads it unless that node saved that key for that router and address itself; it is held back as below. A router held back is logged once as a warning, with why and what to do (information on a Helm resolver pod, which has no keys by design). On the node that takes configuration changes, its row says **key not used: enter it again** (or, when the file isn't there, **key missing** or **key file missing**). **A replica's Routers page shows the primary's status** (its own only while the primary can't be reached), not what the replica does: that is in the replica's log.
+- **On a replica, or a primary promoted after a failover,** a router that only the primary's configuration file defines is read when its key files are in one of those two folders on that node. Keys kept anywhere else (`/etc/telltale/opn-secret`, as earlier versions of this guide showed) aren't read there: in a cluster of native nodes, put the files in `/etc/telltale-secrets/` (for example `/etc/telltale-secrets/firewall/api_secret`, mode 0600, owned by the service user) on each node that should read the router, and name those paths. If a key under `/etc/telltale-secrets/` is a link, it must lead to a file inside that folder (`readlink -f` shows where it goes). Defining the router in a replica's own configuration file also lets that replica send the key, but the replica then logs, as for any shared setting in its file, that the section is ignored (the shared routers come from the primary, CLU-006): the folder is the cleaner way. With the Helm chart every pod has the same configuration and the controller mounts `secretMounts`, so nothing changes there.
+- Who decides that a node sends a key from those folders, and where to: whoever writes a configuration file or Git repository a node takes routers from. The UI and the API can't name a new file there for a router; an administrator's change can only keep the file a router already has, at the same address.
 
 ### Names devices announce (mDNS)
 Phones, speakers, printers, and NAS boxes announce themselves on the local network (`Kitchen-HomePod.local`). TelltaleDNS can listen and use those names for devices you haven't named:
@@ -1365,7 +1382,7 @@ curl -X PUT 'https://dns.example.com/api/v1/clients/Living%20room%20TV?dryRun=tr
   -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
   -d '{"match": ["192.168.1.42"], "groups": ["default"]}'   # what would change; nothing is saved
 ```
-Without `dryRun` the change is saved, applied, and audited. `GET /api/v1/clients` returns the config version as `ETag`; send it back as `If-Match` to refuse the write if someone changed the config meanwhile (412). An `Idempotency-Key` header makes retries safe: the same key replays the first answer for 24 hours. To rename, send the new `name` in the body; `DELETE /api/v1/clients/{name}` forgets a device.
+Without `dryRun` the change is saved, applied, and audited. `GET /api/v1/clients` returns the config version as `ETag`; send it back as `If-Match` to refuse the write if someone changed the config meanwhile (412). An `Idempotency-Key` header makes retries safe: the same key replays the first answer for 24 hours, and a retry sent while the first request is still running gets 409 with `Retry-After` (retry after it for the first answer) instead of making the change twice. At most 32 changes run at once; one more gets 503 with `Retry-After`. To rename, send the new `name` in the body; `DELETE /api/v1/clients/{name}` forgets a device.
 
 ### What is this device?
 TelltaleDNS guesses what each address is, so a new one isn't just a number. It uses what it already sees:
@@ -1992,6 +2009,9 @@ DNS keeps answering throughout if your clients have two DNS servers (each node i
 - A replica older than its primary keeps working, unless the primary starts using settings
   the older version doesn't know. Then the replica keeps serving its last version, and its
   sync status says to upgrade it.
+- `telltale ctl upgrade` does the native nodes in this order for you, and the Helm chart's
+  `upgradeHook` runs it before the pods roll: see
+  [Upgrading from the cluster](#upgrading-from-the-cluster).
 
 **Certificates renew themselves.** Each node's cluster certificate lasts 90 days, and a node
 renews it when fewer than 30 days remain (checked every 6 hours). It keeps its key and node
@@ -2228,6 +2248,212 @@ telltale cluster status
 - **Table** shows the same numbers with their 95 % intervals, such as `0.04 % (0.02–0.06 %)`: a wide interval means few answers. **Open in dashboard** opens the dashboard for that node alone. On a phone, pick one measure at a time.
 - The tab says **1 odd** from any tab of the Cluster page. It's a lens, not an alarm: it doesn't change the health icon or alert. Nodes that don't answer are listed and the rest compared; one node alone has nothing to compare.
 - `GET /api/v1/cluster/compare?from=-24h` and the MCP tool `compare_nodes` return the numbers and the findings. Grafana's **Nodes** row has the SERVFAIL and slow shares by node and a table that highlights a node with little traffic.
+
+## Upgrading from the cluster
+A cluster whose nodes run outside Kubernetes (installed with `install.sh`) can upgrade them for
+you, one at a time, in the order a cluster needs: **replicas first, the primary last**, each back
+on the new version, ready, and in sync before the next one starts. With the Helm chart's
+`upgradeHook`, bumping the chart (or merging the Renovate pull request in a GitOps repository)
+upgrades the native nodes first and the pods after them. It is off by default on both sides;
+treat it as experimental until you have watched it upgrade (and roll back) a node of yours.
+
+**How it works.** The node's service runs as the `telltale` user in a sandbox and can't replace
+its own binary, so it doesn't: asked for a version, it writes
+`/var/lib/telltale/update/request.json` (in the config's `[node] data_dir`) and nothing else. A
+second, root unit installed next to it, `telltale-update.path`, sees the file and starts
+`telltale-update.service`, which runs `telltale self-update --request …`. Of the data directory
+it may write only that `update/` folder:
+1. it reads the request (a small regular file written by `telltale`, opened without following a
+   link or waiting on it) and removes it;
+2. it refuses anything but a release or edge build **newer** than the one installed and on the
+   node's **channel** (below), a request more than an hour old, and a version whose new build
+   was installed on this node and didn't come up in the last 24 hours (a run that failed in the
+   downloads doesn't count);
+3. it checks that the binary sits where only root can write (owned by root, and neither it nor
+   any folder above it writable by a group or others), and that the health check's address in
+   its unit is one of this host's;
+4. it downloads the version, checks the release signature and the checksum (the release's
+   signed `releases.json` must be of the version's channel, name that version and list the same
+   checksum), test-runs it, and swaps it in, keeping the old binary as `telltale.old`. All the
+   downloads together get eight minutes; past that nothing is installed;
+5. it restarts the node (`systemctl restart`, waited for a minute; if that command is slow or
+   fails, the restart goes on in systemd and the health check decides) and waits up to **two
+   minutes** for it to answer ready twice in a row (`/readyz?startup=1`) at the address
+   `install.sh` wrote into its unit (below). If it doesn't, it puts `telltale.old` back and
+   restarts once more: `rolled_back`;
+6. it records the outcome in `/var/lib/telltale-update/result.json`: `installing`, `updated` (with
+   how its health was checked), `up_to_date`, `rolled_back` (with why), `unavailable` (an edge
+   build no longer served), `failed`, or `refused`, with the error. `journalctl -u
+   telltale-update` has its lines. Who asked (`by`) is the node's word for it: the update service
+   can't check it, and says so.
+
+So what anyone who can write that file can do is have the node restarted on a newer signed build
+of its channel. The whole run (at most about 15 minutes) fits in the unit's 16-minute limit with room to spare,
+so systemd never stops it between the install and the check.
+
+**The channel.** `install.sh` writes the node's update channel into its unit and the update
+service's: `edge` when you install with `--edge`, otherwise the channel of the version it
+installed (it prints which). A node on the **stable** channel takes only releases; a node on the
+**edge** channel takes edge builds and newer releases, and stays on edge after a release (the next
+edge build is still taken). The cluster never moves a node to the edge channel or backwards: to go
+back, run `sudo telltale self-update --to <version> --restart` on the node; to move a node to
+edge builds, run `sudo telltale self-update --channel edge --restart`, then
+`sudo sh install.sh --edge --cluster-updates`. Without `--edge`, `install.sh` installs the newest
+**release** and sets the stable channel, so on an edge node always give it `--edge`.
+
+**The health check's address.** `install.sh` writes it into the update service's unit
+(`TELLTALE_UPDATE_HEALTH_URL`) from the config's `[api]`: the `listen` address and port, with a
+wildcard (`0.0.0.0`, `[::]`) asked at loopback. The request never names one. Two things make every
+update roll back, so `install.sh --cluster-updates` checks the address answers before it turns
+the feature on: an `[access] allowed_networks` that leaves out this host's own address (loopback
+for a wildcard listen), and an API that isn't up. With the API off (`[api] enabled = false`) there
+is nothing to check, so updates from the cluster aren't available: `install.sh --cluster-updates`
+refuses, and the update service installs nothing (`refused: no health check configured`). A node that takes longer than two minutes to come up (very large lists on an SD card) is
+rolled back; upgrade such a node by hand.
+
+**`rolled_back` is an incident.** It means the new build didn't answer ready in time, so the
+previous one was put back. That can be the build, but it can also be the node's side: the node's
+own process answers the check, and any local user can occupy the port first. `ctl upgrade` stops
+at it; look at the node (`journalctl -u telltale -u telltale-update`) before you ask again. The
+node refuses the same version for 24 hours from that run (`update_failed_recently`; `GET` shows
+it as `held`, with until when), and says which run, when, and what failed; `sudo telltale
+self-update --to <version> --restart` by hand isn't held back. A run that failed before anything
+was installed (a network error, the eight-minute download limit, a signature or checksum, an edge
+build moved on) holds nothing back: the next request tries again.
+
+**Turning it on.** The update service is installed and **off**. On each native node:
+```sh
+sudo sh install.sh --cluster-updates          # on an edge node: sudo sh install.sh --edge --cluster-updates
+```
+It writes the units for the node's data directory, channel and API address, and turns them on
+once the node answers at that address (it prints the address it tried). It refuses, and on an
+existing install changes nothing, when the binary's folder isn't root's alone (a `TELLTALE_PREFIX`
+others can write; older Debian and Raspberry Pi OS images have `/usr/local` as `root:staff 2775`:
+check `stat -c '%U:%G %a' /usr/local /usr/local/bin`, and fix it with `sudo chmod g-w /usr/local
+/usr/local/bin`), the data directory is under `/home` or `/root` or in a folder that isn't
+root's, or the API is off. On a node that runs an edge build it also refuses unless you say which
+channel: `--edge` to stay on edge builds, or `--stable` to move to releases (without either, a
+re-run would install the newest release, an older version). A node installed before this feature needs one upgrade by hand first, on its own channel
+(`sudo telltale self-update --restart`, with `--channel edge` on an edge node), then
+`install.sh` as above. (`sudo systemctl enable --now telltale-update.path` also turns it on, but
+skips the check.)
+
+**Upgrading.** From anywhere with an admin's token (or an agent token with `analytics:read` and
+`cluster:upgrade`):
+```sh
+telltale ctl --url https://dns.example.com upgrade --to 0.8.0 --dry-run   # the order, nothing asked
+telltale ctl --url https://dns.example.com upgrade --to 0.8.0
+```
+- It reads the Cluster page's view and leaves alone Kubernetes pods (the chart's), witnesses
+  (they only vote: upgrade them by hand), containers (pull the new image), and nodes already on the
+  version or newer.
+- Before it asks any node it reads each one's update state. A node that is up but can't take the
+  request (its update service off, a request waiting or an update running, on the stable channel
+  while you ask for an edge build, or refusing the version for a day after a rollback) stops it
+  there, with nothing asked and every such node named, with why and how to fix it. A node that is
+  down stops it too; `--skip-down` leaves out nodes that are down, and only those.
+- Then it asks each node in turn and waits (`--timeout`, 15 minutes each by default: at least the update service's longest run) until the
+  node's update service has recorded `updated` for that request **and** the node is back on the
+  version, ready and in sync. A node that fails, is rolled back, or refuses stops it: the nodes
+  after it keep their version, and the error is the node's own. One node: `--node dns-02`.
+- Each request says why, for the audit log (`X-Telltale-Reason`; `--reason`, default
+  `telltale ctl upgrade --to <version>`): an agent token must.
+- The same call for one node is `POST /api/v1/nodes/{id}/update {"to": "0.8.0"}` (admin;
+  `?dryRun=true` checks without asking), and `GET` on the same path shows the node's version,
+  channel, whether its update service is on, a request it hasn't picked up yet, and the latest
+  outcome. One request at a time per node: another gets `update_in_progress` until the first is
+  done. The problems a node answers with: `update_unsupported` (a container, a pod, or a local
+  build), `update_not_enabled`, `update_invalid`, `update_downgrade`, `update_channel`,
+  `update_in_progress`, `update_failed_recently`.
+- **No maintenance window.** The node restarts without one, so a `node_down` alert can fire for
+  the few seconds it takes; put the node in maintenance first if that matters to you.
+
+**Edge builds.** An edge build can be installed only while it is the newest on the edge channel:
+edge binaries are replaced on every build. If a newer one was published since, the node records
+`unavailable` ("the edge channel now serves …"): ask for that one, or wait for the release.
+`--skip-unavailable` leaves such a node on its version, with a loud line, and goes on (the order is
+then lost for that node in that run).
+
+**With the Helm chart.** When the controller runs in Kubernetes and the other nodes don't, turn
+on the chart's hook: a Job that runs before the pods roll (`helm.sh/hook: pre-upgrade`, a
+PreSync hook in Argo CD), from the **new** image, with `telltale ctl upgrade --to-self`:
+```yaml
+image:
+  tag: sha-1a2b3c4             # pin the build (the default tag, edge, can run an older cached image)
+upgradeHook:
+  enabled: true
+  tokenSecret:
+    name: telltale-upgrade   # key `token`: an agent token with analytics:read and cluster:upgrade
+  whenUnavailable: fail      # or skip (see below)
+```
+- It upgrades every native node to the image's version and waits for each; only then does Helm
+  (or Argo CD) roll the pods. A node that fails fails the hook, and the pods keep their version.
+  The Job stays after a run (until the next one replaces it), so its log can be read: `kubectl
+  logs job/<release>-telltale-upgrade`.
+- **The image.** `--to-self` upgrades the nodes to the version of the image the hook runs. Pin
+  `image.tag` to a build (`sha-…`, or a version): with the chart's default tag (`edge`) and
+  `IfNotPresent`, a node can run an older cached `:edge` image.
+- **The token.** Make it in Settings → API tokens (for an AI agent) as an admin, with the scopes
+  `analytics:read` and `cluster:upgrade`. `cluster:upgrade` reaches only the update route;
+  `analytics:read` reads every analytics route too. The hook reads the cluster on every sync, so a
+  token that expires, is revoked, or stops working (`[agents] enabled = false`) fails **every**
+  sync from then on, a values-only `helm upgrade` too: make it without an expiry for this narrow
+  scope, or set yourself a reminder to rotate it (a new token in the Secret, then revoke the old
+  one). A missing Secret fails the hook at once ("set TELLTALE_TOKEN"). An OAuth sign-in for MCP
+  never gets `cluster:upgrade`.
+- **https.** The hook asks the release's API Service over plain HTTP inside the cluster; when the
+  API serves TLS (`[api] tls`), set `upgradeHook.url` to its `https://` address, and with a
+  self-signed certificate put the certificate in a Secret and name it in `upgradeHook.caSecret`
+  (`name`, and `key`, default `ca.crt`): without it the hook can't trust the API and fails.
+- **Timeouts.** Helm waits for a hook only `--timeout` (5 minutes by default), while the hook allows
+  15 minutes per node and 45 in all (`activeDeadlineSeconds: 2700`: two native nodes, the pre-flight and the pod's start; raise it for more): run `helm upgrade --timeout 45m` (or more), and give Argo CD's sync at least as long.
+- A NetworkPolicy that limits the API (`networkPolicy.apiFrom`) gets a rule that lets the hook in
+  (only while the hook is on).
+- **A native primary whose replicas are the chart's pods:** the hook upgrades native nodes first,
+  so it would upgrade that primary before its pod replicas. In that shape, run `telltale ctl
+  upgrade` by hand instead of the hook.
+
+**With Argo CD (GitOps).** Argo CD runs the hook as a PreSync hook on every sync:
+- **Pinned to a release:** the first sync after the bump upgrades each native node behind it,
+  then rolls the pods. Every later sync finds the nodes on it and asks nothing (no request, no
+  download). A node on the edge channel stays on it and takes the next edge pin.
+- **Pinned to an edge build:** the same while it is the newest edge build. Once main has
+  published a newer one, a native node still behind the pin can't fetch it: with
+  `whenUnavailable: fail` (the default) the sync stays blocked until you pin the newest edge
+  build or a release; with `skip` that node stays on its version (the hook says so loudly) and the
+  pods roll. Nodes already on the pin or newer are never asked, so a pin that has gone stale
+  blocks only while a node is behind it. Pin a release, or set `skip`, if you don't want a sync
+  to wait on that. A node on the stable channel stops the sync at an edge pin (said in full).
+- **The first install:** there is no cluster yet to make the token in. Keep the hook off until
+  the token exists, or create the Secret with a placeholder value: PreSync runs before anything of
+  the app exists, so nothing answers (the API Service's name doesn't resolve, or nothing listens)
+  and the hook succeeds and says so. Only that is skipped: a timeout, a TLS failure, packets a
+  policy drops, or a refused token fail the hook. The real Secret must exist before the first
+  sync that needs it (a PreSync hook runs before the app's own resources): create it outside the
+  app, or with an ExternalSecret or SealedSecret that is applied before it (an earlier sync wave
+  of another app, or a PreSync resource with a lower `argocd.argoproj.io/hook-weight`).
+- **The controller up but not ready:** on some CNIs (Cilium) a Service with no ready endpoints
+  drops the connection instead of refusing it, so the hook fails (it doesn't skip) and the sync
+  waits until the controller answers. That is intended. With the hook on and the controller
+  dead, turn the hook off in the chart to roll the fix.
+- **A node down:** the hook fails before asking any node (the pods keep their version) unless
+  `skipDown: true`. For the first 90 seconds after the node that answers starts, a native node
+  that hasn't connected since isn't listed at all, so a hook run then can pass without it.
+- **A node rolled back:** every sync stops at it for 24 hours from that run (the node refuses that
+  version, and says until when) unless the pin moves on. A run that failed in the downloads (a
+  GitHub or DNS outage) holds nothing: the next sync tries again. Look at the node; upgrade it by hand when it is fixed.
+
+**A known limit.** If `systemctl` itself fails without restarting anything (its binary missing,
+or a refusal on the system bus), the old process is still running and passes the health check,
+so the run is recorded `updated` while the old build runs; the new binary is installed, so the
+next request for that version answers `up_to_date`. `journalctl -u telltale-update` shows the
+restart command's error, and `telltale --version` against `GET …/update`'s version tells. Run
+`sudo systemctl restart telltale` on the node to start the new build. (Comparing the node's
+process before and after the restart is the planned follow-up.)
+
+**What it doesn't do.** It doesn't upgrade containers or Compose installs (pull the new image),
+it doesn't choose a version for you (that's your chart bump, or `--to`), it never downgrades or
+moves a node to edge builds, and it doesn't put the node in maintenance.
 
 ## Taking a node down for maintenance
 Swapping a Pi's SD card, moving a box, or upgrading a node by hand: put the node in maintenance
@@ -3173,6 +3399,7 @@ Give an AI assistant (or any automation) an **agent token** instead of your own 
 | `ops:pause`, `ops:cache`, `ops:anomalies`, `ops:maintenance`, `ops:annotate` | pause blocking; flush the cache; acknowledge device anomalies; start and end [node maintenance](#taking-a-node-down-for-maintenance) (at most 2 hours); leave [notes](#change-markers) on the time charts |
 | `ops:drill` | start and end [failover drills](#failover-drills) (at most 5 minutes; never a default scope) |
 | `cluster:admin` | promote a node to primary |
+| `cluster:upgrade` | ask native nodes to [install a newer version](#upgrading-from-the-cluster) (admin level, never a default scope, never granted to an OAuth sign-in for MCP: make an agent token for it, as the chart's upgrade hook needs) |
 
 The default is `analytics:read` and `config:read`: read-only, without the query log. A token never gets more than its owner's role allows.
 
@@ -3434,14 +3661,14 @@ curl -s -H "Authorization: Bearer $TOKEN" http://dns.lan:8053/api/v1/audit/verif
 Keep the `head` hash somewhere else from time to time: a later `verify` with a different head and fewer entries means entries were removed from the end.
 
 ## Reload without restarting
-Edit the config file, then send `SIGHUP` (`kill -HUP <pid>`, or `docker kill -s HUP telltale`):
+Edit the config file, then send `SIGHUP` (`kill -HUP <pid>`, or `docker kill -s HUP telltale`). A `SIGHUP` sent while the node is still starting is kept, and the reload runs once it is up:
 - The whole config is validated first. If anything is wrong, the errors are logged and the **previous configuration keeps serving**.
 - Applied immediately, with no dropped queries: upstreams, groups, routes, local records and hosts files, `[access]`, `[ratelimit]`, `[special]`, and `[[listen]]` (new listeners are bound before removed ones are closed).
 - Applied at the next restart (a warning names them): `[cache]`, `[telemetry]`, `[node]`. The cache is kept across reloads, so warm answers aren't lost.
 - Upstream health starts fresh after a reload and is re-learned within a few queries.
 
 ## Stop
-`SIGTERM` or `SIGINT` (Ctrl-C) shuts down gracefully:
+`SIGTERM` or `SIGINT` (Ctrl-C) shuts down gracefully, also when it arrives while the node is still starting (it is kept, and the shutdown below runs once the node is up). A stop during a cluster join ends the join and stops the node at once (exit 0): it isn't ready yet, so there is nothing to drain. Otherwise:
 1. `/readyz` turns 503, so load balancers stop sending new queries.
 2. TCP listeners stop accepting and finish the queries already received.
 3. Upstream lookups still in flight get up to 3 seconds to complete and reply.

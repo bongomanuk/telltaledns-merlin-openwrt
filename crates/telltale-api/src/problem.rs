@@ -86,6 +86,31 @@ pub enum Code {
     NodeIsPrimary,
     /// REQ: CLU-001 (ADR-155) — the node to remove is up: pass `force` to cut it off anyway.
     NodeIsUp,
+    /// REQ: AGT-003 (ADR-181) — the first request with this Idempotency-Key is still running:
+    /// retry after `Retry-After` for its answer.
+    ChangeInProgress,
+    /// REQ: OPS-014 — this node can't install a version for the cluster: it runs in a
+    /// container or Kubernetes (its image is upgraded by its deployment), or it is a local build.
+    UpdateUnsupported,
+    /// REQ: OPS-014 — the node's root update service (`telltale-update.path`) isn't enabled, so
+    /// nothing would pick a request up.
+    UpdateNotEnabled,
+    /// REQ: OPS-014 — the version asked for is older than the one the node runs (downgrades
+    /// are done by hand, as root).
+    UpdateDowngrade,
+    /// REQ: OPS-014 — not a release (`0.8.0`) or edge build (`0.8.0-edge.393`) version.
+    UpdateInvalid,
+    /// REQ: OPS-014 (ADR-182) — a request never changes a node's channel: a node on the stable
+    /// channel takes only a release (an edge build is installed by hand, with `self-update`).
+    UpdateChannel,
+    /// REQ: OPS-014 (ADR-182) — the node already has a request waiting for its update service,
+    /// or an update running (one at a time per node): retry after `Retry-After`.
+    UpdateInProgress,
+    /// REQ: OPS-014 (ADR-182) — this version's new build was installed on the node less than 24
+    /// hours ago and didn't come up (`rolled_back`, or `failed` after the swap; a failure in the
+    /// downloads doesn't count): it isn't asked for again for a day (install it by hand
+    /// with `self-update --to`, or wait).
+    UpdateFailedRecently,
 }
 
 impl Code {
@@ -126,6 +151,14 @@ impl Code {
             Self::DrillTargets => "https://telltaledns.dev/problems/drill_targets",
             Self::NodeIsPrimary => "https://telltaledns.dev/problems/node_is_primary",
             Self::NodeIsUp => "https://telltaledns.dev/problems/node_is_up",
+            Self::ChangeInProgress => "https://telltaledns.dev/problems/change_in_progress",
+            Self::UpdateUnsupported => "https://telltaledns.dev/problems/update_unsupported",
+            Self::UpdateNotEnabled => "https://telltaledns.dev/problems/update_not_enabled",
+            Self::UpdateDowngrade => "https://telltaledns.dev/problems/update_downgrade",
+            Self::UpdateInvalid => "https://telltaledns.dev/problems/update_invalid",
+            Self::UpdateChannel => "https://telltaledns.dev/problems/update_channel",
+            Self::UpdateInProgress => "https://telltaledns.dev/problems/update_in_progress",
+            Self::UpdateFailedRecently => "https://telltaledns.dev/problems/update_failed_recently",
         }
     }
 
@@ -166,6 +199,14 @@ impl Code {
             Self::DrillTargets => "Invalid drill request",
             Self::NodeIsPrimary => "The node is the primary",
             Self::NodeIsUp => "The node is up",
+            Self::ChangeInProgress => "The change is still running",
+            Self::UpdateUnsupported => "The node doesn't update itself",
+            Self::UpdateNotEnabled => "Updates from the cluster are off on the node",
+            Self::UpdateDowngrade => "Older than the node's version",
+            Self::UpdateInvalid => "Invalid version",
+            Self::UpdateChannel => "Not on the node's channel",
+            Self::UpdateInProgress => "An update is already under way on the node",
+            Self::UpdateFailedRecently => "This version didn't come up on the node in the last day",
         }
     }
 
@@ -187,7 +228,14 @@ impl Code {
             | Self::DrillRefused
             | Self::DrillActive
             | Self::NodeIsPrimary
-            | Self::NodeIsUp => StatusCode::CONFLICT,
+            | Self::NodeIsUp
+            | Self::ChangeInProgress
+            | Self::UpdateUnsupported
+            | Self::UpdateNotEnabled
+            | Self::UpdateDowngrade
+            | Self::UpdateChannel
+            | Self::UpdateInProgress
+            | Self::UpdateFailedRecently => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::VersionConflict => StatusCode::PRECONDITION_FAILED,
             Self::InvalidConfig
@@ -198,7 +246,8 @@ impl Code {
             | Self::AnnotationTime
             | Self::HeatmapWindow
             | Self::PrivacyLevel
-            | Self::DrillTargets => StatusCode::UNPROCESSABLE_ENTITY,
+            | Self::DrillTargets
+            | Self::UpdateInvalid => StatusCode::UNPROCESSABLE_ENTITY,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         }
     }

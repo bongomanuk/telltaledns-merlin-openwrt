@@ -39,6 +39,7 @@ pub mod support_api;
 pub mod time;
 pub mod timeline;
 pub mod ui;
+pub mod update_api;
 pub mod vqlog;
 
 use std::net::IpAddr;
@@ -685,6 +686,21 @@ pub trait Backend: Send + Sync + 'static {
             ))
         })
     }
+    /// REQ: OPS-014 (ADR-182) — asks `node` (`local`, or a cluster node's ID, site, or pod name)
+    /// to install a version, or reads its update state. A native node hands the request to its
+    /// root update service; it's the node's own business, so a cluster sends it to that node.
+    fn node_update(
+        &self,
+        node: &str,
+        call: NodeUpdateCall,
+    ) -> BoxFuture<Result<model::NodeUpdate, Problem>> {
+        let _ = (node, call);
+        Box::pin(async {
+            Err(Problem::unavailable(
+                "updates from the cluster aren't available on this node",
+            ))
+        })
+    }
     /// REQ: CLU-014 (ADR-151) — starts (or dry-runs) or ends a failover drill on `node`
     /// (`local`, or a cluster node's ID, site, or pod name), sent to that node like maintenance.
     fn drill(&self, node: &str, w: DrillWrite) -> BoxFuture<Result<model::DrillStart, Problem>> {
@@ -819,6 +835,27 @@ pub enum MaintenanceWrite {
     },
 }
 
+/// REQ: OPS-014 — an update request or a read of a node's update state, as the API checked it
+/// (and as it crosses the cluster channel to the node it's for).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum NodeUpdateCall {
+    Request {
+        /// The version, checked to be a release or edge build version.
+        to: String,
+        /// Who: the actor's name.
+        by: String,
+    },
+    Status,
+    /// REQ: OPS-014, AGT-002 (ADR-182) — every check a request gets, and what it would do, with
+    /// nothing written. Its own variant, so a node that doesn't know it refuses it rather than
+    /// taking it for a request.
+    DryRun {
+        /// The version, as for a request.
+        to: String,
+    },
+}
+
 /// REQ: CLU-014 — a drill start or end, as the API checked it (and as it crosses the cluster
 /// channel to the node it's for).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -904,7 +941,21 @@ pub enum ManagedKind {
     /// REQ: FLT-017 (T15.1) — a `[[kubernetes.map]]` rule (`/kubernetes/map/{namespace}/{kind}/{name}`,
     /// `*` for any): the group of the workloads it matches. API rules come before the files'.
     KubernetesMap,
+    /// REQ: T8.2, API-002 — a router integration (`/routers/{name}`): a UniFi console or an
+    /// OPNsense box whose clients name devices. Its key, secret, or password may come in the
+    /// body; they're written to files in the data directory, never stored or returned (ADR-181).
+    Router,
 }
+
+/// REQ: T8.2, API-002 (ADR-181) — the credentials of a router, as a body pastes them, and the
+/// `[[router]]` field naming the file each is saved to: the one list the API layer (hashing a
+/// pasted value for the idempotency record, what a caller below admin is shown) and the backend
+/// (saving, using and removing the files) both use.
+pub const ROUTER_CREDENTIALS: [(&str, &str); 3] = [
+    ("api_key", "api_key_file"),
+    ("api_secret", "api_secret_file"),
+    ("password", "password_file"),
+];
 
 /// A write to a local name or a forwarded domain.
 #[derive(Debug, Clone)]
@@ -922,8 +973,9 @@ pub struct ManagedWrite {
     pub simulate: Option<SimulateOpts>,
     /// REQ: OBS-010, API-002 (ADR-179) — the caller is an administrator: an admin's own sign-in,
     /// HTTP Basic, or API token, not an agent token. Only an administrator adds or changes an
-    /// alert destination that names a credential file. Writes the server makes itself, and a
-    /// forwarded write that doesn't say (from an older node), are not an administrator's.
+    /// alert destination that names a credential file, or writes a router (ADR-181). Writes the
+    /// server makes itself, and a forwarded write that doesn't say (from an older node), are not
+    /// an administrator's.
     pub by_admin: bool,
 }
 
@@ -1077,6 +1129,8 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
         .merge(kubernetes_api::routes(Arc::clone(&backend)))
         // REQ: CLU-014 — the running drill, reports, and the affinity view.
         .merge(drill_api::read_routes(Arc::clone(&backend)))
+        // REQ: OPS-014 — a node's version, update service, and latest update.
+        .merge(update_api::read_routes(Arc::clone(&backend)))
         .merge(rhythm_api::routes(Arc::clone(&backend)))
         .merge(timeline::routes(Arc::clone(&backend)))
         // REQ: CLU-013 — the rollout in progress and the kept versions.
@@ -1115,6 +1169,11 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
             blocking_api::write_routes(Arc::clone(&backend), Arc::clone(&auth))
                 .route_layer(from_fn(auth::routes::require_operator)),
         )
+        // REQ: T8.2 (ADR-181) — routers hold credentials and say where they're sent: admin.
+        .merge(
+            config_api::router_routes(Arc::clone(&backend), Arc::clone(&auth))
+                .route_layer(from_fn(auth::routes::require_admin)),
+        )
         // REQ: CLU-013 — the rollout settings decide what every node serves: admin (agents:
         // cluster:admin).
         .merge(
@@ -1137,6 +1196,12 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
         .merge(
             maintenance_api::routes(Arc::clone(&backend), Arc::clone(&auth))
                 .route_layer(from_fn(auth::routes::require_operator)),
+        )
+        // REQ: OPS-014 — installing a version replaces a node's binary: admin (agents:
+        // cluster:upgrade).
+        .merge(
+            update_api::admin_routes(Arc::clone(&backend), Arc::clone(&auth))
+                .route_layer(from_fn(auth::routes::require_admin)),
         )
         // REQ: CLU-014 — drills need operator (agents: ops:drill).
         .merge(
@@ -1237,7 +1302,7 @@ async fn fallback(
         license(name = "Apache-2.0 OR MIT")
     ),
     paths(
-        system_info, system_health, system_probes, maintenance_api::start, maintenance_api::end, drill_api::start, drill_api::end, drill_api::active, drill_api::list, drill_api::report, drill_api::affinity, upstream_checks, shadow_lists, overblocking, update_check, plans::list, plans::approve, plans::reject, cluster, compare::cluster_compare, rhythm_api::client_rhythm, timeline::client_timeline, config_api::cluster_promote, config_api::backup_download, support_api::make, support_api::map, git_hook, stats_summary, stats_timeseries, stats_top, stats_latency, stats_slo, attribution::slo_attribution, heatmap::stats_heatmap, flow::stats_flow, latency_heatmap::latency_heatmap, latency_heatmap::latency_exemplars, queries,
+        system_info, system_health, system_probes, maintenance_api::start, maintenance_api::end, update_api::node_update_status, update_api::node_update_request, drill_api::start, drill_api::end, drill_api::active, drill_api::list, drill_api::report, drill_api::affinity, upstream_checks, shadow_lists, overblocking, update_check, plans::list, plans::approve, plans::reject, cluster, compare::cluster_compare, rhythm_api::client_rhythm, timeline::client_timeline, config_api::cluster_promote, config_api::backup_download, support_api::make, support_api::map, git_hook, stats_summary, stats_timeseries, stats_top, stats_latency, stats_slo, attribution::slo_attribution, heatmap::stats_heatmap, flow::stats_flow, latency_heatmap::latency_heatmap, latency_heatmap::latency_exemplars, queries,
         queries_stream,
         explain, lists, groups, services, clients, upstreams,
         auth::routes::status, auth::routes::setup, auth::routes::login, auth::routes::logout,
@@ -1248,11 +1313,11 @@ async fn fallback(
         auth::routes::user_tokens, auth::routes::revoke_user_token,
         auth::routes::audit_log, auth::routes::audit_verify, auth::routes::oidc_start,
         auth::routes::oidc_callback, config_api::put_client, config_api::delete_client,
-        local_names, zones, alerts_status, config_api::put_alert_destination, config_api::delete_alert_destination, config_api::put_alert_rule, config_api::delete_alert_rule, config_api::test_alert_destination, config_api::check_upstream, config_api::check_list, config_api::put_schedule, config_api::delete_schedule, config_api::put_anomaly_mute, config_api::delete_anomaly_mute, config_api::put_ratelimit, config_api::delete_ratelimit, config_api::put_exclusions, config_api::delete_exclusions, config_api::put_simulate_settings, config_api::delete_simulate_settings, config_api::put_rollout_settings, config_api::delete_rollout_settings, rollout_api::rollout_status, rollout_api::cluster_versions, rollout_api::rollout_promote, rollout_api::rollout_abort, rollout_api::pin_version, rollout_api::unpin_cluster, cluster_nodes_api::remove_node, simulate_api::simulate, identify_api::identities, identify_api::identity, kubernetes_api::workloads, kubernetes_api::status, config_api::put_kubernetes_map, config_api::delete_kubernetes_map, forwards, rules, anomalies, annotations_api::list_annotations, annotations_api::add_note, anomaly_api::acknowledge, anomaly_api::unacknowledge, new_domains, vqlog_query, dhcp_leases, cache_api::stats, cache_api::lookup, cache_api::entries, cache_api::flush, blocking_api::state, blocking_api::pause, blocking_api::resume, config_entries, config_api::put_upstream, config_api::delete_upstream, config_api::put_upstream_group, config_api::delete_upstream_group, config_api::put_list, config_api::delete_list, config_api::put_group, config_api::delete_group, config_api::put_records, config_api::delete_records, config_api::put_rule, config_api::delete_rule,
+        local_names, zones, alerts_status, config_api::put_alert_destination, config_api::delete_alert_destination, config_api::put_alert_rule, config_api::delete_alert_rule, config_api::test_alert_destination, config_api::check_upstream, config_api::check_list, config_api::put_schedule, config_api::delete_schedule, config_api::put_router, config_api::delete_router, config_api::put_anomaly_mute, config_api::delete_anomaly_mute, config_api::put_ratelimit, config_api::delete_ratelimit, config_api::put_exclusions, config_api::delete_exclusions, config_api::put_simulate_settings, config_api::delete_simulate_settings, config_api::put_rollout_settings, config_api::delete_rollout_settings, rollout_api::rollout_status, rollout_api::cluster_versions, rollout_api::rollout_promote, rollout_api::rollout_abort, rollout_api::pin_version, rollout_api::unpin_cluster, cluster_nodes_api::remove_node, simulate_api::simulate, identify_api::identities, identify_api::identity, kubernetes_api::workloads, kubernetes_api::status, config_api::put_kubernetes_map, config_api::delete_kubernetes_map, forwards, rules, anomalies, annotations_api::list_annotations, annotations_api::add_note, anomaly_api::acknowledge, anomaly_api::unacknowledge, new_domains, vqlog_query, dhcp_leases, cache_api::stats, cache_api::lookup, cache_api::entries, cache_api::flush, blocking_api::state, blocking_api::pause, blocking_api::resume, config_entries, config_api::put_upstream, config_api::delete_upstream, config_api::put_upstream_group, config_api::delete_upstream_group, config_api::put_list, config_api::delete_list, config_api::put_group, config_api::delete_group, config_api::put_records, config_api::delete_records, config_api::put_rule, config_api::delete_rule,
         config_api::put_forward, config_api::delete_forward
     ),
     components(schemas(
-        Problem, problem::Code, SystemInfo, MaskedClients, ClusterInfo, ClusterPeer, ClusterView, ClusterNode, ClusterEvent, ClusterCheck, ClusterConflict, ClusterFailover, ClusterSource, HostReport, HostInfo, HostPoint, model::RuleInput, model::RuleInfo, model::CacheNodeStats, model::CacheEntry, model::CacheLookup, model::CacheFlushRequest, model::CacheFlushNode, model::CacheFlushResult, model::CacheSettings, model::CacheWarmStart, model::CachePoint, model::CacheSizing, model::CacheSizingStep, model::CacheMakeup, model::CacheTopEntry, model::CacheNodeEntries, model::BlockingRequest, model::BlockingNode, model::PauseInfo, model::ConfigEntry, plans::Plan, model::ServiceInfo, PromoteRequest, model::PromotePlan, Summary, TimeBucket, TopItem, model::ClientStatusCounts, LatencyRow, QueryPage, QueryRow,
+        Problem, problem::Code, model::NodeUpdate, model::NodeUpdateRequest, model::NodeUpdatePending, model::NodeUpdateRun, model::NodeUpdateHeld, SystemInfo, MaskedClients, ClusterInfo, ClusterPeer, ClusterView, ClusterNode, ClusterEvent, ClusterCheck, ClusterConflict, ClusterFailover, ClusterSource, HostReport, HostInfo, HostPoint, model::RuleInput, model::RuleInfo, model::CacheNodeStats, model::CacheEntry, model::CacheLookup, model::CacheFlushRequest, model::CacheFlushNode, model::CacheFlushResult, model::CacheSettings, model::CacheWarmStart, model::CachePoint, model::CacheSizing, model::CacheSizingStep, model::CacheMakeup, model::CacheTopEntry, model::CacheNodeEntries, model::BlockingRequest, model::BlockingNode, model::PauseInfo, model::ConfigEntry, plans::Plan, model::ServiceInfo, PromoteRequest, model::PromotePlan, Summary, TimeBucket, TopItem, model::ClientStatusCounts, LatencyRow, QueryPage, QueryRow,
         TailDropped,
         ScanStats, Explanation, ExplainClient, ExplainBlock, ExplainFilter, ExplainRule,
         ExplainLine, ExplainRoute, ListInfo, GroupInfo, ClientInfo, ClientInput, ClientChange, LocalName, RecordInput, RecordsInput, ForwardInfo, ForwardInput, ConfigChange, AnomalyFinding, model::AnomalyAckInfo, model::AnomalyAckRequest, model::AnomalyAckResult, model::Annotation, model::AnnotationPage, model::NoteRequest, model::Health, model::HealthReason, model::NodeMaintenance, model::MaintenanceRequest, model::MaintenanceResult, model::DrillAll, model::DrillTargets, model::DrillRequest, model::DrillMode, model::DrillCheck, model::DrillTargetDevice, model::DrillStart, model::ActiveDrill, model::DrillDevice, model::DrillNodeCount, model::DrillSummary, model::DrillReport, model::DrillPage, model::AffinityNode, model::AffinityRow, model::AffinityPage, model::GuardReadings, model::ClusterPin, model::ClusterRollout, model::RolloutFailure, model::RolloutNode, model::RolloutStatus, model::ClusterVersion, model::ClusterVersions, model::PinRequest, model::RolloutAction, model::NodeRemoval, model::SupportPackageRequest, model::DeviceIdentity, model::IdentityEvidence, model::WorkloadEvidence, model::ExplainWorkload, model::WorkloadInfo, model::WorkloadPod, model::WorkloadPage, model::KubernetesStatus, model::MatchedDomain, model::IdentityRunnerUp, model::Simulation, model::SimulatedClass, model::SimulatedName, model::SimulatedDevice, model::SimulatedGroup, model::SimulateRequest, model::SloStatus, attribution::SloAttribution, attribution::AttributionBudget, attribution::AttributionPoint, attribution::AttributionRow, attribution::AttributionCoverage, heatmap::Heatmap, flow::QueryFlow, flow::FlowNode, flow::FlowLink, compare::NodeCompare, compare::NodeNumbers, compare::NodeSeries, compare::NodeFinding, rhythm_api::ClientRhythm, rhythm_api::RhythmDomain, timeline::DeviceTimeline, timeline::TimelineLane, timeline::TimelineEvent, latency_heatmap::LatencyHeatmap, latency_heatmap::LatencyExemplar, latency_heatmap::LatencyExemplars, model::SloObjective, model::SloBurn, model::ProbeResult, model::UpstreamChecks, model::UpstreamQuality, model::EdeCount, model::UpstreamDisagreement, model::ShadowListStats, model::NameCount, model::OverblockSuspect, NewDomain, VqlogResult, VqlogCost, ZoneInfo, model::RewriteInfo, model::AlertsStatus, model::FiringAlert, model::AlertDelivery, model::AlertTest, model::CheckResult, ListShare, DhcpLease, UpstreamInfo, Step, TopKind,
@@ -2309,20 +2374,93 @@ async fn forwards(State(b): State<Shared>) -> Result<impl IntoResponse, Problem>
 /// from (ADR-069): `file`, `added` (made through the UI or API), `override` (replaces the
 /// config files' entry of the same name), or `hidden` (the files' entry is left out; listed so
 /// it can be brought back). `DELETE` on an override's or a hidden entry's path brings the
-/// files' version back. Secrets aren't part of these sections.
+/// files' version back. Secrets aren't part of these sections. A router's key-file paths and
+/// `username` are shown to an administrator only (their own sign-in or an admin API token);
+/// everyone gets each router's `credentials` status.
 #[utoipa::path(get, path = "/api/v1/config/entries", tag = "config",
     params(EntriesQuery),
     responses((status = 200, body = Items<ConfigEntry>, description = "The entries, by kind and name.")))]
 async fn config_entries(
     State(b): State<Shared>,
     Query(q): Query<EntriesQuery>,
+    ext: axum::http::Extensions,
 ) -> Result<Json<Items<ConfigEntry>>, Problem> {
+    // REQ: API-002, T8.2 (ADR-181) — F7: who may see where a router's keys are.
+    let admin = auth::routes::principal(&ext).is_ok_and(|p| config_api::by_admin(&p));
     // REQ: CLU-004 (ADR-174) — a replica asks the primary for the entries: off the worker.
-    let items = blocking(move || Ok(b.config_entries(q.kind.as_deref()))).await?;
+    let mut items = blocking(move || Ok(b.config_entries(q.kind.as_deref()))).await?;
+    if !admin {
+        items.iter_mut().for_each(redact_router);
+    }
     Ok(Json(Items {
         missing_nodes: Vec::new(),
         items,
     }))
+}
+
+/// The router fields a caller below admin isn't shown: where its keys are, who it signs in as.
+fn router_hidden(field: &str) -> bool {
+    field == "username" || ROUTER_CREDENTIALS.iter().any(|(_, f)| *f == field)
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — security F3: a pin's diff (JSON Patch over the shared
+/// configuration) as a caller below admin sees it. A router's key-file paths and `username` read
+/// "(hidden)", in an operation on one of those fields and inside an added or replaced router (or
+/// list of routers); every other operation is as it was. Before this change the same diff showed
+/// them for routers in the config files.
+pub(crate) fn mask_router_diff(ops: &mut [serde_json::Value]) {
+    fn hide_in(v: &mut serde_json::Value) {
+        if let Some(o) = v.as_object_mut() {
+            for (k, x) in o.iter_mut() {
+                if router_hidden(k) {
+                    *x = "(hidden)".into();
+                }
+            }
+        }
+    }
+    for op in ops {
+        let path = op
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if parts.first() != Some(&"router") {
+            continue;
+        }
+        let Some(value) = op.get_mut("value") else {
+            continue;
+        };
+        match parts.get(2) {
+            None if parts.len() == 1 => match value.as_array_mut() {
+                Some(a) => a.iter_mut().for_each(hide_in),
+                None => hide_in(value),
+            },
+            None => hide_in(value),
+            Some(field) if router_hidden(field) => *value = "(hidden)".into(),
+            Some(_) => {}
+        }
+    }
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — F7: a router as a caller below admin sees it (a viewer, an
+/// operator, any agent token, an MCP resource read): without where its keys are (the `*_file`
+/// fields) and who it signs in as (`username`). Its `credentials` status stays. Applied where
+/// the answer leaves the node, so a replica's copy of the primary's entries is redacted too.
+fn redact_router(e: &mut ConfigEntry) {
+    if e.kind != "router" {
+        return;
+    }
+    if let Some(o) = e
+        .definition
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (_, file_field) in ROUTER_CREDENTIALS {
+            o.remove(file_field);
+        }
+        o.remove("username");
+    }
 }
 
 /// Quick rules: per-device and per-group allow and block (T6.12, ADR-067).

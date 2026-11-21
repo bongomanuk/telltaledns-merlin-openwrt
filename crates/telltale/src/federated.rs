@@ -375,6 +375,16 @@ pub(crate) fn rpc_handler(
                 .await
                 .map_err(|e| format!("maintenance worker failed: {e}"))?;
             }
+            if kind == crate::node_update::KIND {
+                // REQ: OPS-014 (ADR-182) — another node asks this node to install a version, or
+                // reads its update state (a user or `telltale ctl upgrade` acted there). An
+                // ephemeral member serves no UI: it may read, and nothing it asks is installed.
+                return tokio::task::spawn_blocking(move || {
+                    crate::node_update::handle(&src, &cluster, &peer, &body, ephemeral)
+                })
+                .await
+                .map_err(|e| format!("update worker failed: {e}"))?;
+            }
             if kind == crate::drill::KIND {
                 // REQ: CLU-014 — a drill started or ended here (a user acted elsewhere; never
                 // through an ephemeral member), a drill's window to record, or a read.
@@ -1015,6 +1025,39 @@ impl Federated {
             })
             .map(|m| Some(m.node_id))
             .ok_or_else(|| Problem::invalid(format!("`node`: no cluster node `{node}`")))
+    }
+
+    /// REQ: OPS-010, OPS-014 — where a call about `node`'s own state (maintenance, an update)
+    /// goes: here (`None`, for `local` and this node), a peer, or a problem: `node_unreachable`
+    /// with `unreachable_hint` for a member of the registry this node hasn't heard from since it
+    /// started, `node_unknown` otherwise.
+    fn own_state_node(
+        &self,
+        node: &str,
+        unreachable_hint: &'static str,
+    ) -> Result<Option<String>, Problem> {
+        use telltale_api::problem::Code;
+        if node == "local" {
+            return Ok(None);
+        }
+        self.resolve_node(node).map_err(|_| {
+            if self
+                .cluster
+                .identity
+                .registry()
+                .iter()
+                .any(|n| n.node_id == node)
+            {
+                Problem::new(
+                    Code::NodeUnreachable,
+                    format!("{node} isn't reachable over the cluster channel"),
+                )
+                .hint(unreachable_hint)
+            } else {
+                Problem::new(Code::NodeUnknown, format!("no cluster node `{node}`"))
+                    .hint("Use `local`, or a node's ID, site, or pod name from the Cluster page (or cluster_status).")
+            }
+        })
     }
 
     /// REQ: CLU-014 — where a drill request for `node` goes: here (`None`), a peer, or a
@@ -1993,44 +2036,37 @@ impl Backend for Federated {
         node: &str,
         w: telltale_api::MaintenanceWrite,
     ) -> BoxFuture<Result<telltale_api::model::MaintenanceResult, Problem>> {
-        use telltale_api::problem::Code;
-        if node == "local" {
-            return self.local.maintenance("local", w);
-        }
-        match self.resolve_node(node) {
+        match self.own_state_node(
+            node,
+            "Maintenance is the node's own state, so the node must be up to take it.",
+        ) {
             Ok(None) => self.local.maintenance("local", w),
             Ok(Some(peer)) => {
                 let cluster = Arc::clone(&self.cluster);
                 let label = self.label_of(&peer);
                 Box::pin(crate::maintenance::send(cluster, peer, label, w))
             }
-            // A member of the registry this node hasn't heard from since it started.
-            Err(_)
-                if self
-                    .cluster
-                    .identity
-                    .registry()
-                    .iter()
-                    .any(|n| n.node_id == node) =>
-            {
-                let node = node.to_owned();
-                Box::pin(async move {
-                    Err(Problem::new(
-                        Code::NodeUnreachable,
-                        format!("{node} isn't reachable over the cluster channel"),
-                    )
-                    .hint(
-                        "Maintenance is the node's own state, so the node must be up to take it.",
-                    ))
-                })
+            Err(p) => Box::pin(async move { Err(p) }),
+        }
+    }
+    // REQ: OPS-014 (ADR-182) — installing a version is the node's own business, like
+    // maintenance: a request (or a read) for another node goes to that node.
+    fn node_update(
+        &self,
+        node: &str,
+        call: telltale_api::NodeUpdateCall,
+    ) -> BoxFuture<Result<telltale_api::model::NodeUpdate, Problem>> {
+        match self.own_state_node(
+            node,
+            "The node installs the version itself, so it must be up.",
+        ) {
+            Ok(None) => self.local.node_update("local", call),
+            Ok(Some(peer)) => {
+                let cluster = Arc::clone(&self.cluster);
+                let label = self.label_of(&peer);
+                Box::pin(crate::node_update::send(cluster, peer, label, call))
             }
-            Err(_) => {
-                let node = node.to_owned();
-                Box::pin(async move {
-                    Err(Problem::new(Code::NodeUnknown, format!("no cluster node `{node}`"))
-                        .hint("Use `local`, or a node's ID, site, or pod name from the Cluster page (or cluster_status)."))
-                })
-            }
+            Err(p) => Box::pin(async move { Err(p) }),
         }
     }
     // REQ: CLU-014 (ADR-151) — a drill is the node's own state, like maintenance: a request for
@@ -2795,6 +2831,168 @@ mod ephemeral_tests {
             from_s: 0,
             to_s: 1
         }));
+    }
+
+    /// A backend for the RPC tests below: the `update` call never reads it.
+    struct NoBackend;
+
+    impl Backend for NoBackend {
+        fn system_info(&self) -> SystemInfo {
+            unreachable!("not read here")
+        }
+        fn timeseries(&self, _: Step, _: u64, _: u64) -> Vec<TimeBucket> {
+            Vec::new()
+        }
+        fn top(&self, _: TopKind, _: Hour, _: usize, _: Option<IpAddr>) -> Vec<TopItem> {
+            Vec::new()
+        }
+        fn latency(&self, _: LatencyBy, _: Hour) -> Vec<LatencyRow> {
+            Vec::new()
+        }
+        fn queries(&self, _: &QueryParams, _: u64, _: u64, _: usize) -> Result<QueryPage, Problem> {
+            Err(Problem::unavailable("stub"))
+        }
+        fn explain(&self, _: &ExplainParams) -> Result<Explanation, Problem> {
+            Err(Problem::unavailable("stub"))
+        }
+        fn lists(&self) -> Vec<ListInfo> {
+            Vec::new()
+        }
+        fn groups(&self) -> Vec<GroupInfo> {
+            Vec::new()
+        }
+        fn clients(&self) -> Vec<ClientInfo> {
+            Vec::new()
+        }
+        fn upstreams(&self) -> Vec<UpstreamInfo> {
+            Vec::new()
+        }
+        fn config_version(&self) -> u64 {
+            0
+        }
+    }
+
+    /// REQ: OPS-014, CLU-009 (ADR-182, ADR-058) — the `update` RPC: an ephemeral member (a
+    /// resolver pod) and a peer the registry doesn't list get nothing from it, neither a request
+    /// nor a read of the node's update state (which names who asked and the errors), as for
+    /// maintenance. A member the registry lists gets the node's own answer.
+    #[tokio::test]
+    async fn ops_014_an_ephemeral_member_cannot_ask_for_an_update() {
+        use telltale_cluster::node::{Identity, NodeRecord};
+        let dir = tempfile::tempdir().unwrap();
+        let id = Identity::init(
+            dir.path(),
+            "home",
+            vec!["https://127.0.0.1:1".into()],
+            "k8s",
+        )
+        .unwrap();
+        let member = |node_id: &str, ephemeral: bool| NodeRecord {
+            node_id: node_id.into(),
+            site: node_id.into(),
+            eligible: false,
+            advertise: Vec::new(),
+            joined: 1,
+            witness: false,
+            ephemeral,
+        };
+        let mut registry = id.registry();
+        registry.push(member("replica-1", false));
+        registry.push(member("pod-1", true));
+        id.save_registry(&registry).unwrap();
+        let cluster = Cluster::new(id, "0.1.0");
+        let data = tempfile::tempdir().unwrap();
+        let src = Arc::new(crate::http::tests::sources_in(data.path()));
+        let handler = rpc_handler(src, Arc::new(NoBackend), cluster);
+        let now = crate::maintenance::now_ms();
+        let body = |call: serde_json::Value| {
+            serde_json::to_vec(&serde_json::json!({ "call": call, "sent_ms": now })).unwrap()
+        };
+        let request = serde_json::json!({"op": "request", "to": "99.0.0", "by": "mallory"});
+        let status = serde_json::json!({"op": "status"});
+        let written = || {
+            data.path().join("update-request.json").exists()
+                || data.path().join("update").join("request.json").exists()
+        };
+        for peer in ["pod-1", "a-stranger"] {
+            let e = handler(
+                peer.into(),
+                crate::node_update::KIND.into(),
+                body(request.clone()),
+            )
+            .await
+            .expect_err("an ephemeral or unlisted peer can't ask for an update");
+            assert!(e.contains("ephemeral member"), "{peer}: {e}");
+            assert!(!written(), "{peer}: nothing is written");
+            // Nor a read: it names admins and errors, and nothing legitimate asks through such a
+            // peer (`ctl` and the API go through full members).
+            let e = handler(
+                peer.into(),
+                crate::node_update::KIND.into(),
+                body(status.clone()),
+            )
+            .await
+            .expect_err("an ephemeral or unlisted peer can't read the update state");
+            assert!(e.contains("ephemeral member"), "{peer}: {e}");
+        }
+        // A member the registry lists gets this node's answer (a test build is a local build, so
+        // a problem that says so, not a refusal of the sender).
+        let answer = handler(
+            "replica-1".into(),
+            crate::node_update::KIND.into(),
+            body(request),
+        )
+        .await
+        .expect("a listed member is answered");
+        let decoded: Result<telltale_api::model::NodeUpdate, Problem> =
+            crate::forward::decode_answer(&answer);
+        assert!(
+            decoded
+                .as_ref()
+                .is_err_and(|p| p.code != telltale_api::problem::Code::Forbidden),
+            "{decoded:?}"
+        );
+    }
+
+    /// REQ: OPS-010, OPS-014 — maintenance and updates find their node the same way (one helper):
+    /// `local` and this node's own ID are here; a member of the registry not heard from is
+    /// `node_unreachable` with the call's own hint; anything else `node_unknown`.
+    #[test]
+    fn ops_014_a_call_about_a_nodes_own_state_finds_its_node() {
+        use telltale_api::problem::Code;
+        use telltale_cluster::node::{Identity, NodeRecord};
+        let dir = tempfile::tempdir().unwrap();
+        let id = Identity::init(
+            dir.path(),
+            "home",
+            vec!["https://127.0.0.1:1".into()],
+            "k8s",
+        )
+        .unwrap();
+        let me = id.meta.node_id.clone();
+        let mut registry = id.registry();
+        registry.push(NodeRecord {
+            node_id: "replica-1".into(),
+            site: "pi".into(),
+            eligible: false,
+            advertise: Vec::new(),
+            joined: 1,
+            witness: false,
+            ephemeral: false,
+        });
+        id.save_registry(&registry).unwrap();
+        let fed = Federated::new(Arc::new(NoBackend), Cluster::new(id, "0.1.0"));
+        assert_eq!(fed.own_state_node("local", "h").unwrap(), None);
+        assert_eq!(fed.own_state_node(&me, "h").unwrap(), None);
+        let p = fed.own_state_node("replica-1", "must be up").unwrap_err();
+        assert_eq!(
+            (p.code, p.hint.as_deref()),
+            (Code::NodeUnreachable, Some("must be up"))
+        );
+        assert_eq!(
+            fed.own_state_node("nope", "h").unwrap_err().code,
+            Code::NodeUnknown
+        );
     }
 
     /// The `fn` names of one `impl` block in a source file.

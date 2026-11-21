@@ -49,6 +49,8 @@ pub(crate) const SIMULATE: &str = "simulate";
 pub(crate) const ROLLOUT: &str = "rollout";
 /// REQ: FLT-017 (T15.1) — `[[kubernetes.map]]` rules, by key (`namespace/kind/name`).
 pub(crate) const KUBERNETES_MAP: &str = "kubernetes_map";
+/// REQ: T8.2, API-002 (ADR-181) — router integrations (they override the files' too).
+pub(crate) const ROUTER: &str = "router";
 
 /// An API entry for a kind that can override the files (ADR-069): a definition, or the
 /// files' entry of that name left out.
@@ -91,6 +93,11 @@ impl Named for telltale_config::AlertDestination {
     }
 }
 impl Named for telltale_config::ScheduleConfig {
+    fn name(&self) -> &str {
+        self.name.as_str()
+    }
+}
+impl Named for telltale_config::RouterConfig {
     fn name(&self) -> &str {
         self.name.as_str()
     }
@@ -154,6 +161,8 @@ pub(crate) struct Entries {
     pub(crate) rollout: Option<telltale_config::RolloutConfig>,
     /// REQ: FLT-017 — `[[kubernetes.map]]` rules by key; they come before the files' rules.
     pub(crate) kubernetes_map: Vec<(String, Ovr<telltale_config::KubernetesMapRule>)>,
+    /// REQ: T8.2 (ADR-181) — router integrations.
+    pub(crate) routers: Vec<(String, Ovr<telltale_config::RouterConfig>)>,
 }
 
 /// Where the state database lives.
@@ -248,6 +257,7 @@ pub(crate) fn entries(state: &State) -> Entries {
             .next()
             .map(|(_, x)| x),
         kubernetes_map: decode_ovr(state, KUBERNETES_MAP),
+        routers: decode_ovr(state, ROUTER),
     }
 }
 
@@ -589,6 +599,48 @@ fn upstream_groups_without(
     });
 }
 
+/// REQ: API-002, T8.2 (ADR-181) — review round 3 (security S1, correctness R9) and round 4
+/// (final review M2): `e` without the routers made through the API that name a key file outside
+/// this node's `<data_dir>/secrets/` (by the path as written, so it fails closed) which the
+/// files' router of that name doesn't name for that credential at the same endpoint (a router
+/// the files don't define counts as not matching), and why (`None`: there is none). Such an entry
+/// is an override kept from before the files moved or removed the router, or one restored or
+/// edited in `state.db`; a mounted key is used on any node (the use-time rule's folder rule), so
+/// it is left out here, on the node that applies the API's entries, and the configuration it
+/// publishes never carries it. The files' router, if any, is the one in effect. Routers are named
+/// by nothing else in the configuration, so the merge stays valid. A key pasted in the UI (in
+/// `<data_dir>/secrets/`) is unaffected: its `.written` record vouches for it.
+fn without_unvouched_router_keys(file: &Config, e: &Entries) -> Option<(Entries, Vec<LeftOut>)> {
+    let data_dir = file.node.data_dir.as_str();
+    let unvouched = |o: &Ovr<telltale_config::RouterConfig>| match o {
+        Ovr::Set(r) => crate::router_secrets::unvouched_key_file(&file.router, r, data_dir),
+        Ovr::Hidden => None,
+    };
+    if !e.routers.iter().any(|(_, o)| unvouched(o).is_some()) {
+        return None;
+    }
+    let mut e = e.clone();
+    let mut notes = Vec::new();
+    e.routers.retain(|(n, o)| {
+        let Some(field) = unvouched(o) else {
+            return true;
+        };
+        let instead = if file.router.iter().any(|f| f.name.as_str() == n) {
+            "the config files' router of that name is the one in effect"
+        } else {
+            "the config files don't define it any more, so it isn't read"
+        };
+        notes.push(LeftOut {
+            name: n.clone(),
+            what: format!(
+                "router `{n}` made through the API isn't used: its `{field}` is a key file outside this node's secrets/ folder that the config files don't give this router at this address (they moved or removed it since, or the entry was restored or edited); {instead}. Edit the router in the UI to save it again for the files' address (or paste its key), or remove this entry (DELETE /api/v1/routers/{n})"
+            ),
+        });
+        false
+    });
+    Some((e, notes))
+}
+
 /// REQ: UPS-011 (ADR-180) — one warning per change the merge makes for plugin entries, when it
 /// starts: a configuration that is built again with the same ones logs nothing (per data
 /// directory, so each node in a test process keeps its own).
@@ -636,6 +688,9 @@ fn apply_one_of(cfg: &mut Config, e: &Entries) {
 pub(crate) fn merge(file: &Config, e: &Entries) -> Result<Config, Vec<String>> {
     let kept = without_plugins(file, e);
     let e = kept.as_ref().map_or(e, |k| &k.entries);
+    // REQ: API-002, T8.2 (ADR-181) — and the routers whose mounted key the files don't vouch for.
+    let routers = without_unvouched_router_keys(file, e);
+    let e = routers.as_ref().map_or(e, |(r, _)| r);
     let mut cfg = file.clone();
     // ADR-069 — upstreams, upstream groups, lists, and groups made through the API override
     // or hide the files' entries of the same name (before forwards add their own).
@@ -647,6 +702,7 @@ pub(crate) fn merge(file: &Config, e: &Entries) -> Result<Config, Vec<String>> {
     apply_ovr(&mut cfg.alerts.rule, &e.alert_rules);
     apply_ovr(&mut cfg.schedule, &e.schedules);
     apply_ovr(&mut cfg.anomaly_mute, &e.anomaly_mutes);
+    apply_ovr(&mut cfg.router, &e.routers);
     apply_kubernetes_map(&mut cfg, &e.kubernetes_map);
     apply_one_of(&mut cfg, e);
     for c in &e.clients {
@@ -805,13 +861,16 @@ pub(crate) fn effective(file: &Config) -> Config {
         }
     };
     let stored = entries(&state);
-    // REQ: UPS-011 (ADR-180) — what the merge leaves out, logged once.
-    warn_left_out(
-        file,
-        &without_plugins(file, &stored)
-            .map(|k| k.notes)
+    // REQ: UPS-011 (ADR-180), API-002 (ADR-181) — what the merge leaves out, logged once.
+    let mut left = without_plugins(file, &stored)
+        .map(|k| k.notes)
+        .unwrap_or_default();
+    left.extend(
+        without_unvouched_router_keys(file, &stored)
+            .map(|(_, n)| n)
             .unwrap_or_default(),
     );
+    warn_left_out(file, &left);
     match merge(file, &stored) {
         Ok(c) => c,
         Err(errs) => {

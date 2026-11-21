@@ -54,6 +54,9 @@ pub const SCOPES: &[(&str, &str)] = &[
         "config:write:groups",
         "add, change, and remove client groups",
     ),
+    // REQ: T8.2, API-002 (ADR-181) — no scope for routers: they hold credentials and say where
+    // they're sent, so only an administrator's own sign-in or admin API token writes one (as for
+    // a credential file, ADR-179).
     (
         "config:write:ratelimit",
         "change the per-client rate limit, or go back to the config file's",
@@ -92,14 +95,30 @@ pub const SCOPES: &[(&str, &str)] = &[
         "cluster:admin",
         "promote a node to primary; change the staged-rollout settings; promote or abort a rollout; pin and unpin the cluster",
     ),
+    (
+        "cluster:upgrade",
+        "ask native nodes to install a newer TelltaleDNS release or edge build (their update service verifies and installs it, then restarts them)",
+    ),
 ];
 
 /// What an agent token gets when none are named: read-only, without the query log.
 pub const DEFAULT_SCOPES: &[&str] = &["analytics:read", "config:read"];
 
+/// REQ: OPS-014, AGT-008 (ADR-182) — scopes an agent API token may hold but an OAuth access
+/// token for MCP may not: they are neither advertised (`scopes_supported`) nor taken from an
+/// identity provider's token. `cluster:upgrade` makes a root service install a build on the
+/// native nodes; it is for a token an admin made for that job (the chart's upgrade hook), not
+/// for an assistant signed in through a provider.
+pub const NOT_FOR_OAUTH: &[&str] = &["cluster:upgrade"];
+
+/// REQ: AGT-008 (ADR-182) — whether an OAuth access token for MCP may carry `scope`.
+pub fn oauth_scope(scope: &str) -> bool {
+    !NOT_FOR_OAUTH.contains(&scope)
+}
+
 /// The role a scope needs from the token's owner (a token never exceeds its owner).
 fn scope_role(scope: &str) -> Role {
-    if scope == "cluster:admin" {
+    if scope == "cluster:admin" || scope == "cluster:upgrade" {
         Role::Admin
     } else if scope.starts_with("config:write:") || scope.starts_with("ops:") {
         Role::Operator
@@ -235,6 +254,11 @@ pub fn required(method: &Method, path: &str) -> Need {
         if under("/api/v1/groups") || under("/api/v1/schedules") {
             return Need::Scope("config:write:groups");
         }
+        // REQ: T8.2, API-002 (ADR-181) — not for agents, whatever a token holds (a token an
+        // earlier build made may hold `config:write:routers`).
+        if under("/api/v1/routers") {
+            return Need::Forbidden;
+        }
         // REQ: OBS-010 (T9.6)
         if under("/api/v1/alerts") {
             return Need::Scope("config:write:alerts");
@@ -302,6 +326,15 @@ fn analytics_extra(p: &str) -> bool {
             .is_some_and(|id| !id.is_empty() && !id.contains('/'))
         || drill_path(p)
         || p == "/api/v1/clients/affinity"
+        // REQ: OPS-014 — a node's version and update state.
+        || update_path(p)
+}
+
+/// REQ: OPS-014 — `/api/v1/nodes/{id}/update`.
+fn update_path(p: &str) -> bool {
+    p.strip_prefix("/api/v1/nodes/")
+        .and_then(|r| r.strip_suffix("/update"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
 /// REQ: CLU-014 — `/api/v1/nodes/{id}/drill`.
@@ -343,6 +376,8 @@ fn post_need(p: &str) -> Option<Need> {
     Some(match p {
         // REQ: OPS-010 — maintenance is an immediate op (agents at most two hours).
         _ if maintenance_path(p) => Need::Scope("ops:maintenance"),
+        // REQ: OPS-014 — installing a version on a node (admin; never in the default scopes).
+        _ if update_path(p) => Need::Scope("cluster:upgrade"),
         // REQ: CLU-014 — a drill (at most five minutes; never in the default scopes).
         _ if drill_path(p) => Need::Scope("ops:drill"),
         _ if p.starts_with("/api/v1/alerts/destinations/") && p.ends_with("/test") => {
@@ -716,6 +751,30 @@ mod tests {
         );
     }
 
+    /// REQ: OPS-014, AGT-004 — asking a node to install a version needs `cluster:upgrade` (an
+    /// admin scope, and nothing else grants it); reading its update state is analytics.
+    #[test]
+    fn ops_014_update_routes_need_their_scope() {
+        use Need::{Forbidden, Scope};
+        for node in ["local", "dns-02", "4846e5a9974bc21c"] {
+            let p = format!("/api/v1/nodes/{node}/update");
+            assert_eq!(required(&Method::POST, &p), Scope("cluster:upgrade"));
+            assert_eq!(required(&Method::GET, &p), Scope("analytics:read"));
+        }
+        for (m, p) in [
+            (Method::PUT, "/api/v1/nodes/pi/update"),
+            (Method::DELETE, "/api/v1/nodes/pi/update"),
+            (Method::POST, "/api/v1/nodes//update"),
+            (Method::POST, "/api/v1/nodes/a/b/update"),
+        ] {
+            assert_eq!(required(&m, p), Forbidden, "{m} {p}");
+        }
+        assert_eq!(
+            implied_role(&parse_scopes(&["cluster:upgrade".into()]).unwrap()),
+            Role::Admin
+        );
+    }
+
     /// REQ: OBS-033, AGT-004 — reading change markers is analytics; a note needs
     /// `ops:annotate` (an operator scope, not in the default set); changing one isn't for
     /// anyone.
@@ -806,13 +865,36 @@ mod tests {
         );
     }
 
+    /// REQ: API-002, T8.2 (ADR-181, as ADR-179) — no agent token writes a router: there is no
+    /// scope for it (`config:write:*` and a named `config:write:routers` alike), and the routes
+    /// are refused to agents whatever a token holds.
+    #[test]
+    fn api_002_agents_never_write_routers() {
+        for m in [Method::PUT, Method::DELETE] {
+            assert_eq!(required(&m, "/api/v1/routers/udm"), Need::Forbidden, "{m}");
+        }
+        assert!(parse_scopes(&["config:write:routers".into()]).is_err());
+        assert!(
+            !parse_scopes(&["config:write:*".into()])
+                .unwrap()
+                .iter()
+                .any(|s| s.contains("router"))
+        );
+        assert!(!SCOPES.iter().any(|(n, _)| n.contains("router")));
+        // Reading the configuration (routers included, redacted) is `config:read` as before.
+        assert_eq!(
+            required(&Method::GET, "/api/v1/config/entries"),
+            Need::Scope("config:read")
+        );
+    }
+
     #[test]
     fn agt_004_scopes_parse_and_imply_roles() {
         let s = parse_scopes(&["config:write:*".into(), "analytics:read".into()]).unwrap();
         assert_eq!(
             s.len(),
             13,
-            "twelve write areas (clients, records, forwards, rules, upstreams, lists, groups, alerts, ratelimit, anomalies, exclusions, simulate) + analytics"
+            "twelve write areas (clients, records, forwards, rules, upstreams, lists, groups, alerts, ratelimit, anomalies, exclusions, simulate; not routers) + analytics"
         );
         assert!(s.contains("config:write:upstreams") && s.contains("config:write:lists"));
         assert!(s.contains("config:write:rules"));

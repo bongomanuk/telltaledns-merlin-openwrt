@@ -194,6 +194,7 @@ pub(crate) async fn apply(
                 ManagedKind::Simulate => "simulate",
                 ManagedKind::Rollout => "rollout_settings",
                 ManagedKind::KubernetesMap => "kubernetes_map",
+                ManagedKind::Router => "router",
             };
             let deleting = body.is_none();
             let r = local

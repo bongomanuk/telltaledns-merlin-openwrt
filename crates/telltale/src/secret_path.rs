@@ -17,11 +17,33 @@ use std::path::{Path, PathBuf};
 const FIXED_ROOTS: &[&str] = &["/run/secrets", "/etc/telltale-secrets"];
 
 /// Under `/run/secrets` but never a credential file's place: the pod's service-account token, CA
-/// and namespace (`/var/run/secrets/...` is the same folder where `/var/run` links to `/run`).
+/// and namespace, and (review round 2, security N5) the cloud workload-identity tokens projected
+/// next to them: EKS's `eks.amazonaws.com` and Azure's `azure` (`/var/run/secrets/...` is the
+/// same folder where `/var/run` links to `/run`). One list, for alert destinations (ADR-179) and
+/// routers (ADR-181); it is checked as written and with links followed.
 const EXCLUDED: &[&str] = &[
     "/run/secrets/kubernetes.io",
     "/var/run/secrets/kubernetes.io",
+    "/run/secrets/eks.amazonaws.com",
+    "/var/run/secrets/eks.amazonaws.com",
+    "/run/secrets/azure",
+    "/var/run/secrets/azure",
 ];
+
+/// REQ: OBS-010, API-002 (ADR-179, ADR-181) — review round 2, security N6: what the routers
+/// feature keeps in `<data_dir>/secrets/` (a router's key pasted in the UI, the list of them and
+/// its temporary files, the request key), by the first name under that folder. An alert
+/// destination never names one, so even an administrator can't send a key pasted in the UI to an
+/// alert's address. A key a platform mounts (`/run/secrets/`, `/etc/telltale-secrets/`) is a
+/// different case: an administrator may still name one for an alert destination, as ADR-179 has
+/// it. Compared without regard to ASCII case (review round 3, S3: on a case-insensitive mount,
+/// `ROUTER-x` opens `router-x`).
+fn feature_file(first: &std::ffi::OsStr) -> bool {
+    first.to_str().is_some_and(|n| {
+        let n = n.to_ascii_lowercase();
+        n.starts_with("router-") || n.starts_with(".written") || n.starts_with(".request-key")
+    })
+}
 
 /// Links followed before giving up (a loop, or a chain that long, is refused).
 const MAX_LINKS: u8 = 40;
@@ -71,12 +93,99 @@ fn allowed_with(look: &Look, path: &str, data_dir: &str) -> bool {
     let Some(p) = written(path) else {
         return false;
     };
-    let roots = roots(data_dir);
-    if !inside(look, &p, &roots) {
+    within(look, &p, &roots(data_dir)) && !names_a_feature_file(look, &p, data_dir)
+}
+
+/// Whether `p` (in normal form), as written or with its links followed, is one of the files the
+/// routers feature keeps in `<data_dir>/secrets/` ([`feature_file`]).
+fn names_a_feature_file(look: &Look, p: &Path, data_dir: &str) -> bool {
+    let Some(d) = written(data_dir.trim_end_matches('/')) else {
+        return false;
+    };
+    let folder = d.join("secrets");
+    let first_under = |path: &Path, root: &Path| {
+        path.strip_prefix(root)
+            .ok()
+            .and_then(|rest| rest.components().next())
+            .is_some_and(|c| feature_file(c.as_os_str()))
+    };
+    let real_folder = resolve(look, &folder, 0);
+    // A path that can't be resolved is refused by `within` already.
+    let real = resolve(look, p, 0);
+    first_under(p, &folder)
+        || real.as_deref().is_some_and(|r| {
+            first_under(r, &folder) || real_folder.as_deref().is_some_and(|f| first_under(r, f))
+        })
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — whether `path` is in this node's `<data_dir>/secrets/` folder,
+/// by the rule of [`allowed`] (normal form, compared by components as written and with its links
+/// followed) with that folder the only one: where the API writes a router's pasted key, and the
+/// only place a key file it recorded is used from, or removed from. Blocking.
+pub(crate) fn in_data_secrets(path: &str, data_dir: &str) -> bool {
+    in_data_secrets_with(&FS, path, data_dir)
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — the folders a platform fills with secrets, without the data
+/// directory's: `/run/secrets/` (Docker and Compose) and `/etc/telltale-secrets/` (the Helm chart's
+/// `secretMounts`).
+pub(crate) fn mount_roots() -> Vec<PathBuf> {
+    FIXED_ROOTS.iter().map(PathBuf::from).collect()
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — [`mount_roots`] for a node whose data directory is `data_dir`:
+/// the one list the use-time rule and the merge of the API's entries both ask. In test builds
+/// only, `<data_dir>/mount` stands in for them too, so a test can put a mounted key there.
+pub(crate) fn mount_roots_for(data_dir: &str) -> Vec<PathBuf> {
+    #[cfg(test)]
+    {
+        let mut v = mount_roots();
+        v.push(Path::new(data_dir).join("mount"));
+        v
+    }
+    #[cfg(not(test))]
+    {
+        let _ = data_dir;
+        mount_roots()
+    }
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — whether `path` is in one of `roots` (normally
+/// [`mount_roots`]) by [`allowed`]'s rule: normal form, compared by components as written and
+/// with links followed, never under Kubernetes' own `kubernetes.io` folder. Blocking.
+pub(crate) fn in_folders(path: &str, roots: &[PathBuf]) -> bool {
+    written(path).is_some_and(|p| within(&FS, &p, roots))
+}
+
+/// REQ: API-002, T8.2 (ADR-181) — review round 4 (final review M2): whether `path`, as written,
+/// is under this node's `<data_dir>/secrets/` folder: both in normal form, compared by
+/// components, and nothing looked up on the filesystem, so the answer can't change with what is
+/// on disk (a link, a folder this process can't search). The merge of the API's entries asks it,
+/// and must fail closed.
+pub(crate) fn in_data_secrets_as_written(path: &str, data_dir: &str) -> bool {
+    let (Some(p), Some(d)) = (written(path), written(data_dir.trim_end_matches('/'))) else {
+        return false;
+    };
+    let folder = d.join("secrets");
+    p.starts_with(&folder) && p != folder
+}
+
+/// [`in_data_secrets`], asking `look`.
+fn in_data_secrets_with(look: &Look, path: &str, data_dir: &str) -> bool {
+    let (Some(p), Some(d)) = (written(path), written(data_dir.trim_end_matches('/'))) else {
+        return false;
+    };
+    within(look, &p, &[d.join("secrets")])
+}
+
+/// `p` (in normal form) is strictly under one of `roots`, as written and with its links followed
+/// against the folders with theirs followed.
+fn within(look: &Look, p: &Path, roots: &[PathBuf]) -> bool {
+    if !inside(look, p, roots) {
         return false;
     }
     // The same, with links followed.
-    let Some(real) = resolve(look, &p, 0) else {
+    let Some(real) = resolve(look, p, 0) else {
         return false;
     };
     let real_roots: Vec<PathBuf> = roots.iter().filter_map(|r| resolve(look, r, 0)).collect();
@@ -279,6 +388,125 @@ mod tests {
             &format!("{}/secrets/token", link.to_str().unwrap()),
             link.to_str().unwrap()
         ));
+    }
+
+    /// REQ: OBS-010, API-002 (ADR-179, ADR-181) — review round 2, security N5: the cloud
+    /// workload-identity tokens projected under `/run/secrets/` (`/var/run/secrets/`) are no
+    /// credential file's place, for an alert destination (`allowed`) or a router (`in_folders`):
+    /// EKS's `eks.amazonaws.com` and Azure's `azure`, as written and through a link.
+    #[test]
+    fn obs_010_cloud_identity_tokens_are_no_credential_files() {
+        let data = "/var/lib/telltale-test-data";
+        let roots = mount_roots();
+        for bad in [
+            "/run/secrets/eks.amazonaws.com/serviceaccount/token",
+            "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
+            "/run/secrets/azure/tokens/azure-identity-token",
+            "/var/run/secrets/azure/tokens/azure-identity-token",
+            "/run/secrets/kubernetes.io/serviceaccount/token",
+        ] {
+            assert!(!allowed(bad, data), "alert destination: {bad}");
+            assert!(!in_folders(bad, &roots), "router: {bad}");
+        }
+        for ok in ["/run/secrets/unifi-key", "/etc/telltale-secrets/unifi/key"] {
+            assert!(allowed(ok, data), "{ok}");
+            assert!(in_folders(ok, &roots), "{ok}");
+        }
+    }
+
+    /// REQ: OBS-010, API-002 (ADR-179, ADR-181) — review round 2, security N6: an alert
+    /// destination can't name a file this feature keeps in `<data_dir>/secrets/` (a router's
+    /// key, the list of them, the request key), as written or through a link, even for an
+    /// administrator; any other file there is still allowed. The router's own rule is unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn obs_010_an_alert_destination_names_no_router_key() {
+        use std::os::unix::fs::symlink;
+        let d = Dir::new("feature-files");
+        let data = d.s();
+        let sec = d.0.join("secrets");
+        std::fs::create_dir_all(&sec).unwrap();
+        for f in [
+            "router-udm.api_key.0123456789abcdef",
+            ".written",
+            ".request-key",
+            "ntfy-token",
+        ] {
+            std::fs::write(sec.join(f), "x").unwrap();
+        }
+        symlink(
+            sec.join("router-udm.api_key.0123456789abcdef"),
+            sec.join("alias"),
+        )
+        .unwrap();
+        let p = |s: &str| format!("{data}/secrets/{s}");
+        for bad in [
+            "router-udm.api_key.0123456789abcdef",
+            "router-anything",
+            ".written",
+            ".written.0123456789abcdef.tmp",
+            ".request-key",
+            "alias",
+        ] {
+            assert!(!allowed(&p(bad), &data), "{bad}");
+        }
+        assert!(allowed(&p("ntfy-token"), &data));
+        assert!(allowed(&p("nested/token"), &data));
+        assert!(in_data_secrets(
+            &p("router-udm.api_key.0123456789abcdef"),
+            &data
+        ));
+    }
+
+    /// REQ: OBS-010, API-002 (ADR-179, ADR-181) — review round 3, security S3: the feature's
+    /// files are recognised whatever the ASCII case of the name (a case-insensitive mount opens
+    /// `ROUTER-x` as `router-x`); an ordinary file of any case is still allowed.
+    #[test]
+    fn obs_010_feature_files_are_refused_in_any_case() {
+        let data = "/var/lib/telltale-test-data";
+        let p = |s: &str| format!("{data}/secrets/{s}");
+        for bad in [
+            "ROUTER-udm.api_key.0123456789abcdef",
+            "Router-udm",
+            ".Request-Key",
+            ".WRITTEN",
+            ".Written.0123456789abcdef.tmp",
+        ] {
+            assert!(!allowed(&p(bad), data), "{bad}");
+        }
+        assert!(allowed(&p("NTFY-Token"), data));
+    }
+
+    /// REQ: API-002, T8.2 (ADR-181) — a router key the API wrote is in the data directory's
+    /// `secrets/` and nowhere else: the other folders for secrets, the data directory itself, a
+    /// path not in normal form, and a link that leads out are not.
+    #[cfg(unix)]
+    #[test]
+    fn api_002_a_router_key_is_in_the_data_directorys_secrets_folder() {
+        use std::os::unix::fs::symlink;
+        let d = Dir::new("router-keys");
+        let data = d.s();
+        let sec = d.0.join("secrets");
+        std::fs::create_dir_all(&sec).unwrap();
+        std::fs::write(sec.join("router-udm.api_key.1"), "k").unwrap();
+        std::fs::write(d.0.join("state.db"), "db").unwrap();
+        symlink(d.0.join("state.db"), sec.join("to-state")).unwrap();
+        let p = |s: &str| format!("{data}/secrets/{s}");
+        for ok in ["router-udm.api_key.1", "not-yet"] {
+            assert!(in_data_secrets(&p(ok), &data), "{ok}");
+        }
+        for bad in [
+            p("to-state"),
+            p("../state.db"),
+            format!("{data}/secrets"),
+            format!("{data}/state.db"),
+            "/run/secrets/udm-key".to_owned(),
+            "/etc/telltale-secrets/udm/api_key".to_owned(),
+            "secrets/router-udm.api_key.1".to_owned(),
+        ] {
+            assert!(!in_data_secrets(&bad, &data), "{bad}");
+        }
+        assert!(!in_data_secrets(&p("router-udm.api_key.1"), "relative"));
     }
 
     /// REQ: OBS-010 (ADR-179) — fails closed: a path whose links can't be looked at (a folder on

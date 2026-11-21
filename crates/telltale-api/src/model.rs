@@ -1702,9 +1702,19 @@ pub struct ConfigEntry {
     /// the files' entry of that name), or `hidden` (the files' entry is left out).
     pub source: String,
     /// The definition in effect, with the same fields as in `telltale.toml` (absent when
-    /// hidden).
+    /// hidden). REQ: API-002, T8.2 (ADR-181) — a router's key-file fields and `username` are
+    /// shown to an administrator only.
     #[schema(value_type = Option<Object>)]
     pub definition: Option<serde_json::Value>,
+    /// REQ: API-002, T8.2 (ADR-181) — a router's credentials, by name (`api_key`, `api_secret`,
+    /// `password`), as the node that answered sees them (on a replica, the primary): `saved` (its
+    /// file is there, and that node uses it), `missing` (no file there, and it is one the node
+    /// saves when a key is pasted: enter the key again, as after a restore on another machine or
+    /// a failover), `file_missing` (no file there, and it is one a platform mounts or a config
+    /// file names: put the file there), or `not_used` (the file is there, but it isn't one that
+    /// node sends for this router). Read without the secret. Absent for other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// `GET /api/v1/config/entries` parameters.
@@ -2631,6 +2641,116 @@ pub struct MaintenanceRequest {
     /// nodes.
     #[serde(default)]
     pub handover: Option<bool>,
+}
+
+/// REQ: OPS-014 (ADR-182) — `POST /api/v1/nodes/{id}/update`: install this version on the node.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NodeUpdateRequest {
+    /// A release (`0.8.0`) or an edge build (`0.8.0-edge.393`), never older than the version the
+    /// node runs. An edge build can only be installed while it is the newest on the edge channel.
+    #[schema(example = "0.8.0")]
+    pub to: String,
+}
+
+/// REQ: OPS-014 — a request handed to a node's update service and not picked up yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeUpdatePending {
+    pub id: String,
+    #[schema(example = "0.8.0")]
+    pub to: String,
+    /// Who asked: a user, `<user> via <site>` from another node, or an agent.
+    pub by: String,
+    /// When (RFC 3339).
+    pub requested_at: String,
+}
+
+/// REQ: OPS-014 — the update service's latest run on a node.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeUpdateRun {
+    /// The request it answers.
+    pub id: String,
+    #[schema(example = "0.8.0")]
+    pub to: String,
+    /// The version the node ran when the run started.
+    #[schema(example = "0.7.0")]
+    pub from: String,
+    /// `installing` (also while the restarted node is checked), `updated` (installed, restarted,
+    /// and healthy: see `health`), `up_to_date`, `rolled_back` (the new build
+    /// wasn't healthy after the restart: the previous binary is back in place; an incident to
+    /// look into, see `error`), `unavailable` (an edge build the edge channel no longer serves:
+    /// nothing installed; the error names the one it serves), `failed` (not installed, or the
+    /// previous binary couldn't be put back), or `refused` (the request was stale, malformed,
+    /// older than the node's version, on another channel, of a version whose build was installed
+    /// there and didn't come up in the last day, or the host wasn't set up for it). REQ: OPS-014 (ADR-182).
+    #[schema(example = "updated")]
+    pub state: String,
+    /// What went wrong, for `failed`, `rolled_back`, `unavailable` and `refused`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// For `updated`: how the new build's health was checked (`checked at <url>`, with any trouble
+    /// the restart command had), or why it wasn't (`not checked: the node wasn't restarted`, for a
+    /// run without `--restart`). REQ: OPS-014 (ADR-182).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    /// Who asked, as the node wrote it in the request: the update service can't check it
+    /// (unverified).
+    pub by: String,
+    /// When the state was written (RFC 3339).
+    pub at: String,
+}
+
+/// REQ: OPS-014 (ADR-182) — a version a node holds back after a run whose new build was
+/// installed and didn't come up (`rolled_back`, or `failed` once installed). A run that failed
+/// before installing anything (a download, a signature, an edge build moved on) holds nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeUpdateHeld {
+    #[schema(example = "0.8.0")]
+    pub to: String,
+    /// Until when (RFC 3339): 24 hours after that run, by the node's own record.
+    pub until: String,
+    /// Which run, when, what failed, and the ways out (by hand with `self-update --to`, or wait).
+    pub why: String,
+}
+
+/// REQ: OPS-014 (ADR-182) — a node's update state (`GET`), or what it did with a request
+/// (`POST`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeUpdate {
+    /// The node (its pod, site, or ID).
+    pub node: String,
+    /// The version it runs.
+    #[schema(example = "0.7.0")]
+    pub version: String,
+    /// `native`, `container`, or `helm`. Only a native node installs a version itself; the others
+    /// are upgraded by their image.
+    pub install: String,
+    /// The channel it follows, `edge` or `stable`: as `install.sh` set it (`--edge`), or, on an
+    /// install from before that, its version's. A stable node takes only releases; an edge node
+    /// edge builds and releases, and stays on edge. Absent from an older node. REQ: OPS-014
+    /// (ADR-182).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Its root update service (`telltale-update.path`) is enabled, so a request is picked up.
+    pub enabled: bool,
+    /// A version the node refuses for now (`update_failed_recently`): one whose new build was
+    /// installed here and didn't come up, for 24 hours after that run. REQ: OPS-014 (ADR-182).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<NodeUpdateHeld>,
+    /// After a `POST`: `requested` (handed to the update service) or `up_to_date` (it already runs
+    /// that version). Absent from a `GET`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// A request the update service hasn't picked up yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<NodeUpdatePending>,
+    /// The update service's latest run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<NodeUpdateRun>,
 }
 
 /// A node's maintenance after a start or end.
