@@ -2277,6 +2277,11 @@ export interface paths {
          *     given), before any list: a device rule beats a group rule beats an everyone rule; within one
          *     scope the longer domain wins, then allow. With `expires` or `forMinutes` it stops applying
          *     then (and is removed). It takes effect on the next query, without recompiling the lists.
+         *     `devices` takes the names of configured devices, IPs, or CIDRs; the name a router or mDNS gives
+         *     an address (a query's `clientName` for a device nobody named) is refused (422, with a hint):
+         *     use the address, or name the device first. A rule for an address stops matching when the
+         *     address changes (a Kubernetes pod's does with every restart: use `groups`, with the group an
+         *     operator placed the workload in).
          *     Rules from the config files are read-only here (409). Needs the operator role (or the
          *     `config:write:rules` agent scope, with a reason).
          */
@@ -4502,6 +4507,7 @@ export interface components {
             productId?: string | null;
             /** @description `disabled`, `privacy_level`, or `not_seen` (no queries from it in the last day). */
             reason?: string | null;
+            recognition?: components["schemas"]["DeviceRecognition"] | null;
             /**
              * Format: float
              * @description 0 to 1.
@@ -4516,6 +4522,56 @@ export interface components {
             suggestedGroup?: string | null;
             /** @description The MAC's registered vendor. */
             vendor?: string | null;
+        };
+        /**
+         * @description REQ: FLT-006, API-010 (ADR-183) — how an address is recognized on the node that answered, and
+         *     the MAC a device at that address could be named by. A device named by that MAC (`[[client]]
+         *     match = ["aa:bb:cc:dd:ee:ff"]`) is recognized wherever the MAC is seen, and so are the rules
+         *     that name it. `mac`, `macFrom` and `macShared` go only to a caller who may read the devices
+         *     (`/api/v1/clients`: a person signed in with a session or an API token of any role, or an agent
+         *     token with `config:read` that isn't restricted to a group; not a display session); anyone else
+         *     gets the rest. The MAC may also be missing because the node's query-log privacy level hides
+         *     clients (2 and above leave out `recognition` altogether).
+         */
+        DeviceRecognition: {
+            /**
+             * @description The configured device (`[[client]]`) the address is recognized as now. Never the name a
+             *     router or mDNS gives it, and never a Kubernetes workload.
+             * @example tablet
+             */
+            device?: string | null;
+            /**
+             * @description How: `client_id`, `edns_mac`, `neighbor_mac`, `router_mac`, `kubernetes`, `ip`, `cidr`, or
+             *     `default`.
+             * @example router_mac
+             */
+            identifiedBy?: string;
+            /**
+             * @description The MAC a device at this address could be named by (`aa:bb:cc:dd:ee:ff`): the kernel's
+             *     neighbor table's, else one a router reported, when it is sure of it.
+             */
+            mac?: string | null;
+            /**
+             * @description Where `mac` comes from: `neighbor` (this node's kernel table: other nodes may not see it),
+             *     `router` (this node's router) or `peer` (another full cluster member's router).
+             * @example router
+             */
+            macFrom?: string | null;
+            /**
+             * @description True when the MAC is locally administered (a "private" Wi-Fi address the device made up):
+             *     it stays the same on a network unless the device is set to change it. Unlike `mac`, `macFrom`
+             *     and `macShared` it is shown, with `device` and `identifiedBy`, to every caller who may read
+             *     identities, including one who may not read MACs: one bit, which names no device and no MAC.
+             */
+            macRandomized?: boolean;
+            /**
+             * @description True when the routers report this MAC at more than one address, or this node's kernel
+             *     neighbor table holds it at more than one IPv4 address (a range extender or bridge shares it;
+             *     a device's own IPv6 addresses don't count): it can't tell
+             *     these devices apart, so a device named by a router's MAC isn't recognized at any of them, and
+             *     the naming dialog doesn't offer it as one device's.
+             */
+            macShared?: boolean;
         };
         /** @description REQ: OBS-034 — one device's window as lanes and events. */
         DeviceTimeline: {
@@ -4832,10 +4888,25 @@ export interface components {
             device?: string | null;
             /** @description Highest priority first. */
             groups: string[];
-            /** @description `client_id`, `edns_mac`, `neighbor_mac`, `kubernetes`, `ip`, `cidr`, or `default`. */
+            /**
+             * @description `client_id`, `edns_mac`, `neighbor_mac` (a MAC the kernel's table gave, or the request),
+             *     `router_mac` (a MAC a router reported, this node's or another full member's),
+             *     `kubernetes`, `ip`, `cidr`, or `default`.
+             */
             identifiedBy: string;
             ip: string;
+            /**
+             * @description The client's MAC address: the one the request gave, else the one this node knows for the
+             *     address. Shown only to a caller who may read the devices (`config:read` for an agent token,
+             *     not restricted to a group), unless the caller gave it.
+             */
             mac?: string | null;
+            /**
+             * @description REQ: FLT-006 (ADR-183) — where the MAC comes from: `given` (the request's), `neighbor`
+             *     (this host's kernel table), `router` (this node's router) or `peer` (another full cluster
+             *     member's router). Withheld with `mac`.
+             */
+            macFrom?: string | null;
             workload?: components["schemas"]["ExplainWorkload"] | null;
         };
         ExplainFilter: {
@@ -5567,6 +5638,7 @@ export interface components {
                 productId?: string | null;
                 /** @description `disabled`, `privacy_level`, or `not_seen` (no queries from it in the last day). */
                 reason?: string | null;
+                recognition?: components["schemas"]["DeviceRecognition"] | null;
                 /**
                  * Format: float
                  * @description 0 to 1.
@@ -7183,7 +7255,11 @@ export interface components {
             answers: number;
             /** @description Client address. */
             client: string;
-            /** @description The configured device name, when known. */
+            /**
+             * @description The name shown for the client: a configured device's name, else what the router or mDNS
+             *     reports for the address (or a Kubernetes workload's `namespace/kind/name`). Only a
+             *     configured device's name works in a quick rule's `devices`; use the address for the others.
+             */
             clientName?: string | null;
             /** @description The client's primary group. */
             group?: string | null;
@@ -7418,7 +7494,14 @@ export interface components {
              * @example allow
              */
             action: string;
-            /** @description Device names, IPs, or CIDRs it applies to. */
+            /**
+             * @description Who it applies to: the names of configured devices (`[[client]]`, any case), IPs, or CIDRs.
+             *     A name a router or a device gives an address (the query log's `clientName` for an unnamed
+             *     device) isn't a device here and is refused (422, with a hint): use the address, or name the
+             *     device first. A rule for an address stops matching when the address changes. A Kubernetes
+             *     pod's address changes with every restart (its `clientName` is `namespace/kind/name`): for a
+             *     pod use `groups` with the group an operator placed the workload in, not the pod's address.
+             */
             devices?: string[];
             /**
              * @description The domain; its subdomains are included.
@@ -13355,7 +13438,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description An unknown device or group, a bad domain, or an expiry in the past. */
+            /** @description A device that isn't a configured device's name, an IP, or a CIDR (the hint says what to do; a name a router or mDNS gives an address is one), an unknown group, a bad domain, or an expiry in the past. */
             422: {
                 headers: {
                     [name: string]: unknown;

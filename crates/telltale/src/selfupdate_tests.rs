@@ -355,3 +355,105 @@ async fn ops_014_a_pinned_install_takes_only_an_index_of_the_versions_channel() 
     assert!(err.contains("channel"), "{err}");
     assert_eq!(std::fs::read(&exe).unwrap(), b"#!/bin/sh\necho old\n");
 }
+
+/// REQ: OPS-004, OPS-014 — the smoke run (`--version`) of a binary that was just written can meet
+/// "text file busy" (ETXTBSY): Linux refuses to exec a file some process still has open for
+/// writing, and a parallel fork can hold a copy of that descriptor for a moment (it made
+/// `ops_004_update_check_and_swap` fail now and then). A binary that is busy only for a moment still
+/// runs: the exec is tried again. Here the file is written and kept open, the first try is made, and
+/// the file is closed right after it, inside the same closure that starts the program: the second try
+/// finds it free, whatever the clock does. On a kernel that runs a file open for writing there is
+/// nothing to retry, and the test says so and ends.
+#[cfg(unix)]
+#[test]
+fn ops_004_a_binary_busy_for_a_moment_still_runs() {
+    use std::io::Write as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("busy");
+    let mut open = Some(std::fs::File::create(&path).unwrap());
+    open.as_mut()
+        .unwrap()
+        .write_all(b"#!/bin/sh\nexit 0\n")
+        .unwrap();
+    set_executable(&path).unwrap();
+
+    let (mut starts, mut first_was_busy) = (0, false);
+    let status = run_bounded_via(
+        std::process::Command::new(&path).arg("--version"),
+        VERSION_WAIT,
+        |cmd| {
+            starts += 1;
+            let started = cmd.spawn();
+            if starts == 1 {
+                first_was_busy = started.as_ref().err().is_some_and(text_file_busy);
+                drop(open.take()); // closed: the next try can run it
+            }
+            started
+        },
+    )
+    .unwrap();
+    assert!(status.success(), "{status}");
+    if !first_was_busy {
+        eprintln!("skipped (nothing to retry): this kernel runs a file that is open for writing");
+        return;
+    }
+    assert_eq!(starts, 2, "busy once, then it ran");
+}
+
+/// REQ: OPS-004, OPS-014 — only "text file busy" is tried again, up to five times in all: busy
+/// twice and then it runs; any other error is returned at once, untried again; busy every time is
+/// five tries and then the same error, in the same words, as one try would have given.
+#[test]
+fn ops_004_only_text_file_busy_is_tried_again() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!((EXEC_TRIES, EXEC_PAUSE), (5, Duration::from_millis(100)));
+    let busy = || Error::from_raw_os_error(26);
+
+    let mut calls = 0;
+    let ran = retry_text_busy(EXEC_TRIES, Duration::ZERO, || {
+        calls += 1;
+        if calls <= 2 { Err(busy()) } else { Ok(calls) }
+    });
+    assert_eq!(ran.unwrap(), 3, "busy twice, then it runs");
+
+    let mut calls = 0;
+    let e = retry_text_busy::<()>(EXEC_TRIES, Duration::ZERO, || {
+        calls += 1;
+        Err(Error::from(ErrorKind::NotFound))
+    })
+    .unwrap_err();
+    assert_eq!(
+        (calls, e.kind()),
+        (1, ErrorKind::NotFound),
+        "another error is not tried again"
+    );
+    let mut calls = 0;
+    let e = retry_text_busy::<()>(EXEC_TRIES, Duration::ZERO, || {
+        calls += 1;
+        Err(Error::from(ErrorKind::PermissionDenied))
+    })
+    .unwrap_err();
+    assert_eq!((calls, e.kind()), (1, ErrorKind::PermissionDenied));
+
+    let mut calls = 0;
+    let e = retry_text_busy::<()>(EXEC_TRIES, Duration::ZERO, || {
+        calls += 1;
+        Err(busy())
+    })
+    .unwrap_err();
+    assert_eq!(calls, 5, "busy every time: five tries");
+    assert_eq!(
+        e.to_string(),
+        busy().to_string(),
+        "and the error is the one a single try gives"
+    );
+
+    // The kind alone counts as busy too (not only the raw OS error).
+    let mut calls = 0;
+    let _ = retry_text_busy::<()>(3, Duration::ZERO, || {
+        calls += 1;
+        Err(Error::from(ErrorKind::ExecutableFileBusy))
+    });
+    assert_eq!(calls, 3);
+}

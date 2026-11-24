@@ -270,6 +270,7 @@ impl Backend for Fake {
             client: ExplainClient {
                 ip: "127.0.0.1".into(),
                 mac: None,
+                mac_from: None,
                 device: None,
                 identified_by: "default".into(),
                 groups: vec!["default".into()],
@@ -1665,6 +1666,15 @@ async fn api_001_openapi_is_served_and_documents_every_route() {
             );
         }
     }
+}
+
+/// REQ: FLT-006, CLU-002 (ADR-183) — a backend that doesn't override `identity_for_peer` answers a
+/// peer's identity read with nothing (not with its own `identity`, which on a federating backend
+/// asks every node): it cannot start a fan-out on a peer's behalf.
+#[test]
+fn clu_002_the_default_peer_identity_read_answers_nothing() {
+    let fake = Fake::default();
+    assert!(fake.identity_for_peer("192.168.1.20").is_err());
 }
 
 /// `spec/07` §1: the committed OpenAPI document must match the code. Regenerate with

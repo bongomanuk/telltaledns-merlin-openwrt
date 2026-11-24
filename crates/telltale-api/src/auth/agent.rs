@@ -11,7 +11,7 @@ use std::sync::{Mutex, PoisonError};
 
 use axum::http::Method;
 
-use super::Role;
+use super::{Principal, Role};
 use crate::problem::{Code, Problem};
 
 /// Every scope an agent token can hold, with what it allows.
@@ -571,6 +571,27 @@ pub fn check(
     Ok(())
 }
 
+/// REQ: AGT-004, FLT-013 (ADR-183) — whether the caller may read the devices (`GET /api/v1/clients`,
+/// which shows the MACs in their keys), and so the MAC addresses the nodes see: a signed-in person
+/// or an API token of any role does; an agent token only with the scope that route needs and not
+/// restricted to a client group; a display session never does. Anything that names a MAC the
+/// caller didn't give (explain's `client.mac`, an identity's `recognition.mac`) is for them alone.
+pub(crate) fn may_read_clients(p: &Principal) -> bool {
+    if p.display.is_some() {
+        return false;
+    }
+    match &p.agent {
+        None => true,
+        Some(g) => {
+            g.group.is_none()
+                && matches!(
+                    required(&Method::GET, "/api/v1/clients"),
+                    Need::Scope(s) if g.scopes.contains(s)
+                )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,6 +999,52 @@ mod tests {
         assert!(
             rr("/api/v1/analytics/vqlog").is_err(),
             "vqlog has no group view"
+        );
+    }
+
+    // REQ: AGT-004, FLT-013 (ADR-183) — who may read the devices, and so the MACs the nodes see: a
+    // person or token of any role; an agent only with `config:read` and no group restriction; a
+    // display session never.
+    #[test]
+    fn agt_004_may_read_clients_follows_the_clients_route() {
+        use super::super::Via;
+        let who = |role: Role, agent: Option<super::super::AgentGrant>, display: Option<&str>| {
+            Principal {
+                user_id: 1,
+                username: "x".into(),
+                role,
+                via: Via::Basic,
+                agent,
+                display: display.map(str::to_owned),
+            }
+        };
+        for role in [Role::Viewer, Role::Operator, Role::Admin] {
+            assert!(may_read_clients(&who(role, None, None)), "{role:?}");
+        }
+        assert!(may_read_clients(&who(
+            Role::Viewer,
+            Some(grant(&["analytics:read", "config:read"], None)),
+            None
+        )));
+        assert!(
+            !may_read_clients(&who(
+                Role::Viewer,
+                Some(grant(&["analytics:read", "querylog:read"], None)),
+                None
+            )),
+            "without the scope the devices route needs"
+        );
+        assert!(
+            !may_read_clients(&who(
+                Role::Viewer,
+                Some(grant(&["analytics:read", "config:read"], Some("kids"))),
+                None
+            )),
+            "restricted to a group"
+        );
+        assert!(
+            !may_read_clients(&who(Role::Viewer, None, Some("wall"))),
+            "a display session"
         );
     }
 }

@@ -738,7 +738,9 @@ pub struct QueryRow {
     pub ts_unix_micros: u64,
     /// Client address.
     pub client: String,
-    /// The configured device name, when known.
+    /// The name shown for the client: a configured device's name, else what the router or mDNS
+    /// reports for the address (or a Kubernetes workload's `namespace/kind/name`). Only a
+    /// configured device's name works in a quick rule's `devices`; use the address for the others.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
     /// The client's primary group.
@@ -837,12 +839,22 @@ pub struct Explanation {
 #[serde(rename_all = "camelCase")]
 pub struct ExplainClient {
     pub ip: String,
+    /// The client's MAC address: the one the request gave, else the one this node knows for the
+    /// address. Shown only to a caller who may read the devices (`config:read` for an agent token,
+    /// not restricted to a group), unless the caller gave it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// REQ: FLT-006 (ADR-183) — where the MAC comes from: `given` (the request's), `neighbor`
+    /// (this host's kernel table), `router` (this node's router) or `peer` (another full cluster
+    /// member's router). Withheld with `mac`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_from: Option<String>,
     /// The configured device it was recognized as.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
-    /// `client_id`, `edns_mac`, `neighbor_mac`, `kubernetes`, `ip`, `cidr`, or `default`.
+    /// `client_id`, `edns_mac`, `neighbor_mac` (a MAC the kernel's table gave, or the request),
+    /// `router_mac` (a MAC a router reported, this node's or another full member's),
+    /// `kubernetes`, `ip`, `cidr`, or `default`.
     pub identified_by: String,
     /// Highest priority first.
     pub groups: Vec<String>,
@@ -1150,6 +1162,56 @@ pub struct DeviceIdentity {
     pub changed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
+    /// REQ: FLT-006, API-010 (ADR-183) — how this address is recognized now, by the node that
+    /// answered, and the MAC a device there could be named by (`GET /api/v1/clients/{address}/identity`
+    /// only, for an address; left out at query-log privacy level 2 and above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recognition: Option<DeviceRecognition>,
+}
+
+/// REQ: FLT-006, API-010 (ADR-183) — how an address is recognized on the node that answered, and
+/// the MAC a device at that address could be named by. A device named by that MAC (`[[client]]
+/// match = ["aa:bb:cc:dd:ee:ff"]`) is recognized wherever the MAC is seen, and so are the rules
+/// that name it. `mac`, `macFrom` and `macShared` go only to a caller who may read the devices
+/// (`/api/v1/clients`: a person signed in with a session or an API token of any role, or an agent
+/// token with `config:read` that isn't restricted to a group; not a display session); anyone else
+/// gets the rest. The MAC may also be missing because the node's query-log privacy level hides
+/// clients (2 and above leave out `recognition` altogether).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceRecognition {
+    /// The configured device (`[[client]]`) the address is recognized as now. Never the name a
+    /// router or mDNS gives it, and never a Kubernetes workload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "tablet")]
+    pub device: Option<String>,
+    /// How: `client_id`, `edns_mac`, `neighbor_mac`, `router_mac`, `kubernetes`, `ip`, `cidr`, or
+    /// `default`.
+    #[serde(default)]
+    #[schema(example = "router_mac")]
+    pub identified_by: String,
+    /// The MAC a device at this address could be named by (`aa:bb:cc:dd:ee:ff`): the kernel's
+    /// neighbor table's, else one a router reported, when it is sure of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+    /// Where `mac` comes from: `neighbor` (this node's kernel table: other nodes may not see it),
+    /// `router` (this node's router) or `peer` (another full cluster member's router).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "router")]
+    pub mac_from: Option<String>,
+    /// True when the routers report this MAC at more than one address, or this node's kernel
+    /// neighbor table holds it at more than one IPv4 address (a range extender or bridge shares it;
+    /// a device's own IPv6 addresses don't count): it can't tell
+    /// these devices apart, so a device named by a router's MAC isn't recognized at any of them, and
+    /// the naming dialog doesn't offer it as one device's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mac_shared: bool,
+    /// True when the MAC is locally administered (a "private" Wi-Fi address the device made up):
+    /// it stays the same on a network unless the device is set to change it. Unlike `mac`, `macFrom`
+    /// and `macShared` it is shown, with `device` and `identifiedBy`, to every caller who may read
+    /// identities, including one who may not read MACs: one bit, which names no device and no MAC.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mac_randomized: bool,
 }
 
 /// REQ: OBS-025 — the evidence behind an identity.
@@ -1836,7 +1898,12 @@ pub struct RuleInput {
     /// The domain; its subdomains are included.
     #[schema(example = "game.example.com")]
     pub domain: String,
-    /// Device names, IPs, or CIDRs it applies to.
+    /// Who it applies to: the names of configured devices (`[[client]]`, any case), IPs, or CIDRs.
+    /// A name a router or a device gives an address (the query log's `clientName` for an unnamed
+    /// device) isn't a device here and is refused (422, with a hint): use the address, or name the
+    /// device first. A rule for an address stops matching when the address changes. A Kubernetes
+    /// pod's address changes with every restart (its `clientName` is `namespace/kind/name`): for a
+    /// pod use `groups` with the group an operator placed the workload in, not the pod's address.
     #[serde(default)]
     pub devices: Vec<String>,
     /// Groups it applies to. With neither devices nor groups: everyone.

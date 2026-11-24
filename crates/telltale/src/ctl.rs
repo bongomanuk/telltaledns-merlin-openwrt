@@ -357,7 +357,7 @@ pub(crate) struct RuleArgs {
     /// Only these groups (repeatable).
     #[arg(long = "group")]
     pub(crate) groups: Vec<String>,
-    /// Only these devices: names, IPs, or CIDRs (repeatable).
+    /// Only these devices: names of configured devices, IPs, or CIDRs (repeatable).
     #[arg(long = "device")]
     pub(crate) devices: Vec<String>,
     /// Why (shown with every decision it makes).

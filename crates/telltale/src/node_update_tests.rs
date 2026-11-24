@@ -1563,9 +1563,14 @@ fn ops_014_the_run_fits_in_the_units_time_limit() {
         .expect("TimeoutStartSec");
     assert_eq!(HEALTH_WAIT.as_secs(), 120);
     assert_eq!(crate::selfupdate::FETCH_DEADLINE.as_secs(), 480);
+    // REQ: OPS-004, OPS-014 — the budget counts the pauses of the "text file busy" tries before each
+    // of the run's bounded programs, so raising `EXEC_TRIES` or `EXEC_PAUSE` can't use up the minute.
+    assert_eq!(BOUNDED_RUNS, 4, "test run, restart, reset, second restart");
+    let retry = crate::selfupdate::exec_retry_secs(BOUNDED_RUNS);
+    assert!(retry >= 1, "the retry pauses are part of the budget");
     assert!(
         run_budget_secs() + 60 <= limit,
-        "the run may take {} s, the unit allows {limit} s",
+        "the run may take {} s (of which {retry} s of exec retries), the unit allows {limit} s",
         run_budget_secs()
     );
     // The node's lock on a run that says `installing` is the unit's limit.

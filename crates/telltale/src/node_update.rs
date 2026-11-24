@@ -1136,7 +1136,9 @@ pub(crate) const RESET_WAIT: Duration = Duration::from_secs(10);
 
 /// REQ: OPS-014 (ADR-182) — the longest the update service's run can take, in seconds: the
 /// downloads (one deadline for them all), the new binary's test run, the restart and the health
-/// window, and for a rollback the reset, a second restart and window. `TimeoutStartSec=` of
+/// window, and for a rollback the reset, a second restart and window, and the pauses of the tries
+/// each program is given when it is "text file busy" (`selfupdate::run_bounded`, which starts the
+/// test run, both restarts and the reset: [`BOUNDED_RUNS`] of them). `TimeoutStartSec=` of
 /// `telltale-update.service` must be above it with room to spare, so systemd never kills a run
 /// between the install and its check (`ops_014_the_run_fits_in_the_units_time_limit`).
 #[cfg(test)]
@@ -1148,7 +1150,14 @@ pub(crate) const fn run_budget_secs() -> u64 {
         + gate
         + RESET_WAIT.as_secs()
         + gate
+        + crate::selfupdate::exec_retry_secs(BOUNDED_RUNS)
 }
+
+/// How many times a run of the update service starts a program through `selfupdate::run_bounded`
+/// in the worst case (a rolled-back run): the new binary's test run, the restart, the reset and the
+/// second restart.
+#[cfg(test)]
+pub(crate) const BOUNDED_RUNS: u32 = 4;
 
 /// Where the health gate asks.
 #[derive(Debug, Clone, PartialEq, Eq)]

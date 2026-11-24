@@ -96,12 +96,12 @@ run render "$d" "$T/units" stable ''
 grep -qx 'Environment=TELLTALE_UPDATE_HEALTH_URL=' "$svc" || fail "API off: $(grep HEALTH_URL "$svc")"
 grep -qx 'Environment=TELLTALE_UPDATE_CHANNEL=stable' "$svc" || fail "stable: $(grep CHANNEL "$svc")"
 ok "the API off: the health URL is written empty (the update service then installs nothing)"
-# REQ: OPS-014 (ADR-182) — the run fits in the unit's limit: node_update::run_budget_secs (882 s)
+# REQ: OPS-014 (ADR-182) — the run fits in the unit's limit: node_update::run_budget_secs (884 s)
 # is checked against this value by ops_014_the_run_fits_in_the_units_time_limit; the render keeps it.
 [ "$(grep '^TimeoutStartSec=' "$svc")" = "$(grep '^TimeoutStartSec=' deploy/systemd/telltale-update.service)" ] \
   || fail "the render changed TimeoutStartSec"
-[ "$(sed -n 's/^TimeoutStartSec=//p' "$svc")" -ge 942 ] || fail "TimeoutStartSec is under the run's budget and a minute"
-ok "the rendered service keeps TimeoutStartSec=960 (above the run's 882 s budget and a minute)"
+[ "$(sed -n 's/^TimeoutStartSec=//p' "$svc")" -ge 944 ] || fail "TimeoutStartSec is under the run's budget and a minute"
+ok "the rendered service keeps TimeoutStartSec=960 (above the run's 884 s budget and a minute)"
 
 # (The last one is a letter outside the explicit list, which a locale's range might take.)
 for bad in "/srv/my data" "relative/dir" "/srv/../etc" "/srv/./x" "/srv/tt;rm" '/srv/$HOME' $'/srv/tt\xc3\xa9'; do

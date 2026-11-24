@@ -287,6 +287,17 @@ pub struct Problem {
     /// Seconds to wait, sent as `Retry-After` (rate limits).
     #[serde(skip)]
     pub retry_after: Option<u64>,
+    /// REQ: FLT-005, AGT-004 (GitHub issue #73) — `hint` with what the node that refused learned
+    /// from its own tables (which address a device name belongs to). `hint` itself is the plain
+    /// text, so a node that doesn't know this field (an older one, in a rolling upgrade) shows the
+    /// plain text and nothing else. Never serialized into the public problem: the node that answers
+    /// the caller puts this in place of `hint` only for a caller who may read every device's queries
+    /// (`simulate_api::sanitize_problem`: not an agent token without `querylog:read`). (Boxed:
+    /// `Problem` is the error of most of the API, and a bigger one makes every `Result` that carries
+    /// it large, which clippy refuses past 128 bytes.)
+    #[serde(skip)]
+    #[allow(clippy::box_collection)] // a `Box<String>` is 8 bytes; a `String` is 24
+    pub fuller_hint: Option<Box<String>>,
 }
 
 impl Problem {
@@ -300,7 +311,16 @@ impl Problem {
             hint: None,
             diff: None,
             retry_after: None,
+            fuller_hint: None,
         }
+    }
+
+    /// Gives the hint a fuller form, for callers who may see what it learned from this node's
+    /// tables (see [`Problem::fuller_hint`]); `hint` is what everyone else gets.
+    #[must_use]
+    pub fn fuller_hint(mut self, fuller: impl Into<String>) -> Self {
+        self.fuller_hint = Some(Box::new(fuller.into()));
+        self
     }
 
     /// Attaches the diff a `cluster_pinned` problem shows.

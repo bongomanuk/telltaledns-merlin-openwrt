@@ -31,6 +31,27 @@ const MAX_BINARY: u64 = 128 * 1024 * 1024;
 pub(crate) const FETCH_DEADLINE: Duration = Duration::from_secs(480);
 /// How long the new binary's test run (`--version`) may take before it is killed and refused.
 pub(crate) const VERSION_WAIT: Duration = Duration::from_secs(10);
+/// How many times in all a program that is "text file busy" (ETXTBSY) is started, and how long the
+/// pause between the tries is. Nothing else is tried again.
+const EXEC_TRIES: u32 = 5;
+const EXEC_PAUSE: Duration = Duration::from_millis(100);
+
+/// REQ: OPS-004, OPS-014 — the most the pauses between those tries add to `runs` bounded runs
+/// (each one is started, tried again while "text file busy", and only then waited for), in whole
+/// seconds, rounded up. Part of the root update service's time budget
+/// (`node_update::run_budget_secs`), so raising [`EXEC_TRIES`] or [`EXEC_PAUSE`] can't quietly use
+/// up the room the unit's `TimeoutStartSec=` leaves.
+#[cfg(test)]
+pub(crate) const fn exec_retry_secs(runs: u32) -> u64 {
+    let pauses = EXEC_PAUSE
+        .saturating_mul(EXEC_TRIES.saturating_sub(1))
+        .saturating_mul(runs);
+    if pauses.subsec_nanos() == 0 {
+        pauses.as_secs()
+    } else {
+        pauses.as_secs() + 1
+    }
+}
 /// How long `systemctl restart telltale` is waited for: twice the node unit's `TimeoutStopSec=30`
 /// (a graceful drain, then systemd's SIGKILL), so the old process is gone by then. The restart
 /// itself goes on if it takes longer, and neither that nor a non-zero exit fails the build: the
@@ -193,18 +214,55 @@ pub(crate) fn systemctl() -> &'static str {
     }
 }
 
+/// REQ: OPS-004, OPS-014 — "text file busy" (`ETXTBSY`): the kernel won't run a file some process
+/// still has open for writing. A binary written a moment ago can be one: a process that forks in
+/// parallel holds a copy of the descriptor until it execs itself.
+fn text_file_busy(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
+}
+
+/// Runs `exec` and, only when it fails with "text file busy", again, up to `tries` times in all and
+/// `pause` apart. Any other error, and the last one when it stays busy, is returned as it is.
+fn retry_text_busy<T>(
+    tries: u32,
+    pause: Duration,
+    mut exec: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match exec() {
+            Err(e) if text_file_busy(&e) && attempt < tries => {
+                attempt += 1;
+                std::thread::sleep(pause);
+            }
+            done => return done,
+        }
+    }
+}
+
 /// REQ: OPS-014 (ADR-182) — runs `cmd` (its output discarded) and waits for it at most `limit`:
-/// past that it is killed (for the restart, only `systemctl` itself: the restart goes on).
+/// past that it is killed (for the restart, only `systemctl` itself: the restart goes on). A program
+/// that is "text file busy" at the start is started again (see [`retry_text_busy`]).
 pub(crate) fn run_bounded(
     cmd: &mut std::process::Command,
     limit: Duration,
 ) -> Result<std::process::ExitStatus, String> {
-    let mut child = cmd
+    run_bounded_via(cmd, limit, std::process::Command::spawn)
+}
+
+/// [`run_bounded`], with the way the program is started given (a test closes a file between two
+/// tries, so the second one finds it free, with no clock to race).
+fn run_bounded_via(
+    cmd: &mut std::process::Command,
+    limit: Duration,
+    mut start: impl FnMut(&mut std::process::Command) -> std::io::Result<std::process::Child>,
+) -> Result<std::process::ExitStatus, String> {
+    let cmd = cmd
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stderr(std::process::Stdio::null());
+    let mut child =
+        retry_text_busy(EXEC_TRIES, EXEC_PAUSE, || start(cmd)).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {

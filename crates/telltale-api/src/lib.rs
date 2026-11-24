@@ -557,6 +557,18 @@ pub trait Backend: Send + Sync + 'static {
             "device identification isn't available on this node",
         ))
     }
+    /// REQ: FLT-006, CLU-002 (ADR-183) — this node's identity of a device as it answers another
+    /// node's read: [`Backend::identity`] without `recognition`, which only the entry node's own
+    /// view uses (it is not computed for a peer, nor are this node's MACs sent to it). A backend
+    /// that answers peers overrides it (the local one answers for itself, the federating one asks
+    /// its local backend and never every node); the default answers nothing, so a backend that
+    /// forgets cannot start a fan-out on a peer's behalf.
+    fn identity_for_peer(&self, client: &str) -> Result<model::DeviceIdentity, Problem> {
+        let _ = client;
+        Err(Problem::unavailable(
+            "device identification isn't available on this node",
+        ))
+    }
     /// REQ: OBS-024 (T13.1) — what the shared configuration `config` (JSON) would have done to
     /// the logged queries over `opts`' window, compared with the configuration in effect
     /// (`POST /api/v1/simulate`).
@@ -2074,9 +2086,21 @@ async fn queries(
     responses((status = 200, body = Explanation, description = "The result."), (status = 400, body = Problem, description = "Invalid request: problem+json says which parameter and how to fix it.")))]
 async fn explain(
     State(b): State<Shared>,
+    ext: axum::http::Extensions,
     Query(p): Query<ExplainParams>,
 ) -> Result<Json<Explanation>, Problem> {
-    blocking(move || b.explain(&p)).await.map(Json)
+    // REQ: AGT-004, FLT-013 (ADR-183) — the kernel's neighbor table is read on every node, so the
+    // MAC of the client is known whether or not a device is named by its MAC: it goes only to a
+    // caller who may read the devices, or who gave it themselves.
+    let shows_macs =
+        auth::routes::principal(&ext).is_ok_and(|who| auth::agent::may_read_clients(&who));
+    let gave_mac = p.mac.is_some();
+    let mut e = blocking(move || b.explain(&p)).await?;
+    if !shows_macs && !gave_mac {
+        e.client.mac = None;
+        e.client.mac_from = None;
+    }
+    Ok(Json(e))
 }
 
 /// Filter lists and their download state.
