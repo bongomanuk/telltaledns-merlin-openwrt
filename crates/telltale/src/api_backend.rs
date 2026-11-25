@@ -143,8 +143,12 @@ pub(crate) fn device_name(src: &Sources, ip: [u8; 16]) -> Option<String> {
                         .find_map(|t| t.get(&v4).and_then(|l| l.hostname.clone()))
                 })
         })
-        // Loopback is the router itself: dnsmasq's own lookups have no device and no MAC.
-        .or_else(|| ip.is_loopback().then(|| "router (dnsmasq)".to_owned()))
+        // On a router, loopback is the router itself: dnsmasq's own lookups have no device
+        // and no MAC. Off a router, keep the address: that is what the API reports.
+        .or_else(|| {
+            (ip.is_loopback() && crate::router_admin::platform() != "other")
+                .then(|| "router (dnsmasq)".to_owned())
+        })
 }
 
 /// REQ: FLT-006, API-010 (ADR-183) — how the address `ip` is recognized on this node now, and the
