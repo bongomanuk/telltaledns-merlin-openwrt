@@ -1370,7 +1370,9 @@ impl Backend for ApiBackend {
             (_, true) => ("blocked", telltale_telemetry::agg::TopKind::Blocked),
             _ => ("domains", telltale_telemetry::agg::TopKind::Domains),
         };
-        let n = usize::try_from((q.to_s - q.from_s).div_ceil(3600)).unwrap_or(0);
+        // REQ: OBS-029 — hours of the window, at most `MAX_SLOTS`; none when it doesn't end after
+        // it starts (a peer's read names its own window).
+        let n = telltale_api::heatmap::window_slots(q.from_s, q.to_s, 3600);
         let mut part = telltale_api::heatmap::KeyPart {
             values: vec![0; n],
             covered: vec![true; n],
@@ -2354,6 +2356,8 @@ impl Backend for ApiBackend {
                     rhythm: rhythm.map(|b| b.iter().map(|&n| u32::from(n)).collect()),
                     informational: f.kind.informational(),
                     muted_by: f.muted_by,
+                    // REQ: OBS-038 (ADR-186) — a storm-only mute a counted sweep names.
+                    storm_mute: f.storm_mute,
                 }
             })
             .collect();
