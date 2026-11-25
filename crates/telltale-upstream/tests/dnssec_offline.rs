@@ -229,9 +229,10 @@ fn zone_with(proof_ttl: u32) -> Zone {
 ///   inside Opt-Out spans (`v.t.`'s is the apex record's own span).
 /// - `x.t.` is an ordinary name, so that the span covering `u.t.` isn't the apex's record.
 ///
-/// `u.t.`'s server answers like a parked domain's: every name has an SOA and NS of its own,
-/// which makes the validation library judge its answers bogus. `v.t.` is an ordinary unsigned
-/// zone.
+/// `u.t.`'s server answers like a parked domain's: every name has an SOA and NS of its own (the
+/// validation library judged its answers bogus up to hickory-net 0.26.3). `old.u.t.`'s address
+/// still has a signature of `u.t.`'s, whose key is gone: the library judges that one bogus.
+/// `v.t.` is an ordinary unsigned zone.
 struct Tld {
     /// `t.`'s record sets with their signatures, by (owner, type), its NSEC3 chain included.
     sets: BTreeMap<(Name, RecordType), Vec<Record>>,
@@ -345,14 +346,15 @@ fn hashed_owner(name: &Name, zone: &str) -> Name {
 
 /// An NSEC3 record without a signature, owned directly below `zone` at `name`'s hash.
 fn unsigned_nsec3(name: &Name, zone: &str) -> Record {
-    let nsec3 = NSEC3::new(
+    let nsec3 = NSEC3::try_new(
         Nsec3HashAlgorithm::SHA1,
         false,
         0,
         Vec::new(),
         vec![0xff; 20],
         [RecordType::A, RecordType::RRSIG],
-    );
+    )
+    .unwrap();
     Record::from_rdata(
         hashed_owner(name, zone),
         300,
@@ -430,8 +432,8 @@ const ALIASES: [(&str, &str); 12] = [
     ("out.s.t.", "x.l.v.t."),
     // Through `v.t.` and back.
     ("round.s.t.", "back.v.t."),
-    // Into `u.t.`, whose answers the validation library judges bogus.
-    ("parked.s.t.", "www.u.t."),
+    // Into `u.t.`, at a name whose answer the validation library judges bogus.
+    ("stale.s.t.", "old.u.t."),
 ];
 
 /// [`hashed_zone`]: the zone's record sets with their signatures (the NSEC3 chain included), that
@@ -473,14 +475,15 @@ fn hashed_zone() -> HashedZone {
     ];
     for (i, (name, types)) in chain.iter().enumerate() {
         let next = h3(&chain[(i + 1) % chain.len()].0);
-        let nsec3 = NSEC3::new(
+        let nsec3 = NSEC3::try_new(
             Nsec3HashAlgorithm::SHA1,
             false,
             0,
             Vec::new(),
             next,
             types.iter().copied(),
-        );
+        )
+        .unwrap();
         rrsets.push((
             hashed_owner(name, "z3.s.t."),
             vec![RData::DNSSEC(DNSSECRData::NSEC3(nsec3))],
@@ -533,14 +536,15 @@ fn tld(proof_ttl: u32) -> Tld {
     ];
     for (i, (name, types)) in chain.iter().enumerate() {
         let next = h3(&chain[(i + 1) % chain.len()].0);
-        let nsec3 = NSEC3::new(
+        let nsec3 = NSEC3::try_new(
             Nsec3HashAlgorithm::SHA1,
             true,
             0,
             Vec::new(),
             next,
             types.iter().copied(),
-        );
+        )
+        .unwrap();
         denials.push((
             h3_owner(name),
             vec![RData::DNSSEC(DNSSECRData::NSEC3(nsec3))],
@@ -639,6 +643,11 @@ fn tld(proof_ttl: u32) -> Tld {
             vec![Record::from_rdata(name, 3600, d)],
         );
     }
+    plain.extend(signed(
+        vec![(n("old.u.t."), vec![RData::A(A::new(192, 0, 2, 51))])],
+        &zone_signer(&n("u.t.")).0,
+        3600,
+    ));
     Tld {
         sets,
         chain: chain
@@ -1478,22 +1487,24 @@ async fn nfr_004_offline_slow_upstream_ends_within_two_budgets() {
 }
 
 /// REQ: DNS-011 (ADR-098, ADR-184) — a name below a delegation that has no DS and lies inside an
-/// NSEC3 Opt-Out span (`u.t.`, whose server answers like a parked domain's, so the validation
-/// library judges the answer bogus) is insecure: served, without AD. `t.`'s denial of the DS
-/// proves it: the NSEC3 matching `t.` (the closest encloser) and an Opt-Out NSEC3 covering
-/// `u.t.`'s hash.
+/// NSEC3 Opt-Out span (`u.t.`, whose server answers like a parked domain's) is insecure: served,
+/// without AD, also when the validation library judges the answer bogus (`old.u.t.`, with a
+/// signature left over). `t.`'s denial of the DS proves it: the NSEC3 matching `t.` (the closest
+/// encloser) and an Opt-Out NSEC3 covering `u.t.`'s hash.
 #[tokio::test]
 async fn dns_011_offline_opt_out_unsigned_delegation_is_insecure() {
     let (v, g, _, stats, _dir) = setup(true).await;
     let budget = Duration::from_secs(5);
     warm_tld(&v, &g).await;
-    let r = v
-        .resolve(&g, question("www.u.t", rtype::A), budget, true, false)
-        .await
-        .unwrap();
-    assert_eq!(r.verdict, Verdict::Insecure, "www.u.t. A");
-    assert_ne!(r.bytes.len(), 0, "an answer to serve");
-    assert!(!telltale_proto::Header::parse(&r.bytes).unwrap().flags.ad());
+    for name in ["www.u.t", "old.u.t"] {
+        let r = v
+            .resolve(&g, question(name, rtype::A), budget, true, false)
+            .await
+            .unwrap();
+        assert_eq!(r.verdict, Verdict::Insecure, "{name} A");
+        assert_ne!(r.bytes.len(), 0, "an answer to serve: {name}");
+        assert!(!telltale_proto::Header::parse(&r.bytes).unwrap().flags.ad());
+    }
     assert_eq!(stats.bogus.load(Ordering::Relaxed), 0);
 }
 
@@ -1839,7 +1850,7 @@ async fn dns_011_offline_link_lookup_timeout_stays_bogus() {
             "a denial behind a CNAME; the deadline runs out",
         ),
         (
-            "parked.s.t",
+            "stale.s.t",
             rtype::A,
             Some("x.t"),
             950,
@@ -1886,8 +1897,8 @@ async fn dns_011_offline_link_lookup_timeout_stays_bogus() {
 }
 
 /// REQ: DNS-011, NFR-004 (ADR-188) — link-by-link validation runs on slots of its own, apart from
-/// the unsigned-zone proofs, so the proof one of its links needs still finds one. `parked.s.t. A`
-/// (a signed CNAME to `www.u.t.`, whose address the validation library judges bogus) needs that
+/// the unsigned-zone proofs, so the proof one of its links needs still finds one. `stale.s.t. A`
+/// (a signed CNAME to `old.u.t.`, whose address the validation library judges bogus) needs that
 /// proof for its second link:
 /// 1. with every proof slot taken but one, it is insecure;
 /// 2. with every proof slot taken, it stays bogus, and isn't remembered as failed for that: the
@@ -1899,7 +1910,7 @@ async fn dns_011_link_validation_leaves_slots_for_its_proofs() {
     async fn round(v: &Validator, g: &Arc<Group>) -> Option<Verdict> {
         v.resolve(
             g,
-            question("parked.s.t", rtype::A),
+            question("stale.s.t", rtype::A),
             Duration::from_secs(5),
             true,
             false,
@@ -2033,9 +2044,9 @@ async fn dns_011_offline_nsec_question_does_not_follow_a_cname() {
 }
 
 /// REQ: DNS-011 (ADR-098, ADR-184) — a signed CNAME into a zone that is unsigned but whose answers
-/// the validation library judges bogus (`parked.s.t.` to `www.u.t.`, whose server answers like a
-/// parked domain's) is insecure: served, without AD. The library's verdict on the whole answer is
-/// bogus; link by link, the CNAME validates and the target's zone is proven unsigned.
+/// the validation library judges bogus (`stale.s.t.` to `old.u.t.`, whose address has a signature
+/// left over, without a key) is insecure: served, without AD. The library's verdict on the whole
+/// answer is bogus; link by link, the CNAME validates and the target's zone is proven unsigned.
 #[tokio::test]
 async fn dns_011_offline_signed_cname_into_misjudged_unsigned_zone_is_insecure() {
     let (v, g, _, stats, _dir) = setup(true).await;
@@ -2043,16 +2054,16 @@ async fn dns_011_offline_signed_cname_into_misjudged_unsigned_zone_is_insecure()
     warm_tld(&v, &g).await;
     let secure = stats.secure.load(Ordering::Relaxed);
     let r = v
-        .resolve(&g, question("parked.s.t", rtype::A), budget, true, false)
+        .resolve(&g, question("stale.s.t", rtype::A), budget, true, false)
         .await
         .unwrap();
-    assert_eq!(r.verdict, Verdict::Insecure, "parked.s.t. A");
+    assert_eq!(r.verdict, Verdict::Insecure, "stale.s.t. A");
     assert_eq!(rcode(&r.bytes), telltale_proto::rcode::NOERROR);
     assert_eq!(
         answered(&r.bytes),
         vec![
-            ("parked.s.t.".to_owned(), RecordType::CNAME),
-            ("www.u.t.".to_owned(), RecordType::A)
+            ("stale.s.t.".to_owned(), RecordType::CNAME),
+            ("old.u.t.".to_owned(), RecordType::A)
         ],
         "the CNAME, then the address"
     );
@@ -2564,18 +2575,18 @@ async fn dns_011_offline_insecure_zone_proof_is_per_group_and_ttl_bounded() {
     for g in [&g1, &g2] {
         warm_tld(&v, g).await;
     }
-    let www = question("www.u.t", rtype::A);
-    let r = v.resolve(&g1, www, budget, true, false).await.unwrap();
+    let old = question("old.u.t", rtype::A);
+    let r = v.resolve(&g1, old, budget, true, false).await.unwrap();
     assert_eq!(r.verdict, Verdict::Insecure);
     assert_ne!(r.bytes.len(), 0, "validated, and the zone proven unsigned");
-    let r = v.resolve(&g1, www, budget, true, false).await.unwrap();
+    let r = v.resolve(&g1, old, budget, true, false).await.unwrap();
     assert_eq!(
         (r.verdict, r.bytes.len()),
         (Verdict::Insecure, 0),
         "remembered for the group that proved it"
     );
     let before = asked2.load(Ordering::Relaxed);
-    let r = v.resolve(&g2, www, budget, true, false).await.unwrap();
+    let r = v.resolve(&g2, old, budget, true, false).await.unwrap();
     assert_eq!(r.verdict, Verdict::Insecure);
     assert_ne!(r.bytes.len(), 0, "another group proves it itself");
     assert!(
@@ -2586,7 +2597,7 @@ async fn dns_011_offline_insecure_zone_proof_is_per_group_and_ttl_bounded() {
     let (v, g, _, _, _d3) = setup_zone(true, Arc::new(zone_with(0))).await;
     warm_tld(&v, &g).await;
     for round in 1..=2 {
-        let r = v.resolve(&g, www, budget, true, false).await.unwrap();
+        let r = v.resolve(&g, old, budget, true, false).await.unwrap();
         assert_eq!(r.verdict, Verdict::Insecure, "TTL 0 (question {round})");
         assert_ne!(
             r.bytes.len(),
