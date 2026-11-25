@@ -161,6 +161,10 @@ fn main() {
         &tmp.path().join("snap"),
         &CompileOptions {
             threads,
+            memory_budget: std::env::var("COMPILE_BENCH_MEMORY_MIB")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .map_or(128 << 20, |m| m << 20),
             ..CompileOptions::default()
         },
         Some(|_m| {}),

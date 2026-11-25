@@ -234,6 +234,47 @@ fn i(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
+/// How long a start-up step waits for another opener of the same file (SQLite's busy timeout).
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The schema version `meta` records: how many migrations ran (0 on a new file).
+fn schema_version(conn: &Connection) -> rusqlite::Result<usize> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0))
+}
+
+/// Applies the migrations this file hasn't run yet, in one transaction, and records how many
+/// have run.
+///
+/// REQ: API-003 — two openers of a *new* file must not both apply the same migration. The
+/// version is read again inside an `IMMEDIATE` transaction, so the second opener waits for the
+/// first to commit and then finds the work done. An up-to-date file takes the early return and
+/// never takes the write lock. A failing migration rolls the transaction back.
+fn migrate(conn: &mut Connection, migrations: &[&str]) -> rusqlite::Result<()> {
+    if schema_version(conn)? >= migrations.len() {
+        return Ok(());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let done = schema_version(&tx)?;
+    if done >= migrations.len() {
+        return Ok(());
+    }
+    for sql in migrations.iter().skip(done) {
+        tx.execute_batch(sql)?;
+    }
+    tx.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [migrations.len().to_string()],
+    )?;
+    tx.commit()
+}
+
 /// Sets the journal mode, falling back to the rollback journal where WAL is not
 /// available. JFFS2 (the `/jffs` partition on Asus routers) cannot back the WAL
 /// shared-memory file and answers "disk I/O error" on the first write. The NTFS
@@ -291,7 +332,7 @@ impl State {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         set_journal(&conn)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;

@@ -64,7 +64,10 @@ pub struct CompileOptions {
     /// Threads for parsing (large lists are split into line-aligned chunks) and for building
     /// FST shards. 1 = everything on the calling thread.
     pub threads: usize,
-    /// In-memory budget for sort records before spilling to disk (`05` §3.4: 128 MiB).
+    /// Ceiling on bytes held while sorting records before spilling to disk (`05` §3.4).
+    /// Each parser thread's working batch is capped at 1 MiB whatever this says, so the
+    /// compile's peak memory does not grow with the lists. Raising it cannot buy back the
+    /// old large batches.
     pub memory_budget: usize,
     /// Snapshot version recorded in the manifest.
     pub version: u64,

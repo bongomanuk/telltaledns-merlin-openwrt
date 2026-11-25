@@ -386,15 +386,47 @@ pub(crate) fn custom_client_names(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// One poll of a UniFi console or Network application.
-async fn poll_unifi(
-    client: &telltale_filter::fetch::Client,
-    c: &RouterConfig,
-) -> Result<Seen, String> {
-    let base = c.url.trim_end_matches('/');
-    let site = c.site.as_deref().unwrap_or("default");
-    if let Some(key) = secret(c.api_key_file.as_ref())? {
-        let url = format!("{base}/proxy/network/api/s/{site}/stat/sta");
+/// A value safe in one path segment (a UniFi site name). Kept here because the merge that
+/// brought in the UniFi session lost this helper; `ctl`'s copy is private to that module.
+fn path_segment(v: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for b in v.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+/// How to reach a UniFi Network API once signed in: the path prefix (`/proxy/network` on
+/// UniFi OS consoles) and the header that authenticates (`x-api-key`, or the login cookie).
+struct UnifiSession<'a> {
+    base: &'a str,
+    site: &'a str,
+    prefix: &'static str,
+    auth: (&'static str, String),
+    /// `offline_days` of the router's settings (0: connected clients only).
+    offline_days: u32,
+}
+
+impl UnifiSession<'_> {
+    /// `GET` one path under the site; the JSON answer, or why not.
+    async fn get(
+        &self,
+        client: &telltale_filter::fetch::Client,
+        path: &str,
+    ) -> Result<Value, String> {
+        // REQ: T8.2 (ADR-181) — security F6: the site goes into the path template only, as one
+        // percent-encoded segment, never into the address.
+        let url = format!(
+            "{}{}{}",
+            self.base,
+            self.prefix,
+            path.replace("{site}", &path_segment(self.site))
+        );
         let req = http::Request::get(url.as_str())
             .header(self.auth.0, self.auth.1.as_str())
             .header("accept", "application/json")
@@ -449,7 +481,6 @@ async fn poll_unifi(
         })
     }
 }
-
 /// One poll of a UniFi console or Network application.
 async fn poll_unifi(
     client: &telltale_filter::fetch::Client,
@@ -571,8 +602,100 @@ async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
     Ok(seen)
 }
 
+/// REQ: FLT-006 (ADR-183) — the addresses whose binding to a MAC can't be trusted to identify a
+/// device, from the fresh routers' connected clients, MACs compared as parsed bytes:
+/// - an address that more than one MAC is reported at (by two routers, or two rows of one);
+/// - every address of a MAC that is reported at two or more addresses (a range extender or a
+///   bridge that shares its MAC);
+/// - an address UniFi gave a connected client from its last-known address (`not_current`).
+///
+/// A stale router's data marks nothing (it is no longer trusted at all: see `rebuild`).
+fn unsure_addresses(
+    parts: &HashMap<String, Polled>,
+    order: &[&String],
+    stale: &HashSet<String>,
+) -> HashSet<Ipv4Addr> {
+    use crate::identify::oui::parse_mac;
+    let fresh = || order.iter().filter(|n| !stale.contains(n.as_str()));
+    // Per address: the first MAC reported (one that doesn't parse counts as its own text, so it
+    // still disagrees with another MAC) and whether a different one was reported too. Per MAC: its
+    // first address and whether it was reported at another. One small entry each, not a set.
+    let mut at: HashMap<Ipv4Addr, (Result<[u8; 6], String>, bool)> = HashMap::new();
+    let mut of: HashMap<[u8; 6], (Ipv4Addr, bool)> = HashMap::new();
+    let mut unsure = HashSet::new();
+    for name in fresh() {
+        let p = &parts[*name];
+        let not_current: HashSet<[u8; 6]> =
+            p.not_current.iter().filter_map(|m| parse_mac(m)).collect();
+        for d in &p.now {
+            let parsed = parse_mac(&d.0);
+            let key = parsed.ok_or_else(|| d.0.trim().to_ascii_lowercase());
+            match at.entry(d.1) {
+                Entry::Occupied(mut e) => {
+                    if e.get().0 != key {
+                        e.get_mut().1 = true;
+                    }
+                }
+                Entry::Vacant(e) => {
+                    e.insert((key, false));
+                }
+            }
+            if let Some(mac) = parsed {
+                match of.entry(mac) {
+                    Entry::Occupied(mut e) => {
+                        if e.get().0 != d.1 {
+                            e.get_mut().1 = true;
+                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert((d.1, false));
+                    }
+                }
+                if not_current.contains(&mac) {
+                    unsure.insert(d.1);
+                }
+            }
+        }
+    }
+    unsure.extend(
+        at.iter()
+            .filter(|(_, (_, differs))| *differs)
+            .map(|(ip, _)| *ip),
+    );
+    for name in fresh() {
+        for d in &parts[*name].now {
+            if parse_mac(&d.0).is_some_and(|mac| of.get(&mac).is_some_and(|(_, many)| *many)) {
+                unsure.insert(d.1);
+            }
+        }
+    }
+    unsure
+}
+
+/// REQ: FLT-006 (ADR-183) — how many of a router's rows carry a MAC that can't identify a device
+/// (empty, all zero, multicast, or in a form that isn't read): such an address is withheld from
+/// identification, and the device falls back to its address, by design.
+pub(crate) fn unusable_macs(seen: &[Device]) -> usize {
+    seen.iter()
+        .filter(|d| crate::devices::usable_mac(&d.0).is_none())
+        .count()
+}
+
 /// The leases view from every router's last answer.
-fn rebuild(parts: &HashMap<String, Seen>, view: &ArcSwap<Leases>) {
+fn rebuild(parts: &HashMap<String, Polled>, view: &ArcSwap<Leases>, stale: &HashSet<String>) {
+    let lease = |d: &Device, offline: bool| Lease {
+        mac: d.0.clone(),
+        ip: d.1,
+        hostname: d.2.clone(),
+        expires: 0,
+        offline,
+        unsure: false,
+        stale: false,
+    };
+    let mut order: Vec<&String> = parts.keys().collect();
+    order.sort_by(|a, b| {
+        (!stale.contains(a.as_str()), a.as_str()).cmp(&(!stale.contains(b.as_str()), b.as_str()))
+    });
     let mut m = Leases::new();
     // Addresses whose winning (last) connected row is a stale router's.
     let mut from_stale: HashSet<Ipv4Addr> = HashSet::new();
@@ -721,7 +844,7 @@ pub(crate) async fn run(
             let result = match r.kind {
                 RouterKind::Unifi => poll_unifi(&client, r).await,
                 RouterKind::Opnsense => poll_opnsense(&client, r).await,
-                RouterKind::Dnsmasq => poll_dnsmasq(r).await,
+                RouterKind::Dnsmasq => poll_dnsmasq(r).await.map(Polled::now),
             };
             let was_failing = failing.get(r.name.as_str()).copied().unwrap_or(false);
             match result {

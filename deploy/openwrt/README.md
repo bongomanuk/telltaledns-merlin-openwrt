@@ -171,6 +171,10 @@ delete the query log and state.
 - The packages are unsigned. `apk add --allow-untrusted` is required.
 - The service runs as root because it binds port 53.
 - The web UI is plain HTTP on `:8053`; keep it on the LAN.
+- The starter config keeps `[filter] compile_memory = "16MiB"`. A daily list
+  refresh compiles a new snapshot while the old one answers, and on a small
+  router that peak can exhaust RAM. The low budget spills sorts to disk instead.
+  Keep it if you add larger lists, and check free memory during a refresh.
 - New builds follow upstream releases: the [`upstream-watch`](../../.github/workflows/upstream-watch.yml)
   workflow dispatches a build for each new `paimonsoror/telltaledns` release.
 - Build the package yourself with [`build-apk.sh`](build-apk.sh) and the OpenWrt 25.12

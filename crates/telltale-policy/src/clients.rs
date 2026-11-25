@@ -377,6 +377,15 @@ impl MacTable {
         self.map.get(&ip).copied()
     }
 
+    /// The address a MAC had, from any source. The reverse of [`Self::get`], for a device whose
+    /// DHCP lease is gone but whose neighbor entry is still there.
+    pub fn ip_of_mac(&self, mac: [u8; 6]) -> Option<IpAddr> {
+        self.map
+            .iter()
+            .find(|(_, e)| e.mac == mac)
+            .map(|(ip, _)| *ip)
+    }
+
     /// REQ: FLT-006, API-010 (ADR-183) — how many IPv4 addresses the kernel's neighbor table gives
     /// `mac`: behind a MAC-translating extender it is the entry of every address behind it. IPv6
     /// entries are not counted (D6): a dual-stack device has a link-local and one or more global
@@ -458,12 +467,14 @@ impl Neighbors {
 
     /// The address this MAC had in the last kernel read. The reverse of [`get`], for a
     /// device whose DHCP lease is gone but whose ARP entry is still there.
+    /// The MAC for `ip` and where it came from.
+    #[inline]
+    pub fn entry(&self, ip: IpAddr) -> Option<MacEntry> {
+        self.map.load().get(ip)
+    }
+
     pub fn ip_of_mac(&self, mac: [u8; 6]) -> Option<IpAddr> {
-        self.map
-            .load()
-            .iter()
-            .find(|(_, m)| **m == mac)
-            .map(|(ip, _)| *ip)
+        self.table().ip_of_mac(mac)
     }
 
     pub fn len(&self) -> usize {

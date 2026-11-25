@@ -185,7 +185,10 @@ fn flt_004_spilling_and_threads_produce_identical_snapshots() {
         },
     )
     .unwrap();
-    assert_eq!(a.spilled_runs, 0);
+    // Both spill now: the parser's working batch is capped at 1 MiB whatever the budget,
+    // so a large budget can no longer hold a whole large list in RAM. The snapshots still
+    // have to agree.
+    assert!(a.spilled_runs > 0);
     assert!(b.spilled_runs > 0);
     let blobs = |r: &CompileReport| {
         r.manifest

@@ -55,6 +55,14 @@ type = "dnsmasq"
 url = "file:///var/lib/misc/dnsmasq.leases"
 interval_secs = 60
 
+# A refresh compiles a new snapshot while the old one keeps answering. That
+# briefly needs more RAM than a 512 MB router has spare. Keep the sort budget at
+# the lowest value the resolver accepts so entries spill to the snapshot
+# directory instead of pushing the router into the OOM killer. The refresh is a
+# little slower on a USB stick; the LAN stays up.
+[filter]
+compile_memory = "16MiB"
+
 # A compact blocklist (about 2 MB) rather than the 150k-name list, to leave
 # room for the binary and the data directory on a small JFFS partition.
 [[list]]

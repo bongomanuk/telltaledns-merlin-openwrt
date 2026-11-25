@@ -49,6 +49,12 @@ type = "dnsmasq"
 url = "file:///tmp/dhcp.leases"
 interval_secs = 60
 
+# A refresh compiles a new snapshot while the old one keeps answering. On a
+# small router that peak can exhaust RAM, so keep the sort budget at the lowest
+# accepted value and let entries spill to the snapshot directory instead.
+[filter]
+compile_memory = "16MiB"
+
 # A balanced ad and tracker blocklist (about 150k names), refreshed daily.
 [[list]]
 name = "hagezi-pro"

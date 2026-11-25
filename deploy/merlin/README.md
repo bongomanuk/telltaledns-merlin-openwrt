@@ -447,6 +447,18 @@ service restart_dnsmasq
 
 - dnsmasq stays on port 53 and owns DHCP; TelltaleDNS listens on loopback 5354.
 - About 15 MB idle memory; blocklists are held in a compact in-memory index.
+- **A list refresh is the high-water mark for RAM.** The resolver compiles a new
+  snapshot while the old one keeps answering, and a 512 MB router has little
+  free memory at that moment. Asuswrt sets `vm.panic_on_oom=1`, so an OOM takes
+  the whole router down rather than one process. The sort's working batch is
+  capped at 1 MiB per parser thread in the code, so the peak no longer grows
+  with the list, and the shipped config also sets `[filter] compile_memory =
+  "16MiB"` as a ceiling. The launcher marks the resolver with
+  `oom_score_adj=500` so that, if there is still an OOM, the resolver is killed
+  and not the router. dnsmasq keeps port 53, serves local names and falls back
+  to the plain upstreams from `dnsmasq.conf.add`, so the LAN survives it. Re-run
+  `install.sh` to pick up the boot-hook change on an older install, and add the
+  `[filter]` block to a config you kept by hand before adding a larger list.
 - Nothing is written to the router's flash while it runs: `data_dir` is on the USB
   drive, or in `/tmp` (RAM) without one. Install writes the compressed binary, the config
   and the boot hook once.

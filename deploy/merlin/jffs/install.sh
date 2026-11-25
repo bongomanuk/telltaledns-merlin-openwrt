@@ -168,6 +168,10 @@ if [ -x /jffs/telltale/telltale ]; then
     ui_token=""
     [ -s /jffs/telltale/ui-token ] && ui_token=$(cat /jffs/telltale/ui-token)
     TELLTALE_UI_TOKEN="$ui_token" /jffs/telltale/telltale run -c /tmp/telltale-run.toml >>/tmp/telltale.log 2>&1 &
+    # Asuswrt sets vm.panic_on_oom=1, so an OOM panics the whole router instead
+    # of killing one process. Make this the process the kernel kills: a list
+    # refresh can then only stop DNS, which dnsmasq's plain upstreams cover.
+    echo 500 > /proc/$!/oom_score_adj 2>/dev/null
 fi
 START
 

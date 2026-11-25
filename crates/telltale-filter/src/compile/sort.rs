@@ -3,6 +3,8 @@
 //! Records are `(key, list, class)`. Keys live in one byte arena (no allocation per record);
 //! when arena + index exceed the memory budget, the sorted batch is written to a run file.
 //! [`merge`] k-way merges every in-memory batch and run into one sorted, deduplicated stream.
+//! A batch is capped at [`MAX_BATCH_BYTES`] whatever the caller's budget, so the peak does not
+//! grow with the size of the lists.
 
 use std::cmp::Ordering;
 use std::fs::File;
@@ -31,6 +33,14 @@ pub(crate) struct Item {
 /// Bytes an index entry costs besides its key bytes.
 const ITEM_COST: usize = std::mem::size_of::<Item>();
 
+/// Largest in-memory sort batch, whatever the configured budget.
+///
+/// Spill files are cheap and the merge reads them in order, so there is no reason to hold a
+/// large batch: with the old 128 MiB budget a compile of 1.5 M names peaked at 128 MiB RSS,
+/// while the same compile with a 1 MiB batch peaked at 48 MiB (most of that the caller's list
+/// text). This keeps the peak roughly flat as lists grow, which matters on 512 MB routers.
+const MAX_BATCH_BYTES: usize = 1 << 20;
+
 /// Collects records within a memory budget, spilling sorted runs to `tmp_dir`.
 #[derive(Debug)]
 pub(crate) struct Sorter {
@@ -50,7 +60,8 @@ impl Sorter {
         Self {
             arena: Vec::new(),
             items: Vec::new(),
-            budget: budget.max(1 << 20),
+            // 1 MiB was the old floor for a zero or tiny budget.
+            budget: budget.clamp(1 << 20, MAX_BATCH_BYTES),
             tmp_dir: tmp_dir.to_owned(),
             tag: tag.to_owned(),
             runs: Vec::new(),
@@ -345,6 +356,23 @@ mod tests {
         );
         // Run files are removed once merged.
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    /// The configured budget is a ceiling, not a target: a router with the upstream default
+    /// of 128 MiB still spills after 1 MiB, so a daily refresh cannot grow with the list.
+    #[test]
+    fn flt_004_a_large_budget_cannot_grow_the_sort_batch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Sorter::new(128 << 20, tmp.path(), "cap");
+        assert_eq!(s.budget, MAX_BATCH_BYTES);
+        for i in 0..40_000u32 {
+            let key = format!("com.n{i}.");
+            s.push(key.as_bytes(), 0, 3).unwrap();
+        }
+        assert!(s.runs() > 0, "a large budget must not hold the whole list in RAM");
+        let merged = collect(s.finish().unwrap());
+        assert_eq!(merged.len(), 40_000);
+        assert!(merged.windows(2).all(|w| w[0] < w[1]), "sorted and distinct");
     }
 
     /// REQ: FLT-003 (T10.3, ADR-145) — a rewound source gives the same records again, in

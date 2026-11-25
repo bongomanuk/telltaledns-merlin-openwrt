@@ -46,6 +46,23 @@ pub(crate) struct Lease {
 /// Devices by address.
 pub(crate) type Leases = HashMap<Ipv4Addr, Lease>;
 
+/// REQ: FLT-006 (ADR-183) — the MAC a lease can identify a device by: its client is connected
+/// (not offline), its binding is not `unsure` and not `stale`, and the MAC parses, isn't all zero
+/// and is unicast. Locally administered ("private") MACs count.
+pub(crate) fn eligible(l: &Lease) -> Option<[u8; 6]> {
+    if l.offline || l.unsure || l.stale {
+        return None;
+    }
+    usable_mac(&l.mac)
+}
+
+/// REQ: FLT-006 (ADR-183) — a MAC that can identify a device: it parses, isn't all zero and is
+/// unicast.
+pub(crate) fn usable_mac(mac: &str) -> Option<[u8; 6]> {
+    let mac = parse_mac(mac)?;
+    (mac != [0; 6] && mac[0] & 1 == 0).then_some(mac)
+}
+
 /// The address a MAC had in the last router read, if any. dnsmasq forwards queries from
 /// loopback with `add-mac`, so this is how the device gets its address back.
 pub(crate) fn ip_of_mac(leases: &Leases, mac: [u8; 6]) -> Option<Ipv4Addr> {
