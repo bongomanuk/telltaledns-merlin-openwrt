@@ -1329,7 +1329,7 @@ const fn is_default_offline_days(d: &u32) -> bool {
 pub enum RouterKind {
     Unifi,
     Opnsense,
-    /// A local dnsmasq lease file (Asuswrt-Merlin, OpenWrt).
+    /// A local dnsmasq lease file (Asuswrt-Merlin, `OpenWrt`).
     Dnsmasq,
 }
 

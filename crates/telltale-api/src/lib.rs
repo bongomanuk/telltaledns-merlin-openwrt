@@ -614,7 +614,9 @@ pub trait Backend: Send + Sync + 'static {
         request: crate::model::LockdownRequest,
     ) -> Result<crate::model::LockdownStatus, Problem> {
         let _ = request;
-        Err(Problem::unavailable("lockdown is not available on this node"))
+        Err(Problem::unavailable(
+            "lockdown is not available on this node",
+        ))
     }
 
     /// Pauses or resumes a group's internet access at the firewall.
@@ -623,10 +625,12 @@ pub trait Backend: Send + Sync + 'static {
         request: crate::model::PauseRequest,
     ) -> Result<crate::model::RouterStatus, Problem> {
         let _ = request;
-        Err(Problem::unavailable("internet pause is not available on this host"))
+        Err(Problem::unavailable(
+            "internet pause is not available on this host",
+        ))
     }
 
-    /// Router controls (dnsmasq, the boot script) on a Merlin or OpenWrt router. A normal host
+    /// Router controls (dnsmasq, the boot script) on a Merlin or `OpenWrt` router. A normal host
     /// reports `platform: "other"`, and the Router page explains instead of offering controls.
     fn router_status(&self) -> crate::model::RouterStatus {
         crate::model::RouterStatus {
@@ -1247,10 +1251,7 @@ fn rest_router(backend: Shared, auth: Arc<auth::Auth>) -> Router {
         // Internet pause: a firewall rule per group, admin only.
         .merge(
             Router::new()
-                .route(
-                    "/api/v1/router/pause",
-                    axum::routing::post(set_pause),
-                )
+                .route("/api/v1/router/pause", axum::routing::post(set_pause))
                 .with_state(Arc::clone(&backend))
                 .route_layer(from_fn(auth::routes::require_admin)),
         )

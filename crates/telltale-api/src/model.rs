@@ -105,7 +105,7 @@ pub struct RouterStatus {
     /// Merlin: the router web UI tab names a page in `/www/user`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_installed: Option<bool>,
-    /// OpenWrt: `/etc/config/telltale` enables the service at boot.
+    /// `OpenWrt`: `/etc/config/telltale` enables the service at boot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_enabled: Option<bool>,
     /// Router traffic is forced through this resolver: port 53 redirected, DoT and
@@ -159,9 +159,9 @@ pub enum RouterAction {
     DisableUi,
     /// Reboot the router.
     RebootRouter,
-    /// OpenWrt: start the service at boot.
+    /// `OpenWrt`: start the service at boot.
     EnableService,
-    /// OpenWrt: do not start the service at boot.
+    /// `OpenWrt`: do not start the service at boot.
     DisableService,
     /// Force the LAN's DNS through the router and block DoT/DoH bypasses.
     EnableDnsGuard,

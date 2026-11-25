@@ -342,7 +342,7 @@ pub(crate) fn opnsense_leases(v: &Value) -> Seen {
 
 /// dnsmasq's lease file: `expiry mac ip hostname clientid` per line. `hostname` is `*` when
 /// the client sent no name. Asuswrt-Merlin keeps it at `/var/lib/misc/dnsmasq.leases`;
-/// OpenWrt at `/tmp/dhcp.leases`.
+/// `OpenWrt` at `/tmp/dhcp.leases`.
 pub(crate) fn dnsmasq_leases(text: &str) -> Seen {
     text.lines()
         .filter_map(|line| {
@@ -570,7 +570,7 @@ async fn poll_opnsense(
 }
 
 /// One read of the local dnsmasq lease file.
-async fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
+fn poll_dnsmasq(c: &RouterConfig) -> Result<Seen, String> {
     let path = c
         .url
         .as_str()
@@ -844,7 +844,7 @@ pub(crate) async fn run(
             let result = match r.kind {
                 RouterKind::Unifi => poll_unifi(&client, r).await,
                 RouterKind::Opnsense => poll_opnsense(&client, r).await,
-                RouterKind::Dnsmasq => poll_dnsmasq(r).await.map(Polled::now),
+                RouterKind::Dnsmasq => poll_dnsmasq(r).map(Polled::now),
             };
             let was_failing = failing.get(r.name.as_str()).copied().unwrap_or(false);
             match result {
@@ -931,7 +931,6 @@ mod tests {
 
     /// REQ: T8.2 — a local dnsmasq lease file: names are used, `*` is an unnamed client.
     #[test]
-    #[test]
     fn custom_client_names_from_nvram() {
         let text = "mini>00:E0:4C:68:0A:0F>0>0>>>>><Kitchen-display>DC:E5:5B:67:33:46>0>0>>>>>";
         assert_eq!(
@@ -949,8 +948,16 @@ mod tests {
         assert_eq!(
             static_leases(text),
             vec![
-                ("00:e0:4c:68:0a:0f".into(), Ipv4Addr::new(192, 168, 1, 5), Some("mini".into())),
-                ("dc:a6:32:1f:d6:7b".into(), Ipv4Addr::new(192, 168, 1, 10), Some("rpi".into())),
+                (
+                    "00:e0:4c:68:0a:0f".into(),
+                    Ipv4Addr::new(192, 168, 1, 5),
+                    Some("mini".into())
+                ),
+                (
+                    "dc:a6:32:1f:d6:7b".into(),
+                    Ipv4Addr::new(192, 168, 1, 10),
+                    Some("rpi".into())
+                ),
             ]
         );
     }
@@ -967,7 +974,11 @@ mod tests {
                     Ipv4Addr::new(192, 168, 1, 16),
                     Some("creepy-drive".into())
                 ),
-                ("ac:fa:e4:89:7e:6c".into(), Ipv4Addr::new(192, 168, 1, 188), None),
+                (
+                    "ac:fa:e4:89:7e:6c".into(),
+                    Ipv4Addr::new(192, 168, 1, 188),
+                    None
+                ),
             ]
         );
     }

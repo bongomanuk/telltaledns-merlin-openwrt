@@ -107,9 +107,7 @@ fn base64_mac(value: &[u8]) -> Option<[u8; 6]> {
         bits += 6;
         if bits >= 8 {
             bits -= 8;
-            let Some(slot) = out.get_mut(written) else {
-                return None;
-            };
+            let slot = out.get_mut(written)?;
             *slot = ((acc >> bits) & 0xff) as u8;
             written += 1;
         }
@@ -200,7 +198,10 @@ mod tests {
         for bad in [&b"not base64"[..], &b"aa:bb:cc:dd:ee"[..]] {
             let mut rdata = vec![0xFD, 0xE9, 0x00, u8::try_from(bad.len()).unwrap()];
             rdata.extend_from_slice(bad);
-            assert_eq!(Edns::from_parts(4096, 0, &rdata).unwrap().client_mac(), None);
+            assert_eq!(
+                Edns::from_parts(4096, 0, &rdata).unwrap().client_mac(),
+                None
+            );
         }
     }
 

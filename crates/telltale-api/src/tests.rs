@@ -2029,10 +2029,12 @@ async fn api_005_ui_is_served_with_security_headers() {
     // The router's web UI embeds the dashboard, so framing is limited by CSP to
     // that origin instead of X-Frame-Options: DENY.
     assert!(h.get("x-frame-options").is_none());
-    assert!(h["content-security-policy"]
-        .to_str()
-        .unwrap()
-        .contains("frame-ancestors"));
+    assert!(
+        h["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors")
+    );
     assert_eq!(h["cache-control"], "no-cache");
     let (s, h, v) = send(&app, get("/api/v1/nope")).await;
     assert_eq!(

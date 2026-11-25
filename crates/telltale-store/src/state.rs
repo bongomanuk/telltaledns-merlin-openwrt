@@ -281,7 +281,7 @@ fn migrate(conn: &mut Connection, migrations: &[&str]) -> rusqlite::Result<()> {
 /// drivers routers use (Asus's `tntfs`, `ntfs3`, FUSE) do not give SQLite the
 /// locks and mmap WAL needs either, so they get the rollback journal too.
 pub(crate) fn set_journal(conn: &Connection) -> Result<()> {
-    let no_wal = conn.path().map(needs_rollback_journal).unwrap_or(false);
+    let no_wal = conn.path().is_some_and(needs_rollback_journal);
     if no_wal || conn.pragma_update(None, "journal_mode", "WAL").is_err() {
         conn.pragma_update(None, "journal_mode", "DELETE")?;
     }
@@ -305,19 +305,20 @@ fn needs_rollback_journal(path: &str) -> bool {
         let mut fields = line.split_whitespace();
         let Some(_dev) = fields.next() else { continue };
         let Some(mnt) = fields.next() else { continue };
-        let Some(fstype) = fields.next() else { continue };
+        let Some(fstype) = fields.next() else {
+            continue;
+        };
         let mnt = Path::new(mnt);
         // `Path::starts_with` compares whole components, so /jffs2 does not
         // match /jffs. The longest matching mount point wins.
         if path.starts_with(mnt) {
             let len = mnt.to_string_lossy().len();
-            if best.map(|(l, _)| len > l).unwrap_or(true) {
+            if best.is_none_or(|(l, _)| len > l) {
                 best = Some((len, fstype));
             }
         }
     }
-    best.map(|(_, fstype)| ROLLBACK_ONLY.contains(&fstype))
-        .unwrap_or(false)
+    best.is_some_and(|(_, fstype)| ROLLBACK_ONLY.contains(&fstype))
 }
 
 impl State {

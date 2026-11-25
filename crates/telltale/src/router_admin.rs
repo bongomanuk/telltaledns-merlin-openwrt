@@ -1,9 +1,9 @@
-//! Router controls for the Merlin and OpenWrt builds: what dnsmasq is doing, where the
+//! Router controls for the Merlin and `OpenWrt` builds: what dnsmasq is doing, where the
 //! data lives, and the few actions the Router page offers.
 //!
 //! The process runs as root (it binds the API port and is started by the router's boot
 //! script), so these actions use the router's own commands: `service restart_dnsmasq`
-//! on Merlin, `/etc/init.d/dnsmasq restart` on OpenWrt. Nothing here is available on a
+//! on Merlin, `/etc/init.d/dnsmasq restart` on `OpenWrt`. Nothing here is available on a
 //! normal host; [`platform`] returns `other` there and the API says so.
 
 use std::path::Path;
@@ -70,7 +70,9 @@ pub(crate) fn status(data_dir: &str) -> RouterStatus {
 }
 
 /// Runs a Router page control.
-pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<RouterActionResult, Problem> {
+pub(crate) fn action(
+    action: telltale_api::model::RouterAction,
+) -> Result<RouterActionResult, Problem> {
     use telltale_api::model::RouterAction;
 
     match action {
@@ -116,7 +118,9 @@ pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<Router
         }
         RouterAction::EnableService => {
             if platform() != "openwrt" {
-                return Err(failed("the boot script is /jffs/scripts/services-start here".into()));
+                return Err(failed(
+                    "the boot script is /jffs/scripts/services-start here".into(),
+                ));
             }
             uci("set", &["telltale.main.enabled=1"])?;
             let _ = uci("commit", &["telltale"]);
@@ -125,21 +129,29 @@ pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<Router
         }
         RouterAction::EnableDnsGuard => {
             if platform() != "merlin" {
-                return Err(failed("DNS guard is implemented for Merlin only for now".into()));
+                return Err(failed(
+                    "DNS guard is implemented for Merlin only for now".into(),
+                ));
             }
             set_dns_guard(true)?;
-            Ok(done("DNS guard on: port 53 redirected, DoT and known DoH names blocked"))
+            Ok(done(
+                "DNS guard on: port 53 redirected, DoT and known DoH names blocked",
+            ))
         }
         RouterAction::DisableDnsGuard => {
             if platform() != "merlin" {
-                return Err(failed("DNS guard is implemented for Merlin only for now".into()));
+                return Err(failed(
+                    "DNS guard is implemented for Merlin only for now".into(),
+                ));
             }
             set_dns_guard(false)?;
             Ok(done("DNS guard off"))
         }
         RouterAction::DisableService => {
             if platform() != "openwrt" {
-                return Err(failed("the boot script is /jffs/scripts/services-start here".into()));
+                return Err(failed(
+                    "the boot script is /jffs/scripts/services-start here".into(),
+                ));
             }
             uci("set", &["telltale.main.enabled=0"])?;
             let _ = uci("commit", &["telltale"]);
@@ -150,6 +162,7 @@ pub(crate) fn action(action: telltale_api::model::RouterAction) -> Result<Router
 }
 
 /// Uptime in seconds and the one-minute load average.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // /proc/uptime is non-negative
 fn uptime_and_load() -> (u64, f32) {
     let uptime = std::fs::read_to_string("/proc/uptime")
         .ok()
@@ -198,8 +211,7 @@ fn device(platform: &str) -> String {
     match platform {
         "merlin" => nvram("productid"),
         "openwrt" => std::fs::read_to_string("/tmp/sysinfo/model")
-            .map(|s| s.trim().to_owned())
-            .unwrap_or_else(|_| "OpenWrt".to_owned()),
+            .map_or_else(|_| "OpenWrt".to_owned(), |s| s.trim().to_owned()),
         _ => String::new(),
     }
 }
@@ -220,7 +232,11 @@ fn firmware(platform: &str) -> String {
             .and_then(|s| {
                 s.lines()
                     .find(|l| l.starts_with("DISTRIB_RELEASE="))
-                    .map(|l| l.trim_start_matches("DISTRIB_RELEASE=").trim_matches('\'').to_owned())
+                    .map(|l| {
+                        l.trim_start_matches("DISTRIB_RELEASE=")
+                            .trim_matches('\'')
+                            .to_owned()
+                    })
             })
             .unwrap_or_default(),
         _ => String::new(),
@@ -244,15 +260,12 @@ fn ui_installed() -> bool {
         return false;
     }
     std::fs::read_to_string("/www/require/modules/menuTree.js")
-        .map(|menu| menu.contains("menu_TelltaleDNS") && menu.contains(page))
-        .unwrap_or(false)
+        .is_ok_and(|menu| menu.contains("menu_TelltaleDNS") && menu.contains(page))
 }
 
-/// OpenWrt's `/etc/config/telltale` enables the service.
+/// `OpenWrt`'s `/etc/config/telltale` enables the service.
 fn service_enabled() -> bool {
-    uci("get", &["telltale.main.enabled"])
-        .map(|v| v.trim() == "1")
-        .unwrap_or(false)
+    uci("get", &["telltale.main.enabled"]).is_ok_and(|v| v.trim() == "1")
 }
 
 fn done(message: &str) -> RouterActionResult {
@@ -276,9 +289,7 @@ fn process_running(name: &str) -> bool {
             .to_str()
             .and_then(|n| n.parse::<u32>().ok())
             .is_some_and(|_| {
-                std::fs::read_to_string(e.path().join("comm"))
-                    .map(|c| c.trim() == name)
-                    .unwrap_or(false)
+                std::fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.trim() == name)
             })
     })
 }
@@ -310,20 +321,16 @@ fn lease_count(platform: &str) -> usize {
         "openwrt" => OPENWRT_LEASES,
         _ => return 0,
     };
-    std::fs::read_to_string(path)
-        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0)
+    std::fs::read_to_string(path).map_or(0, |s| s.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
 /// dnsmasq sends public queries to this process.
 fn forwarding(platform: &str) -> bool {
     match platform {
         "merlin" => std::fs::read_to_string(MERLIN_DNSMASQ_ADD)
-            .map(|s| s.lines().any(|l| l.trim() == format!("server={LISTEN}")))
-            .unwrap_or(false),
+            .is_ok_and(|s| s.lines().any(|l| l.trim() == format!("server={LISTEN}"))),
         "openwrt" => uci("get", &["dhcp.@dnsmasq[0].server"])
-            .map(|s| s.lines().any(|l| l.trim() == LISTEN))
-            .unwrap_or(false),
+            .is_ok_and(|s| s.lines().any(|l| l.trim() == LISTEN)),
         _ => false,
     }
 }
@@ -335,7 +342,8 @@ fn usb_mount() -> Option<String> {
         let mut f = line.split_whitespace();
         let dev = f.next()?;
         let mnt = f.next()?;
-        let usb = dev.starts_with("/dev/sd") && (mnt.starts_with("/tmp/mnt/") || mnt.starts_with("/mnt/"));
+        let usb = dev.starts_with("/dev/sd")
+            && (mnt.starts_with("/tmp/mnt/") || mnt.starts_with("/mnt/"));
         usb.then(|| mnt.to_owned())
     })
 }
@@ -514,7 +522,7 @@ fn set_dns_guard(on: bool) -> Result<(), Problem> {
 
 /// The rules live in a script so the firewall hook and the UI run the same commands.
 fn write_dns_guard_script() -> Result<(), Problem> {
-    let script = r#"#!/bin/sh
+    let script = r"#!/bin/sh
 # TelltaleDNS DNS guard: redirect port 53 to the router and refuse DoT.
 # Run from the UI (Settings, Router) and from /jffs/scripts/firewall-start.
 if [ -f /jffs/telltale/dns-guard ]; then
@@ -528,7 +536,7 @@ else
     iptables -D FORWARD -i br0 -p tcp --dport 853 -j REJECT 2>/dev/null
 fi
 exit 0
-"#;
+";
     std::fs::write(DNS_GUARD_SCRIPT, script)
         .map_err(|e| failed(format!("could not write {DNS_GUARD_SCRIPT}: {e}")))?;
     Command::new("chmod")
@@ -570,7 +578,13 @@ fn set_doh_names(on: bool) -> Result<(), Problem> {
     }
     let mut out = lines.join("\n");
     out.push('\n');
-    write_lines(path, out.lines().map(str::to_owned).collect::<Vec<_>>().as_slice())
+    write_lines(
+        path,
+        out.lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    )
 }
 
 /// Keep a small hook in firewall-start, or remove it again.
@@ -594,7 +608,9 @@ fn ensure_firewall_hook(on: bool) -> Result<(), Problem> {
     }
     if on {
         lines.push(DNS_GUARD_BEGIN.to_owned());
-        lines.push(format!("[ -x {DNS_GUARD_SCRIPT} ] && /bin/sh {DNS_GUARD_SCRIPT}"));
+        lines.push(format!(
+            "[ -x {DNS_GUARD_SCRIPT} ] && /bin/sh {DNS_GUARD_SCRIPT}"
+        ));
         lines.push(DNS_GUARD_END.to_owned());
     }
     write_lines(path, &lines)?;
@@ -608,6 +624,7 @@ fn ensure_firewall_hook(on: bool) -> Result<(), Problem> {
 /// One chain holds every pause rule, so cleanup is a flush rather than a hunt.
 const BLOCK_CHAIN: &str = "TELLTALE_BLOCK";
 
+#[allow(clippy::unnecessary_wraps)] // the callers use `?`, keep one shape across platforms
 fn ensure_block_chain() -> Result<(), Problem> {
     let _ = Command::new("iptables").args(["-N", BLOCK_CHAIN]).status();
     let jump = ["FORWARD", "-j", BLOCK_CHAIN];
@@ -624,8 +641,7 @@ fn rule_exists(args: &[&str]) -> bool {
         .arg("-C")
         .args(args)
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 /// Pauses a group's internet access at the firewall, or resumes it.
@@ -668,7 +684,9 @@ pub(crate) fn set_pause(
             ));
         }
         for ip in ips {
-            del.push(format!("iptables -D {BLOCK_CHAIN} -i br0 -o eth0 -s {ip} -j REJECT 2>/dev/null"));
+            del.push(format!(
+                "iptables -D {BLOCK_CHAIN} -i br0 -o eth0 -s {ip} -j REJECT 2>/dev/null"
+            ));
         }
         del.push(format!("rm -f {state} {undo} {apply}"));
         let mut dtext = del.join("\n");
@@ -687,8 +705,11 @@ pub(crate) fn set_pause(
             .spawn();
     } else {
         // Resume now, and let any pending timer find nothing to remove.
-        run("/bin/sh", &[format!("/tmp/telltale-unpause-{group}.sh").as_str()])
-            .or_else(|_| Ok::<(), Problem>(()))?;
+        run(
+            "/bin/sh",
+            &[format!("/tmp/telltale-unpause-{group}.sh").as_str()],
+        )
+        .or(Ok::<(), Problem>(()))?;
         let _ = std::fs::remove_file(&state);
         let _ = std::fs::remove_file(format!("/tmp/telltale-unpause-{group}.sh"));
         let _ = std::fs::remove_file(&apply);

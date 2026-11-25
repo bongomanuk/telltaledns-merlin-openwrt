@@ -1278,6 +1278,35 @@ impl Backend for Federated {
     ) -> Result<telltale_api::model::PromotePlan, Problem> {
         self.local.promote_plan(req)
     }
+    // Router controls and traffic are node-local, like `backup` and `support_package`:
+    // the node serving the request reads its own firewall and boot script.
+    fn traffic(&self) -> Vec<telltale_api::model::TrafficRow> {
+        self.local.traffic()
+    }
+    fn lockdown(&self) -> telltale_api::model::LockdownStatus {
+        self.local.lockdown()
+    }
+    fn set_lockdown(
+        &self,
+        request: telltale_api::model::LockdownRequest,
+    ) -> Result<telltale_api::model::LockdownStatus, Problem> {
+        self.local.set_lockdown(request)
+    }
+    fn set_pause(
+        &self,
+        request: telltale_api::model::PauseRequest,
+    ) -> Result<telltale_api::model::RouterStatus, Problem> {
+        self.local.set_pause(request)
+    }
+    fn router_status(&self) -> telltale_api::model::RouterStatus {
+        self.local.router_status()
+    }
+    fn router_action(
+        &self,
+        action: telltale_api::model::RouterAction,
+    ) -> Result<telltale_api::model::RouterActionResult, Problem> {
+        self.local.router_action(action)
+    }
     fn cluster(&self) -> ClusterView {
         self.local.cluster()
     }

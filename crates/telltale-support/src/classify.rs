@@ -75,6 +75,7 @@ const TABLE: &[(&str, Class)] = &[
     ("auth.oidc.provider[].username_claim", Plain),
     ("auth.oidc.public_url", Url),
     ("client[].groups[]", Name(C::Group)),
+    ("lockdown.groups[]", Name(C::Group)),
     ("client[].match[]", NameOrAddress(C::Device)),
     ("client[].name", Name(C::Device)),
     ("clients.infrastructure[]", Scan),

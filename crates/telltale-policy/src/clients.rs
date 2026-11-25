@@ -519,10 +519,7 @@ impl Lockdown {
         let map: HashMap<Box<str>, u64> = if until == 0 {
             HashMap::new()
         } else {
-            groups
-                .iter()
-                .map(|g| (g.as_str().into(), until))
-                .collect()
+            groups.iter().map(|g| (g.as_str().into(), until)).collect()
         };
         self.groups.store(Arc::new(map));
     }

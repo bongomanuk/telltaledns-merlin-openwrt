@@ -116,32 +116,35 @@ pub(crate) fn device_name(src: &Sources, ip: [u8; 16]) -> Option<String> {
             .get(ip)
             .map(|h| h.workload.text.to_string());
     }
-    clients.client(id).map(|c| c.name.to_string()).or_else(|| {
-        // REQ: T8.2 — an unnamed device is called by the name its router's DHCP knows.
-        let IpAddr::V4(v4) = ip else { return None };
-        src.pipeline
-            .router_leases
-            .load()
-            .get(&v4)
-            .and_then(|l| l.hostname.clone())
-            // REQ: T8.3 — then what the device announces over mDNS.
-            .or_else(|| {
-                src.pipeline
-                    .mdns_names
-                    .load()
-                    .get(&v4)
-                    .and_then(|l| l.hostname.clone())
-            })
-            // REQ: CLU-002 (ADR-125) — then what the other nodes' routers and mDNS know.
-            .or_else(|| {
-                let peers = src.pipeline.peer_names.load();
-                [&peers.routers, &peers.mdns]
-                    .into_iter()
-                    .find_map(|t| t.get(&v4).and_then(|l| l.hostname.clone()))
-            })
-    })
-    // Loopback is the router itself: dnsmasq's own lookups have no device and no MAC.
-    .or_else(|| ip.is_loopback().then(|| "router (dnsmasq)".to_owned()))
+    clients
+        .client(id)
+        .map(|c| c.name.to_string())
+        .or_else(|| {
+            // REQ: T8.2 — an unnamed device is called by the name its router's DHCP knows.
+            let IpAddr::V4(v4) = ip else { return None };
+            src.pipeline
+                .router_leases
+                .load()
+                .get(&v4)
+                .and_then(|l| l.hostname.clone())
+                // REQ: T8.3 — then what the device announces over mDNS.
+                .or_else(|| {
+                    src.pipeline
+                        .mdns_names
+                        .load()
+                        .get(&v4)
+                        .and_then(|l| l.hostname.clone())
+                })
+                // REQ: CLU-002 (ADR-125) — then what the other nodes' routers and mDNS know.
+                .or_else(|| {
+                    let peers = src.pipeline.peer_names.load();
+                    [&peers.routers, &peers.mdns]
+                        .into_iter()
+                        .find_map(|t| t.get(&v4).and_then(|l| l.hostname.clone()))
+                })
+        })
+        // Loopback is the router itself: dnsmasq's own lookups have no device and no MAC.
+        .or_else(|| ip.is_loopback().then(|| "router (dnsmasq)".to_owned()))
 }
 
 /// REQ: FLT-006, API-010 (ADR-183) — how the address `ip` is recognized on this node now, and the
@@ -849,7 +852,12 @@ impl Backend for ApiBackend {
     fn lockdown(&self) -> telltale_api::model::LockdownStatus {
         let cfg = self.src.config.load();
         telltale_api::model::LockdownStatus {
-            configured_groups: cfg.lockdown.groups.iter().map(ToString::to_string).collect(),
+            configured_groups: cfg
+                .lockdown
+                .groups
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             minutes: cfg.lockdown.minutes,
             active: self
                 .src
@@ -857,10 +865,12 @@ impl Backend for ApiBackend {
                 .lockdown
                 .active(crate::pipeline::unix_now())
                 .into_iter()
-                .map(|(group, until_unix_seconds)| telltale_api::model::LockdownGroup {
-                    group,
-                    until_unix_seconds,
-                })
+                .map(
+                    |(group, until_unix_seconds)| telltale_api::model::LockdownGroup {
+                        group,
+                        until_unix_seconds,
+                    },
+                )
                 .collect(),
         }
     }
@@ -877,11 +887,15 @@ impl Backend for ApiBackend {
             .chain(std::iter::once("default".to_owned()))
             .collect();
         if request.enabled {
-            let mut groups = request
-                .groups
-                .unwrap_or_else(|| cfg.lockdown.groups.iter().map(ToString::to_string).collect());
+            let mut groups = request.groups.unwrap_or_else(|| {
+                cfg.lockdown
+                    .groups
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            });
             if groups.is_empty() {
-                groups = known.clone();
+                groups.clone_from(&known);
             }
             if let Some(bad) = groups.iter().find(|g| !known.contains(g)) {
                 return Err(Problem::invalid(format!("`{bad}` is not a group")));
@@ -898,6 +912,7 @@ impl Backend for ApiBackend {
         Ok(self.lockdown())
     }
 
+    #[allow(clippy::too_many_lines)] // one pass over conntrack, kept together on purpose
     fn traffic(&self) -> Vec<telltale_api::model::TrafficRow> {
         use std::collections::HashMap;
         use std::net::Ipv4Addr;
@@ -912,7 +927,10 @@ impl Backend for ApiBackend {
         };
         // The router's own addresses (the WAN address in particular) are not devices.
         let mut local: std::collections::HashSet<Ipv4Addr> = std::collections::HashSet::new();
-        if let Ok(out) = std::process::Command::new("ip").args(["-4", "-o", "addr", "show"]).output() {
+        if let Ok(out) = std::process::Command::new("ip")
+            .args(["-4", "-o", "addr", "show"])
+            .output()
+        {
             for word in String::from_utf8_lossy(&out.stdout).split_whitespace() {
                 if let Some(ip) = word
                     .split('/')
@@ -937,12 +955,14 @@ impl Backend for ApiBackend {
             }
             let mut counted = false;
             for h in &halves {
-                let src = h
-                    .iter()
-                    .find_map(|t| t.strip_prefix("src=").and_then(|v| v.parse::<Ipv4Addr>().ok()));
-                let dst = h
-                    .iter()
-                    .find_map(|t| t.strip_prefix("dst=").and_then(|v| v.parse::<Ipv4Addr>().ok()));
+                let src = h.iter().find_map(|t| {
+                    t.strip_prefix("src=")
+                        .and_then(|v| v.parse::<Ipv4Addr>().ok())
+                });
+                let dst = h.iter().find_map(|t| {
+                    t.strip_prefix("dst=")
+                        .and_then(|v| v.parse::<Ipv4Addr>().ok())
+                });
                 let bytes = h
                     .iter()
                     .find_map(|t| t.strip_prefix("bytes=").and_then(|v| v.parse::<u64>().ok()))
@@ -983,9 +1003,13 @@ impl Backend for ApiBackend {
                 let mut peers: Vec<telltale_api::model::TrafficPeer> = a
                     .peers
                     .into_iter()
-                    .map(|((peer, port), bytes)| telltale_api::model::TrafficPeer { peer, port, bytes })
+                    .map(|((peer, port), bytes)| telltale_api::model::TrafficPeer {
+                        peer,
+                        port,
+                        bytes,
+                    })
                     .collect();
-                peers.sort_by(|x, y| y.bytes.cmp(&x.bytes));
+                peers.sort_by_key(|x| std::cmp::Reverse(x.bytes));
                 peers.truncate(5);
                 telltale_api::model::TrafficRow {
                     client: ip.to_string(),
@@ -996,7 +1020,7 @@ impl Backend for ApiBackend {
                 }
             })
             .collect();
-        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.bytes));
         rows.truncate(50);
         rows
     }
@@ -1540,6 +1564,161 @@ impl Backend for ApiBackend {
         self.top_items(kind, tops)
     }
 
+    fn top_range(&self, kind: TopKind, from_s: u64, to_s: u64, limit: usize) -> Vec<TopItem> {
+        use telltale_telemetry::agg::{HourSel, TopKind as Mem};
+        let (stored_kind, mem_kind) = match kind {
+            TopKind::Domains => ("domains", Mem::Domains),
+            TopKind::Blocked => ("blocked", Mem::Blocked),
+            TopKind::Nxdomain => ("nxdomain", Mem::Nxdomain),
+            TopKind::Clients => ("clients", Mem::Clients),
+            TopKind::Internal => ("internal", Mem::Internal),
+        };
+        let db = self.src.rollups.as_ref();
+        let (current, previous) = {
+            let agg = self.src.pipeline.telemetry.aggregates();
+            (agg.current_hour_start(), agg.previous_hour_start())
+        };
+        let prev_live =
+            previous.filter(|h| db.is_none_or(|d| !d.has_hour_tops(*h).unwrap_or(false)));
+        let first = from_s - from_s % 3600;
+        let in_window = |h: u64| h >= first && h < to_s;
+        let stored_to = to_s.min(prev_live.unwrap_or(current));
+        // Space-Saving's lists are kept per hour: read more than asked, so the summed
+        // heaviest are among them.
+        let n = (limit * 2).max(20);
+        let mut by = std::collections::HashMap::<String, (u64, u64)>::new();
+        // REQ: OBS-004 (ADR-159, ADR-160) — a client's queries by status over the same hours: the
+        // stored `clients_*` lists (hours closed since the split was kept) plus the hours in memory.
+        // An hour stored before that has no split, and its queries stay in `count` only.
+        let mut split = std::collections::HashMap::<String, [u64; 3]>::new();
+        if let Some(d) = db {
+            match d.top_range(first, stored_to, stored_kind, n) {
+                Ok((rows, _)) => {
+                    for r in rows {
+                        let e = by.entry(r.key).or_default();
+                        e.0 += r.count;
+                        e.1 += r.error;
+                    }
+                }
+                Err(e) => tracing::warn!("rollups: {e}"),
+            }
+            if kind == TopKind::Clients {
+                for (i, list) in ["clients_blocked", "clients_cached", "clients_forwarded"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    // Each stored list holds a hour's busiest 100: ask for every key it kept.
+                    match d.top_range(first, stored_to, list, 1000) {
+                        Ok((rows, _)) => {
+                            for r in rows {
+                                split.entry(r.key).or_default()[i] += r.count;
+                            }
+                        }
+                        Err(e) => tracing::warn!("rollups: {e}"),
+                    }
+                }
+            }
+        }
+        let agg = self.src.pipeline.telemetry.aggregates();
+        for (sel, start) in [
+            (HourSel::Current, Some(current)),
+            (HourSel::Previous, prev_live),
+        ] {
+            if !start.is_some_and(in_window) {
+                continue;
+            }
+            if kind == TopKind::Clients {
+                for (t, s) in agg.top_clients(sel, None, n) {
+                    let x = split.entry(t.key.clone()).or_default();
+                    x[0] += s.blocked;
+                    x[1] += s.cached;
+                    x[2] += s.forwarded;
+                    let e = by.entry(t.key).or_default();
+                    e.0 += t.count;
+                    e.1 += t.error;
+                }
+                continue;
+            }
+            for t in agg.top_names(mem_kind, sel, n) {
+                let e = by.entry(t.key).or_default();
+                e.0 += t.count;
+                e.1 += t.error;
+            }
+        }
+        drop(agg);
+        let mut v: Vec<(String, (u64, u64))> = by.into_iter().collect();
+        v.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+        v.truncate(limit);
+        v.into_iter()
+            .map(|(key, (count, error_bound))| {
+                let (name, groups) = self.client_labels(kind, &key);
+                let by_status = split
+                    .get(&key)
+                    .map(|s| telltale_api::model::ClientStatusCounts {
+                        blocked: s[0],
+                        cached: s[1],
+                        forwarded: s[2],
+                    });
+                TopItem {
+                    key,
+                    name,
+                    groups,
+                    count,
+                    error_bound,
+                    by_status,
+                }
+            })
+            .collect()
+    }
+
+    fn top_clients_rolling(
+        &self,
+        limit: usize,
+        group: Option<&str>,
+    ) -> Result<Vec<TopItem>, Problem> {
+        if let Some(g) = group {
+            self.group_index(g)?;
+        }
+        let now = self.now_unix_seconds();
+        let counts = self
+            .src
+            .pipeline
+            .telemetry
+            .aggregates()
+            .last_hour_counts(now);
+        let item = |(ip, count): ([u8; 16], u64)| {
+            let key = telltale_telemetry::agg::client_text(ip);
+            let (name, groups) = self.client_labels(TopKind::Clients, &key);
+            TopItem {
+                key,
+                name,
+                groups,
+                count,
+                error_bound: 0,
+                // The rolling hour keeps one count per client, no split by status.
+                by_status: None,
+            }
+        };
+        Ok(match group {
+            // Ranked first, so only the kept ones are labelled.
+            None => telltale_telemetry::last_hour::rank(counts, limit)
+                .into_iter()
+                .map(item)
+                .collect(),
+            // A client's group needs its labels, so every client is labelled, then ranked.
+            Some(g) => {
+                let mut v: Vec<TopItem> = counts
+                    .into_iter()
+                    .map(item)
+                    .filter(|t| t.groups.first().is_some_and(|f| f == g))
+                    .collect();
+                v.sort_unstable_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
+                v.truncate(limit);
+                v
+            }
+        })
+    }
+
     fn latency(&self, by: LatencyBy, h: Hour) -> Vec<LatencyRow> {
         let sel = hour(h);
         let agg = self.src.pipeline.telemetry.aggregates();
@@ -2042,7 +2221,11 @@ impl Backend for ApiBackend {
         let configured: Vec<String> = cfg
             .client
             .iter()
-            .flat_map(|c| c.match_keys.iter().map(|k| k.to_string().to_ascii_lowercase()))
+            .flat_map(|c| {
+                c.match_keys
+                    .iter()
+                    .map(|k| k.to_string().to_ascii_lowercase())
+            })
             .collect();
         for (ip, lease) in self.src.pipeline.router_leases.load().iter() {
             let ip_s = ip.to_string();
@@ -2056,10 +2239,7 @@ impl Backend for ApiBackend {
             }
             matches.push(ip_s);
             out.push(ClientInfo {
-                name: lease
-                    .hostname
-                    .clone()
-                    .unwrap_or_else(|| ip.to_string()),
+                name: lease.hostname.clone().unwrap_or_else(|| ip.to_string()),
                 matches,
                 groups: Vec::new(),
                 source: "router".to_owned(),
@@ -5509,11 +5689,7 @@ impl ApiBackend {
             // them out of "top clients"; the query log still shows them as the router.
             .filter(|(t, _)| {
                 !matches!(kind, TopKind::Clients)
-                    || !t
-                        .key
-                        .parse::<IpAddr>()
-                        .map(|ip| ip.is_loopback())
-                        .unwrap_or(false)
+                    || !t.key.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
             })
             .map(|(t, s)| {
                 let (name, groups) = self.client_labels(kind, &t.key);

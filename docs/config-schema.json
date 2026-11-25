@@ -1799,7 +1799,7 @@
           "default": false
         },
         "compile_memory": {
-          "description": "Memory for sorting list entries before spilling to disk (`spec/05` §3.4).",
+          "description": "Ceiling on memory for sorting list entries before spilling to disk (`spec/05` §3.4).\nA compile keeps at most 1 MiB per parser thread in RAM whatever this says, so the\nsetting cannot make an update exhaust a small router's memory.",
           "default": "128MiB",
           "oneOf": [
             {
@@ -3316,7 +3316,7 @@
           ]
         },
         {
-          "description": "A local dnsmasq lease file (Asuswrt-Merlin, OpenWrt).",
+          "description": "A local dnsmasq lease file (Asuswrt-Merlin, `OpenWrt`).",
           "type": "string",
           "const": "dnsmasq"
         }

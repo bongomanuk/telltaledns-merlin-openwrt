@@ -369,10 +369,16 @@ mod tests {
             let key = format!("com.n{i}.");
             s.push(key.as_bytes(), 0, 3).unwrap();
         }
-        assert!(s.runs() > 0, "a large budget must not hold the whole list in RAM");
+        assert!(
+            s.runs() > 0,
+            "a large budget must not hold the whole list in RAM"
+        );
         let merged = collect(s.finish().unwrap());
         assert_eq!(merged.len(), 40_000);
-        assert!(merged.windows(2).all(|w| w[0] < w[1]), "sorted and distinct");
+        assert!(
+            merged.windows(2).all(|w| w[0] < w[1]),
+            "sorted and distinct"
+        );
     }
 
     /// REQ: FLT-003 (T10.3, ADR-145) — a rewound source gives the same records again, in

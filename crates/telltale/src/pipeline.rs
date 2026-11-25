@@ -19,8 +19,8 @@ use telltale_config::{Cidr, RateLimitAction, SpecialConfig};
 use telltale_filter::matcher::{ClientCtx, Decision, ListMask, Matcher, Scratch};
 use telltale_net::{QueryHandler, RequestMeta, Response, Transport};
 use telltale_policy::{
-    ClientTable, Group, Identity, LocalData, Lockdown, Neighbors, Pause, RateLimiter, RewriteTarget,
-    Special,
+    ClientTable, Group, Identity, LocalData, Lockdown, Neighbors, Pause, RateLimiter,
+    RewriteTarget, Special,
 };
 use telltale_proto::{
     EdnsOut, NameBuf, Query, QueryError, ResponseBuilder, Section, badvers_from_raw, build_query,
@@ -2814,15 +2814,8 @@ impl QueryHandler for Handler {
                     start.elapsed(),
                 );
                 let resp = Some(&out[..*len]);
-                self.0.emit(
-                    peer,
-                    meta.transport,
-                    req,
-                    resp,
-                    &oc,
-                    start,
-                    Duration::ZERO,
-                );
+                self.0
+                    .emit(peer, meta.transport, req, resp, &oc, start, Duration::ZERO);
             }
             Response::Drop | Response::Close => {
                 self.0.metrics.record(
@@ -2832,15 +2825,8 @@ impl QueryHandler for Handler {
                     oc.qtype,
                     start.elapsed(),
                 );
-                self.0.emit(
-                    peer,
-                    meta.transport,
-                    req,
-                    None,
-                    &oc,
-                    start,
-                    Duration::ZERO,
-                );
+                self.0
+                    .emit(peer, meta.transport, req, None, &oc, start, Duration::ZERO);
             }
             Response::Deferred(_) => {}
         }
