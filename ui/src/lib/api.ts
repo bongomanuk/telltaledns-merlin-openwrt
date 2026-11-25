@@ -90,6 +90,60 @@ export type EntryPath = 'upstreams' | 'upstream-groups' | 'lists' | 'groups' | '
 const get = <T>(path: string, query?: Query) => call<T>('GET', path, { query });
 const post = <T>(path: string, body?: unknown) => call<T>('POST', path, { body: body ?? {} });
 
+/** REQ: OPS-011 — a support package's manifest (`MANIFEST.json`). */
+export type SupportManifest = {
+  created: string;
+  level: string;
+  files?: { path: string; collector: string; bytes: number; status: 'ok' | 'truncated' | 'missing'; note?: string; redactions?: Record<string, number> }[];
+  redactions: Record<string, number>;
+  config_fields_removed?: string[];
+  config_fields_unclassified?: string[];
+  notes: string[];
+  /** REQ: OPS-011 (ADR-172) — a cluster package's manifest lists the nodes (each with its own manifest in the archive), not files. */
+  kind?: 'cluster';
+  nodes?: { node: string; status: 'ok' | 'missing'; note?: string; files: number; bytes: number }[];
+};
+
+/** The package's `MANIFEST.json`, read from the archive itself: the first entry of the tar. */
+async function manifestOf(archive: Blob): Promise<SupportManifest> {
+  const tar = await new Response(archive.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  const head = new Uint8Array(tar, 0, 512);
+  const field = (from: number, to: number) => new TextDecoder().decode(head.subarray(from, to)).replace(/\x00.*$/s, '').trim();
+  if (field(0, 100) !== 'MANIFEST.json') throw new ApiError({ status: 0, code: 'internal', detail: 'the package has no manifest' });
+  const size = parseInt(field(124, 136), 8);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(tar, 512, size))) as SupportManifest;
+}
+
+/** A request whose answer is a file: the response, once it is known to be a success. */
+async function callFile(method: string, path: string, body: unknown): Promise<Response> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (method !== 'GET' && csrf) headers['x-csrf-token'] = csrf;
+  let res: Response;
+  try {
+    res = await fetch(`/api/v1${path}`, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError({ status: 0, code: 'unavailable', detail: 'cannot reach the server' });
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    let p: Partial<Problem> = {};
+    try {
+      p = JSON.parse(text) as Partial<Problem>;
+    } catch {
+      // Not problem+json: the status text will do.
+    }
+    throw new ApiError({ ...p, status: res.status, detail: p.detail ?? (text || res.statusText) });
+  }
+  return res;
+}
+
+
+
 /** Instant lockdown: the dashboard switch that blocks whole groups now. */
 export interface LockdownStatus {
   configuredGroups: string[];
@@ -195,6 +249,16 @@ export const api = {
   plans: () => get<S['Items_Plan']>('/plans'),
   approvePlan: (id: string) => post<S['Plan']>(`/plans/${encodeURIComponent(id)}/approve`),
   rejectPlan: (id: string) => post<S['Plan']>(`/plans/${encodeURIComponent(id)}/reject`),
+  // REQ: OPS-011 (ADR-156) — a support package (admin): what it would hold, the archive, its map.
+  supportPreview: (b: S['SupportPackageRequest']) =>
+    call<SupportManifest>('POST', '/system/support-package', { body: b, query: { dryRun: true } }),
+  supportPackage: async (b: S['SupportPackageRequest']) => {
+    const res = await callFile('POST', '/system/support-package', b);
+    const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'telltale-support.tar.gz';
+    const blob = await res.blob();
+    return { blob, name, id: res.headers.get('x-support-package-id') ?? undefined, manifest: await manifestOf(blob) };
+  },
+  supportMap: async (id: string) => (await callFile('GET', `/system/support-package/${encodeURIComponent(id)}/map`, undefined)).blob(),
   // REQ: OPS-004 — "Check now" (admin).
   checkUpdates: () => post<S['UpdateStatus']>('/system/update-check'),
   // `scope`: `cluster` (default, every node), `node:<id>`, or `site:<name>` (CLU-002).
