@@ -13,6 +13,13 @@ import { DEVPACK_KEY } from '../i18n/devpack';
 /** The one-load flag (session storage, removed when read): `1` after "Show the test pack on this page",
  * `away` after the pack left a page because someone went away. */
 export const ONCE_KEY = 'telltale.devpack.once';
+/** This web UI's build: the path of the page's entry module (`/assets/index-<hash>.js`, whose content-hashed
+ * name changes with the English by construction), from the page's one module script. */
+export function entryPath(): string {
+  const s = document.querySelector<HTMLScriptElement>('script[type="module"]');
+  return s ? new URL(s.src, location.href).pathname : '';
+}
+
 /** How long a pack (and the notice after one) lasts. */
 export const LIFETIME_MS = 7 * 24 * 3600 * 1000;
 

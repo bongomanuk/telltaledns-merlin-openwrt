@@ -21,8 +21,10 @@
   import { notesText } from './notes';
   import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from './packWords';
   import { sha256 } from './sha256';
-  import { newRecord, readValue, retire, write, type Notice, type PackRecord, type Store } from './store';
+  import { entryPath, newRecord, readValue, retire, write, type Notice, type PackRecord, type Store } from './store';
   const { t, tn } = tr('devPackCard');
+  // This web UI's build (the entry module's path).
+  const ui = entryPath();
 
   // The developer page for translators (the project site, as the menu's link to the site).
   const GUIDE = 'https://paimonsoror.github.io/telltaledns/dev-languages.html';
@@ -124,7 +126,7 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
-  const build = () => devpack.ui.replace(/^\/assets\//, '').replace(/\.js$/, '');
+  const build = () => ui.replace(/^\/assets\//, '').replace(/\.js$/, '');
   function downloadTemplate() {
     if (tpl && tag) save(materialize(tpl, tag.categories), `${tag.tag}.json`, 'application/json');
   }
@@ -169,7 +171,7 @@
     }
     // The record keeps the check's table for this build and fingerprint, so a page load need not check
     // the file again; when that does not fit, the record alone (each load then checks the file).
-    const rec = newRecord({ ui: devpack.ui, commit, user, name: file.name, sha: file.sha, tag: got.tag.tag, dir: got.tag.dir, text: file.text ?? '', table: got.checked.table }, Date.now());
+    const rec = newRecord({ ui, commit, user, name: file.name, sha: file.sha, tag: got.tag.tag, dir: got.tag.dir, text: file.text ?? '', table: got.checked.table }, Date.now());
     if (!write(store, rec) && !write(store, { ...rec, checked: undefined })) {
       useError = 'storage';
       busy = false;

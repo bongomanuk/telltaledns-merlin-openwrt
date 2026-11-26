@@ -6,9 +6,7 @@ import { earlyCalls, install, load, tr, type Choice } from './lib/i18n';
 import { DEVPACK_KEY, devpack } from './lib/i18n/devpack';
 import { LOCALES, TEMPLATE } from './lib/i18n/locales.gen';
 
-// REQ: API-013 (ADR-190) — this web UI's build (the entry's hashed name) and its template, for a
-// test language pack.
-devpack.ui = new URL(import.meta.url).pathname;
+// REQ: API-013 (ADR-190) — this web UI's template, for a test language pack.
 devpack.template = TEMPLATE;
 
 // REQ: API-012 (ADR-189) — the language is settled before the page is drawn: `?lang=` (this page

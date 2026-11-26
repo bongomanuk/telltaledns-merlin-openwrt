@@ -16,7 +16,7 @@ import type { Choice } from '../i18n';
 import { devpack } from '../i18n/devpack';
 import DevPackBanner from './DevPackBanner.svelte';
 import { decide, type Decision, type View } from './lifecycle';
-import { ONCE_KEY, notice, retire, type Held, type PackRecord, type Store } from './store';
+import { ONCE_KEY, entryPath, notice, retire, type Held, type PackRecord, type Store } from './store';
 
 performance.mark('telltale.devpack.start');
 
@@ -72,7 +72,7 @@ export async function boot(value: string, signal: AbortSignal): Promise<Choice |
     },
     fetch: (input, init) => fetch(input, init),
     now: () => Date.now(),
-    ui: devpack.ui,
+    ui: entryPath(),
     template: devpack.template,
     search: location.search,
     hash: location.hash,
