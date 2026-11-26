@@ -8,7 +8,7 @@
   import { onDestroy, untrack } from 'svelte';
   import { clock, monthDay, num, short } from '../format';
   import type { Marker } from '../annotations.svelte';
-  import { visibleMarkers } from '../markers';
+  import { markerColumns, visibleMarkers, type MarkerColumn } from '../markers';
   import { bucketLabel, bucketStart, rebucket, type RawSeries, type Shown } from './smooth';
   import { tr } from '../i18n';
   const { t: tx } = tr('smoothChart');
@@ -51,9 +51,8 @@
 
   // REQ: OBS-033 — markers sit over the plot as small buttons (keyboard and screen readers reach
   // them; the canvas stays untouched). Past 40 in view, those within 8 px share one, with a count.
-  const MAX_SINGLE = 40;
   let wrap = $state<HTMLDivElement | undefined>();
-  let placed = $state<{ x: number; marks: Marker[] }[]>([]);
+  let placed = $state<MarkerColumn<Marker>[]>([]);
   let box = $state({ left: 0, top: 0, width: 0, height: 0 });
   let mtip = $state<{ x: number; marks: Marker[] } | null>(null);
 
@@ -73,16 +72,7 @@
     const rawStep = times.length > 1 ? times[1] - times[0] : 60;
     const rawEnd = (times[times.length - 1] ?? max) + rawStep;
     const shownMarks = visibleMarkers(markers, min, rawEnd, Date.now() / 1000);
-    const col = shownMarks.length > MAX_SINGLE ? 8 : 1;
-    const cols = new Map<number, { x: number; marks: Marker[] }>();
-    for (const m of shownMarks) {
-      const x = Math.min(u.valToPos(Math.min(m.time, max), 'x'), o.width - 1);
-      const k = Math.round(x / col);
-      const c = cols.get(k);
-      if (c) c.marks.push(m);
-      else cols.set(k, { x: Math.round(x), marks: [m] });
-    }
-    placed = [...cols.values()].sort((a, b) => a.x - b.x);
+    placed = markerColumns(shownMarks, (m) => Math.min(u.valToPos(Math.min(m.time, max), 'x'), o.width - 1));
   }
   const markLabel = (marks: Marker[]) => marks.map((m) => `${clock(m.time)}: ${m.summary}${m.actor ? ` (${m.actor})` : ''}`).join('; ');
   function openMark(marks: Marker[]) {
@@ -329,7 +319,7 @@
         style:width={`${box.width}px`}
         style:height={`${box.height}px`}
       >
-        {#each placed as p (p.x)}
+        {#each placed as p (p.k)}
           <button
             type="button"
             class="mk"
