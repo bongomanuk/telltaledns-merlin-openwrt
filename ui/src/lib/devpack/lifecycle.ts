@@ -15,8 +15,9 @@
 //   f. the table is installed as the page's language (the runtime re-checks each translation against its
 //      English the first time it shows it, as for a catalog the build did not ship).
 // It writes over or removes only what it read, while the key still holds it (another tab may have loaded a
-// newer pack). Pure: storage, network, time and the checking code (loaded only for e) come in `Deps`, so
-// the tests hold every path.
+// newer pack), and gives up the requests and the checking code when the page load stops waiting. Pure:
+// storage, network, time and the checking code (loaded only for e) come in `Deps`, so the tests hold
+// every path.
 import type { Choice } from '../i18n';
 import { formatLocale } from '../i18n/match';
 import type { checkPack, tagInfo } from '../i18n/pack';
@@ -49,8 +50,9 @@ export type Deps = {
   readonly languages: readonly string[];
   /** Loads the checking code (a chunk of its own in the browser): only when the file is checked. */
   readonly checker: () => Promise<Checker>;
-  /** For the two requests together (the catalog's limit). */
-  readonly timeoutMs: number;
+  /** Ends when the page load stops waiting for the pack (the catalog's limit, from the start of its code):
+   * the requests and the checking code are given up then, and the page is in the usual language. */
+  readonly signal: AbortSignal;
 };
 
 /** The page's language from the pack (null: the usual language), what the banner shows, the record that
@@ -66,6 +68,10 @@ export type Decision = {
 };
 
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
+
+/** `p`, or a rejection when `signal` ends first (an import cannot be aborted, only given up). */
+const until = <T>(p: Promise<T>, signal: AbortSignal) =>
+  Promise.race([p, new Promise<never>((_, no) => (signal.aborted ? no(signal.reason) : signal.addEventListener('abort', () => no(signal.reason), { once: true })))]);
 
 export async function decide(value: string, d: Deps): Promise<Decision> {
   // The one-load flag is taken first, so that no early return leaves it for a later page.
@@ -101,38 +107,32 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   });
   // c: `?lang=` is this load's language.
   if (new URLSearchParams(d.search).has('lang')) return paused('param');
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), d.timeoutMs);
   let json: string;
   let code: Checker;
+  // c: who is signed in (the public status the app reads anyway).
+  let status: { user?: { display?: unknown } | null; setupRequired?: unknown };
   try {
-    // c: who is signed in (the public status the app reads anyway).
-    let status: { user?: { display?: unknown } | null; setupRequired?: unknown };
-    try {
-      const res = await d.fetch('/api/v1/auth/status', { signal: abort.signal, credentials: 'same-origin' });
-      if (!res.ok) return unchecked;
-      status = await res.json();
-    } catch {
-      return unchecked;
-    }
-    const display = d.hash.startsWith('#/display') || !!status.user?.display;
-    if (!once && (display || !status.user || status.setupRequired)) return paused(display ? 'display' : 'signed-out');
-    // d: the table kept for this build and this file.
-    const kept = r.checked && r.checked.ui === d.ui && r.checked.sha === r.sha ? keptTable(r.checked.table) : null;
-    if (kept) return use(kept, false);
-    // e: the template (normally from the browser's cache) and the checking code. A failure of either is
-    // outside the file: not counted.
-    try {
-      if (!d.template) return unchecked;
-      const [res, c] = await Promise.all([d.fetch(d.template, { signal: abort.signal, credentials: 'same-origin' }), d.checker()]);
-      if (!res.ok) return unchecked;
-      json = await res.text();
-      code = c;
-    } catch {
-      return unchecked;
-    }
-  } finally {
-    clearTimeout(timer);
+    const res = await d.fetch('/api/v1/auth/status', { signal: d.signal, credentials: 'same-origin' });
+    if (!res.ok) return unchecked;
+    status = await res.json();
+  } catch {
+    return unchecked;
+  }
+  const display = d.hash.startsWith('#/display') || !!status.user?.display;
+  if (!once && (display || !status.user || status.setupRequired)) return paused(display ? 'display' : 'signed-out');
+  // d: the table kept for this build and this file.
+  const kept = r.checked && r.checked.ui === d.ui && r.checked.sha === r.sha ? keptTable(r.checked.table) : null;
+  if (kept) return use(kept, false);
+  // e: the template (normally from the browser's cache) and the checking code. A failure of either, or the
+  // page load's time running out, is outside the file: not counted.
+  try {
+    if (!d.template) return unchecked;
+    const [res, c] = await Promise.all([d.fetch(d.template, { signal: d.signal, credentials: 'same-origin' }), until(d.checker(), d.signal)]);
+    if (!res.ok) return unchecked;
+    json = await res.text();
+    code = c;
+  } catch {
+    return unchecked;
   }
   let tpl;
   try {

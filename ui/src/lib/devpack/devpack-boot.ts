@@ -47,8 +47,9 @@ const actions = {
   reload,
 };
 
-/** The pack's language for this page load (null: the usual language), with the banner shown. */
-export async function boot(value: string): Promise<Choice | null> {
+/** The pack's language for this page load (null: the usual language), with the banner shown. `signal` ends
+ * when the page load stops waiting: then nothing is shown, and the page is in the usual language. */
+export async function boot(value: string, signal: AbortSignal): Promise<Choice | null> {
   try {
     store = localStorage;
     session = sessionStorage;
@@ -74,22 +75,27 @@ export async function boot(value: string): Promise<Choice | null> {
     hash: location.hash,
     languages: navigator.languages ?? [],
     checker: () => import('./recheck'),
-    timeoutMs: 4000,
+    signal,
   });
-  record = out.record;
-  held = out.record ?? out.notice ?? null;
-  installed = out.choice !== null;
+  // The page load stopped waiting (a request or a chunk that stalled): the page is drawn in the usual language,
+  // and a pack that arrives late says it could not be checked, never that it is in use.
+  const r = out.record;
+  const late = signal.aborted && out.choice !== null;
+  const view: View = late && r ? { kind: 'unchecked', name: r.name, sha: r.sha, tag: r.tag } : out.view;
+  record = r;
+  held = r ?? out.notice ?? null;
+  installed = !late && out.choice !== null;
   devpack.failed = failed;
-  if (out.view.kind !== 'none') {
+  if (view.kind !== 'none') {
     devpack.active = true;
     const host = document.createElement('div');
     host.className = 'devpack-host';
     document.body.insertBefore(host, document.getElementById('app'));
-    banner = mount(DevPackBanner, { target: host, props: { view: out.view, actions } });
+    banner = mount(DevPackBanner, { target: host, props: { view, actions } });
   }
   if (record) watchServer(record, out.view, out.paused);
   performance.mark('telltale.devpack.ready');
-  return out.choice;
+  return installed ? out.choice : null;
 }
 
 function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {

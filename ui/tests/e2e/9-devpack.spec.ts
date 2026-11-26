@@ -516,6 +516,27 @@ test('api_013 a damaged stored pack falls back without a blank page', async ({ b
   }
 });
 
+test('api_013 pack code that never arrives still gives a drawn page', async ({ browser }) => {
+  // A chunk request that stalls: the pack's own code, or the checking code. An import cannot be aborted; the page
+  // load gives it up with the time a catalog has, and the page is drawn in the usual language (review part A of
+  // T29.3, finding 6).
+  for (const [what, chunk, says] of [
+    ["the pack's code", /\/assets\/devpack-boot-[\w-]+\.js$/, ''],
+    ['the checking code', /\/assets\/recheck-[\w-]+\.js$/, 'could not be checked, so this page is in your usual language'],
+  ] as const) {
+    const s = await fresh(browser, { allow: /ERR_|Failed to load/ });
+    await storePack(s.page, FR_TEXT);
+    await s.page.route(chunk, () => undefined);
+    await s.page.goto('/#/');
+    await expect(s.page.getByRole('heading', { name: 'Dashboard' }).first(), what).toBeVisible({ timeout: 20_000 });
+    await expect(s.page.locator('html'), what).toHaveAttribute('lang', 'en');
+    if (says) await expect(banner(s.page), what).toContainText(says);
+    else await expect(banner(s.page), what).toHaveCount(0);
+    expect(JSON.parse((await kept(s.page)) ?? '{}').fails, what).toBe(0);
+    await done(s);
+  }
+});
+
 test("api_013 a card opened in a tab from before an upgrade says reload", async ({ browser }) => {
   const s = await fresh(browser, { allow: /status of 404/ });
   await s.page.route('**/assets/DevPackCard-*.js', (r) => r.fulfill({ status: 404, body: '' }));

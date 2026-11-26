@@ -195,35 +195,38 @@ export function own<V>(table: Readonly<Record<string, V>>, key: string | null | 
 /** Where the request comes from: the page's own address, the stored choice and the browser. */
 export type Sources = { readonly search: string; readonly stored: string | null; readonly languages: readonly string[] };
 
-/** A source consulted before the build's catalogs (none today): a choice, or null to go on. */
-export type Provider = () => Choice | null | Promise<Choice | null>;
+/** A source consulted before the build's catalogs (a test language pack): a choice, or null to go on. Given
+ * the page load's signal, which ends with the time a catalog has. */
+export type Provider = (signal: AbortSignal) => Choice | null | Promise<Choice | null>;
 
 const EN: Choice = Object.freeze({ tag: 'en' });
 
 /** The language of this page load: `?lang=` (this load only), the stored choice, then the browser's
- * languages in order. A catalog is fetched with a 4 s limit; any failure means English. */
+ * languages in order. A provider and a catalog have 4 s together, then the page is English; so does any
+ * failure. */
 export async function load(locales: LocaleTable, src: Sources, fetcher: typeof fetch, timeoutMs = 4000, provider?: Provider): Promise<Choice> {
-  if (provider) {
-    try {
-      // Never `built`: only a catalog of the build's table skips the digit and added-token rules.
-      const c = await provider();
-      if (c) return { ...c, built: false };
-    } catch {
-      // A provider that fails is skipped.
-    }
-  }
-  const requests: Request[] = [];
-  const param = new URLSearchParams(src.search).get('lang');
-  if (param) requests.push({ tag: param, source: 'param' });
-  if (src.stored) requests.push({ tag: src.stored, source: 'stored' });
-  for (const l of src.languages) requests.push({ tag: l, source: 'browser' });
-  const pick = match(requests, locales);
-  if (pick === PSEUDO) return { tag: PSEUDO };
-  if (pick === 'en' || !Object.hasOwn(locales, pick)) return EN;
-  const entry = locales[pick];
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
+    if (provider) {
+      try {
+        // Never `built`: only a catalog of the build's table skips the digit and added-token rules. Given up
+        // when the time runs out (an import cannot be aborted).
+        const c = await Promise.race([provider(abort.signal), new Promise<never>((_, no) => abort.signal.addEventListener('abort', no))]);
+        if (c) return { ...c, built: false };
+      } catch {
+        // A provider that fails is skipped.
+      }
+    }
+    const requests: Request[] = [];
+    const param = new URLSearchParams(src.search).get('lang');
+    if (param) requests.push({ tag: param, source: 'param' });
+    if (src.stored) requests.push({ tag: src.stored, source: 'stored' });
+    for (const l of src.languages) requests.push({ tag: l, source: 'browser' });
+    const pick = match(requests, locales);
+    if (pick === PSEUDO) return { tag: PSEUDO };
+    if (pick === 'en' || !Object.hasOwn(locales, pick)) return EN;
+    const entry = locales[pick];
     const res = await fetcher(entry.url, { signal: abort.signal, credentials: 'same-origin' });
     if (!res.ok) return EN;
     const table = parseCatalog(await res.text());

@@ -34,7 +34,7 @@ async function start() {
   // REQ: API-013 (ADR-190) — a test pack's code loads only when this browser keeps one (or the
   // notice after one); it comes before the stored choice, and pauses itself under `?lang=`.
   const value = pack;
-  const provider = value === null ? undefined : () => import('./lib/devpack/devpack-boot').then((m) => m.boot(value));
+  const provider = value === null ? undefined : (signal: AbortSignal) => import('./lib/devpack/devpack-boot').then((m) => m.boot(value, signal));
   let choice: Choice = { tag: 'en' };
   try {
     choice = await load(LOCALES, { search: location.search, stored, languages: navigator.languages ?? [] }, fetch, 4000, provider);

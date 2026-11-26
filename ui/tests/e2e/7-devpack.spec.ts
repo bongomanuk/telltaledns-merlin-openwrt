@@ -12,7 +12,7 @@ import { cleanup, project, put, uiCopy, under } from './i18n-fixture';
 import * as safe from '../../src/lib/i18n/safe';
 import { agree } from '../../src/lib/i18n/agree';
 import { hash } from '../../src/lib/i18n/ident';
-import { tr } from '../../src/lib/i18n';
+import { load, tr } from '../../src/lib/i18n';
 import { parse, type Catalog } from '../../src/lib/i18n/pairs';
 import { MAX_BYTES, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tagInfo, type Tag } from '../../src/lib/i18n/pack';
 import { identity, ship } from '../../src/lib/i18n/shipping';
@@ -674,7 +674,7 @@ function deps(o: Partial<Deps> = {}, fake: Fake = { calls: [] }): Deps {
     if (url === TPL_URL) return fake.tpl === null ? new Response('', { status: 500 }) : new Response(fake.tpl ?? deJson());
     return new Response('', { status: 404 });
   };
-  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], checker: checking(), timeoutMs: 4000, ...o };
+  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], checker: checking(), signal: new AbortController().signal, ...o };
 }
 /** The checking code as the browser loads it (`recheck.ts`), with another check if given; `loads` counts the loads. */
 function checking(check = checkPack, loads = { n: 0 }): () => Promise<Checker> {
@@ -746,7 +746,7 @@ test('api_013 a check that throws twice in a row retires the pack', async () => 
     ['a damaged template', deps({ store: s }, { tpl: '{"v": 1, "contexts"', calls: [] })],
     ['an empty answer', deps({ store: s }, { tpl: '', calls: [] })],
     ['no template in the build', deps({ store: s, template: null })],
-    ['a server that hangs', deps({ store: s, fetch: hung, timeoutMs: 30 })],
+    ['a server that hangs', deps({ store: s, fetch: hung, signal: AbortSignal.timeout(30) })],
     ['checking code that does not load', deps({ store: s, checker: () => Promise.reject(new Error('404')) })],
   ] as const) {
     expect((await decide(s.getItem(DEVPACK_KEY) ?? '', d)).view.kind, what).toBe('unchecked');
@@ -945,6 +945,30 @@ test('api_013 a notice that cannot be kept never leaves the pack behind', () => 
   expect(retire(stuck, REC, notice('upgrade', 'de.json', NOW))).toBe(false);
   // Blocked storage: nothing held, nothing to remove.
   expect(retire(null, REC, notice('upgrade', 'de.json', NOW))).toBe(true);
+});
+
+test('api_013 code that never arrives gives the usual language in time', async () => {
+  // An import cannot be aborted: the checking code, and the pack's code itself, are given up when the page load's
+  // time runs out, so a chunk request that stalls never keeps the page from being drawn (review part A of T29.3,
+  // finding 6).
+  const never = () => new Promise<never>(() => {});
+  const s = holding(JSON.stringify({ ...REC, fails: 1 }));
+  const t0 = performance.now();
+  const r = await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s, checker: never, signal: AbortSignal.timeout(50) }));
+  expect([r.view.kind, r.choice]).toEqual(['unchecked', null]);
+  expect(performance.now() - t0).toBeLessThan(2000);
+  // Not the file's doing: not counted.
+  expect(stored(s).fails).toBe(1);
+  // The pack's code: the page load's language is chosen without it, the time a catalog has.
+  let given: AbortSignal | undefined;
+  const t1 = performance.now();
+  const choice = await load({}, { search: '', stored: null, languages: ['de-DE'] }, fetch, 50, (signal) => {
+    given = signal;
+    return never();
+  });
+  expect(choice).toEqual({ tag: 'en' });
+  expect(performance.now() - t1).toBeLessThan(2000);
+  expect(given?.aborted).toBe(true);
 });
 
 test('api_013 a pack lookup never throws', () => {
