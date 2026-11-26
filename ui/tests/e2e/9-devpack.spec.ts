@@ -88,6 +88,13 @@ async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number;
     viewport: o.width ? { width: o.width, height: 700 } : undefined,
   });
   if (o.init) await context.addInitScript(o.init);
+  // No change markers on the charts: those that earlier spec files leave are not this file's subject (server text
+  // under translate="no": no pack text), and in a dense last hour a chart can repeat a marker column's key, a page
+  // error unrelated to packs. Requests are still seen: the request event fires for a routed request.
+  await context.route(
+    (u) => u.pathname === '/api/v1/annotations',
+    (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: [], truncated: false } }) : q.fallback()),
+  );
   const page = await context.newPage();
   const problems: string[] = [];
   page.on('pageerror', (e) => problems.push(`page error: ${e.message} (${page.url()}; ${(e.stack ?? '').split('\n').slice(1, 3).join(' | ').slice(0, 200)})`));
@@ -577,12 +584,6 @@ async function record(s: { context: BrowserContext; page: Page }) {
 test('api_013 pack text never reaches a request or storage', async ({ browser }) => {
   const s = await fresh(browser);
   const r = await record(s);
-  // No change markers on the charts: what earlier spec files changed is not this test's subject, and in a dense
-  // last hour the Cache page's charts can repeat a marker column's key (a page error unrelated to packs).
-  await s.page.route(
-    (u) => u.pathname === '/api/v1/annotations',
-    (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: [], truncated: false } }) : q.fallback()),
-  );
   await storePack(s.page, ALL_TEXT);
   for (const [path, testid] of [['/#/', 'dashboard-chart'], ['/#/queries', ''], ['/#/clients', ''], ['/#/settings?tab=account', 'devpack-card'], ['/#/settings?tab=tokens', ''], ['/#/cache', 'cache-card']]) {
     await s.page.goto(path);
