@@ -967,10 +967,11 @@ test("api_013 the card's actions send nothing about the pack", async ({ browser 
   // Only reads: the card's chunk and its stylesheet, the template, and the app's own polls.
   expect(card.filter((x) => !x.startsWith('GET '))).toEqual([]);
   expect(card.filter((x) => x.includes('/assets/locales/')).map((x) => new URL(x.split(' ')[1]).pathname)).toEqual([templateUrl()]);
-  // Use: one /system/info for the server's build; then the reload.
+  // Use: /system/info for the server's build and /auth/status for who is signed in; then the reload.
   const use = r.sent.slice(beforeUse);
   expect(use.filter((x) => !x.startsWith('GET '))).toEqual([]);
   expect(use.filter((x) => x.includes('/api/v1/system/info')).length).toBeGreaterThanOrEqual(1);
+  expect(use.filter((x) => x.includes('/api/v1/auth/status')).length).toBeGreaterThanOrEqual(1);
   // Nothing about the file in any request: its name, fingerprint or text.
   const sha = createHash('sha256').update(FR_TEXT).digest('hex');
   for (const needle of ['fr.json', sha, sha.slice(0, 12), 'Réglages', 'R%C3%A9glages', 'Se connecter', 'supprim']) expect(r.sent.filter((x) => x.includes(needle)), needle).toEqual([]);
