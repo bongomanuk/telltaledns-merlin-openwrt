@@ -846,6 +846,29 @@ test('api_013 a page load pauses the pack where someone else may be next', async
   expect(await paused({}, { status: null, calls: [] })).toEqual(['unchecked', 'usual language']);
 });
 
+test('api_013 the one-load flag is taken whatever the load decides', async () => {
+  // "Show the test pack on this page" is for the next load alone: no early return leaves the flag in the tab for a
+  // later sign-in page (review part A of T29.3, finding 8).
+  const cases: [string, string, Partial<Deps>][] = [
+    ['?lang=', JSON.stringify(REC), { search: '?lang=en' }],
+    ['a notice', JSON.stringify(notice('expired', 'de.json', NOW - 1000)), {}],
+    ['a damaged value', '{', {}],
+    ['another web UI build', JSON.stringify(REC), { ui: '/assets/index-B2.js' }],
+    ['seven days gone', JSON.stringify(REC), { now: () => REC.expires }],
+    ['a page that uses the pack', JSON.stringify(REC), {}],
+  ];
+  for (const [what, v, o] of cases) {
+    let flag = true;
+    const takeOnce = () => {
+      const was = flag;
+      flag = false;
+      return was;
+    };
+    await decide(v, deps({ ...o, takeOnce }));
+    expect(flag, what).toBe(false);
+  }
+});
+
 test('api_013 a pack lookup never throws', () => {
   // A table of every kind of value, under the hashes of messages and plurals, and keys named like members.
   const odd: unknown[] = [1, null, true, [], {}, { one: 'x' }, { other: 3 }, { other: '{n}', one: {} }, { other: null }, 'x'.repeat(100_000), '\uD800', '{n} {n}', '<b>', '%s $1', ''];

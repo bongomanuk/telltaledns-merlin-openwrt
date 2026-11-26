@@ -4,7 +4,8 @@
 //   b. another web UI build, 7 days gone, or a value that is not a record removes the pack, with a notice;
 //   c. `?lang=` pauses it for this load; so does a page where nobody is signed in (sign-in, two-factor,
 //      setup, a server that cannot be reached), a display link and a display session, unless "Show the
-//      test pack on this page" asked for this one load;
+//      test pack on this page" asked for this one load (that flag is taken first, whatever the load
+//      decides);
 //   d. the table the check gave is installed as it was kept, while the web UI build and the file's
 //      fingerprint it was made for are this record's (design section 8, "About the boot ceiling");
 //   e. otherwise the template is fetched (a failure: the usual language, and the pack stays for the next
@@ -57,6 +58,8 @@ export type Decision = { readonly choice: Choice | null; readonly view: View; re
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
 
 export async function decide(value: string, d: Deps): Promise<Decision> {
+  // The one-load flag is taken first, so that no early return leaves it for a later page.
+  const once = d.takeOnce();
   const now = d.now();
   const got = readValue(value);
   const removed = (gone: Gone, name: string): Decision => {
@@ -86,7 +89,6 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   });
   // c: `?lang=` is this load's language.
   if (new URLSearchParams(d.search).has('lang')) return paused('param');
-  const once = d.takeOnce();
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), d.timeoutMs);
   let json: string;
