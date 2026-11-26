@@ -149,7 +149,10 @@
     useButton?.focus();
   }
   async function use() {
-    if (!chosen || !outcome || !('checked' in outcome)) return;
+    // The file and the check confirmed, as they are now: a file chosen while the requests run is not stored.
+    const file = chosen;
+    const got = outcome;
+    if (!file || !got || !('checked' in got)) return;
     busy = true;
     useError = '';
     let commit: string;
@@ -166,7 +169,7 @@
     }
     // The record keeps the check's table for this build and fingerprint, so a page load need not check
     // the file again; when that does not fit, the record alone (each load then checks the file).
-    const rec = newRecord({ ui: devpack.ui, commit, user, name: chosen.name, sha: chosen.sha, tag: outcome.tag.tag, dir: outcome.tag.dir, text: chosen.text ?? '', table: outcome.checked.table }, Date.now());
+    const rec = newRecord({ ui: devpack.ui, commit, user, name: file.name, sha: file.sha, tag: got.tag.tag, dir: got.tag.dir, text: file.text ?? '', table: got.checked.table }, Date.now());
     if (!write(store, rec) && !write(store, { ...rec, checked: undefined })) {
       useError = 'storage';
       busy = false;

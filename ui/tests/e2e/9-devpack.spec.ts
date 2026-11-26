@@ -730,6 +730,29 @@ test('api_013 a quota error on use writes nothing', async ({ browser }) => {
   await done(s);
 });
 
+test('api_013 use stores the file that was confirmed', async ({ browser }) => {
+  // A file chosen while Use waits for the server is not stored in place of the one confirmed (review part A of
+  // T29.3, finding 7).
+  const s = await fresh(browser);
+  await openCard(s.page);
+  await chooseFile(s.page, FR_TEXT);
+  await expect(s.page.getByTestId('devpack-summary').last()).toContainText('fr.json');
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await s.page.route('**/api/v1/system/info', async (r) => {
+    await held;
+    await r.continue();
+  });
+  await s.page.getByTestId('devpack-use').click();
+  await s.page.getByTestId('devpack-confirm-use').click();
+  await chooseFile(s.page, ALL_TEXT, 'other.json');
+  await expect(s.page.getByTestId('devpack-summary').last()).toContainText('other.json');
+  await Promise.all([s.page.waitForEvent('load'), Promise.resolve().then(release)]);
+  const rec = JSON.parse((await kept(s.page)) ?? '{}');
+  expect([rec.name, rec.sha]).toEqual(['fr.json', createHash('sha256').update(FR_TEXT).digest('hex')]);
+  await done(s);
+});
+
 test('api_013 a pack whose table does not fit is kept without it', async ({ browser }) => {
   // A store that refuses the record with its table, and takes it without.
   const s = await fresh(browser, {
