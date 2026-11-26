@@ -1024,7 +1024,7 @@ export function templateJson(result) {
 /** Writes the shipped catalogs, the URL table and the list of the files it wrote (all git-ignored;
  * postbuild allows exactly the listed files in `assets/locales/`: `{ file, tag }` for a catalog,
  * `{ file, template: true }` for the build's one pair-file template, whose address the table file
- * exports as `TEMPLATE`, null without one). With no locale: an empty table. */
+ * exports as `TEMPLATE`, null without one). With no locale: an empty table and the template. */
 export function prebuild(root, result = check(root, { ratchets: false })) {
   const outDir = join(root, 'public', 'assets', 'locales');
   rmSync(outDir, { recursive: true, force: true });
@@ -1038,7 +1038,15 @@ export function prebuild(root, result = check(root, { ratchets: false })) {
     emitted.push({ file: name, tag });
     rows.push(`  ${JSON.stringify(tag)}: { url: ${JSON.stringify(`/assets/locales/${name}`)}, dir: ${JSON.stringify(s.dir)}, offered: ${s.offered} },`);
   }
-  const template = null;
+  // REQ: API-013 (ADR-190) — the pair-file template, always (it is how a first language is made).
+  // Its address is a literal of the table file, which only the entry module imports, so the
+  // entry's hashed name changes whenever the English does (postbuild checks that it is there).
+  const tpl = templateJson(result);
+  const tplName = `template-${createHash('sha256').update(tpl).digest('hex').slice(0, 8)}.json`;
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, tplName), tpl);
+  emitted.push({ file: tplName, template: true });
+  const template = `/assets/locales/${tplName}`;
   mkdirSync(join(root, 'src', 'lib', 'i18n'), { recursive: true });
   writeFileSync(join(root, 'src', 'lib', 'i18n', 'emitted.gen.json'), serializeJson(emitted));
   const gen = [

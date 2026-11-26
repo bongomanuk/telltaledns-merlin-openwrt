@@ -39,6 +39,7 @@
   import Settings from './pages/Settings.svelte';
   import Alerts from './pages/Alerts.svelte';
   import { tr } from './lib/i18n';
+  import { serverBuild } from './lib/i18n/devpack';
   import T from './lib/i18n/T.svelte';
   const { t } = tr('app');
 
@@ -130,8 +131,9 @@
   $effect(() => {
     if (session.user) {
       // Refreshed every minute: the masked-client-IP banner (OPS-003) can come and go, and at
-      // once when maintenance starts or ends (OPS-010).
-      const stop = poll(() => api.info().then((i) => (info = i)), 60_000);
+      // once when maintenance starts or ends (OPS-010). REQ: API-013 — a test language pack compares
+      // the server's build with the one it was loaded on.
+      const stop = poll(() => api.info().then((i) => ((info = i), serverBuild(i.build?.commit))), 60_000);
       const changed = () => void api.info().then((i) => (info = i)).catch(() => {});
       window.addEventListener('telltale:maintenance-changed', changed);
       return () => {
@@ -338,8 +340,9 @@
     background: var(--side-bg);
     color: var(--side-text);
     position: sticky;
-    top: 0;
-    height: 100vh;
+    /* REQ: API-013 — below a test language pack's banner, when there is one. */
+    top: var(--devpack-h, 0px);
+    height: calc(100vh - var(--devpack-h, 0px));
     overflow-y: auto;
   }
   .brand {
@@ -487,7 +490,7 @@
     padding: 10px 24px;
     background: var(--bg);
     position: sticky;
-    top: 0;
+    top: var(--devpack-h, 0px);
     z-index: 10;
   }
   .search {
@@ -640,7 +643,7 @@
     .side {
       display: none;
       position: fixed;
-      top: 0;
+      top: var(--devpack-h, 0px);
       left: 0;
       bottom: 0;
       height: auto;
@@ -660,6 +663,7 @@
       display: block;
       position: fixed;
       inset: 0;
+      top: var(--devpack-h, 0px);
       z-index: 14;
       min-height: 0;
       padding: 0;

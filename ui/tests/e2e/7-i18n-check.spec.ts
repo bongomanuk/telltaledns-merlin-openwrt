@@ -428,7 +428,8 @@ test('api_012 prebuild writes the shipped catalogs and the url table', () => {
   const dir = project();
   expect(lib.prebuild(dir)).toBe(1);
   const out = join(dir, 'public/assets/locales');
-  const names = readdirSync(out);
+  // The catalogs (the folder also holds the pair-file template, API-013).
+  const names = readdirSync(out).filter((n) => !n.startsWith('template-'));
   expect(names).toHaveLength(1);
   expect(names[0]).toMatch(/^qaa-[0-9a-f]{8}\.json$/);
   const shipped = JSON.parse(readFileSync(join(out, names[0]), 'utf8'));
@@ -436,17 +437,17 @@ test('api_012 prebuild writes the shipped catalogs and the url table', () => {
   expect(JSON.stringify(shipped)).not.toContain('Holds'); // no English
   const gen = readFileSync(join(dir, 'src/lib/i18n/locales.gen.ts'), 'utf8');
   expect(gen).toContain(`"qaa": { url: "/assets/locales/${names[0]}", dir: "ltr", offered: false }`);
-  // No locale: an empty table and no folder.
+  // No locale: an empty table, and the folder holds the template only.
   manifest(dir, (m) => delete m.qaa);
   rmSync(join(dir, 'src/locales/qaa.json'));
   expect(lib.prebuild(dir)).toBe(0);
-  expect(existsSync(out)).toBe(false);
+  expect(readdirSync(out).map((n) => n.replace(/[0-9a-f]{8}/, 'x'))).toEqual(['template-x.json']);
   expect(readFileSync(join(dir, 'src/lib/i18n/locales.gen.ts'), 'utf8')).toContain('Object.assign(Object.create(null), {})');
   // It lists what it wrote, for postbuild.
   const listed = project();
   lib.prebuild(listed);
   const emitted = JSON.parse(readFileSync(join(listed, 'src/lib/i18n/emitted.gen.json'), 'utf8'));
-  expect(emitted).toEqual([{ file: readdirSync(join(listed, 'public/assets/locales'))[0], tag: 'qaa' }]);
+  expect(emitted.filter((e: { template?: boolean }) => !e.template)).toEqual([{ file: readdirSync(join(listed, 'public/assets/locales')).find((n) => n.startsWith('qaa-')), tag: 'qaa' }]);
   // Generation needs only what it ships: a broken ratchet baseline fails the check, never dev or build.
   const broken = project((d) => put(d, 'i18n-baseline.json', '{ "literal": '));
   expect(lib.prebuild(broken)).toBe(1);

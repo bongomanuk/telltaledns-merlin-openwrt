@@ -176,6 +176,16 @@ test('api_013 the template equals what sync writes for a new language', () => {
   expect(f.contexts).toEqual([...f.contexts].sort(code));
 });
 
+test('api_013 prebuild writes the template the url table names', () => {
+  const dir = project();
+  lib.prebuild(dir);
+  const json = lib.templateJson(lib.check(dir, { ratchets: false }));
+  const name = `template-${createHash('sha256').update(json).digest('hex').slice(0, 8)}.json`;
+  expect(readFileSync(join(dir, 'public/assets/locales', name), 'utf8')).toBe(json);
+  expect(readFileSync(join(dir, 'src/lib/i18n/locales.gen.ts'), 'utf8')).toContain(`export const TEMPLATE: string | null = "/assets/locales/${name}";`);
+  expect(JSON.parse(readFileSync(join(dir, 'src/lib/i18n/emitted.gen.json'), 'utf8'))).toContainEqual({ file: name, template: true });
+});
+
 test('api_013 plural categories come from the committed table not the engine', () => {
   const { dir, tpl } = uiTemplate();
   const real = Intl.PluralRules;

@@ -232,6 +232,8 @@
   .wall {
     position: fixed;
     inset: 0;
+    /* REQ: API-013 — below a test language pack's banner, when there is one. */
+    top: var(--devpack-h, 0px);
     background: var(--bg);
     color: var(--text);
     display: grid;

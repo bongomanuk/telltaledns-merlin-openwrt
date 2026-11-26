@@ -1,0 +1,120 @@
+// REQ: API-013 (ADR-190) — the code a page load runs when this browser keeps a test language pack (or
+// the notice after one); an English reader never loads it. It decides (`lifecycle.ts`), shows the
+// English banner in its own node before the app, above every overlay, and returns the pack's language
+// for this load. After sign-in it compares the server's build commit, from the app's own build poll,
+// with the one the pack was loaded on: the first answer of a load that differs removes the pack and
+// reloads; a later one removes it and says so, without a reload, so nothing typed is lost. A pack
+// paused only because nobody was signed in loads at the first answer after sign-in.
+import { mount } from 'svelte';
+import type { Choice } from '../i18n';
+import { devpack, onServerBuild } from '../i18n/devpack';
+import { checkPack } from '../i18n/pack';
+import DevPackBanner from './DevPackBanner.svelte';
+import { decide, type Paused, type View } from './lifecycle';
+import { ONCE_KEY, forget, notice, write, type PackRecord, type Store } from './store';
+
+performance.mark('telltale.devpack.start');
+
+let store: Store | null = null;
+let session: Store | null = null;
+let record: PackRecord | null = null;
+let installed = false;
+let banner: { set(v: View): void } | undefined;
+
+const reload = () => location.reload();
+const actions = {
+  remove() {
+    forget(store);
+    reload();
+  },
+  dismiss() {
+    forget(store);
+    devpack.active = false;
+    banner?.set({ kind: 'none' });
+  },
+  once() {
+    try {
+      session?.setItem(ONCE_KEY, '1');
+    } catch {
+      // Session storage blocked: the page reloads paused.
+    }
+    reload();
+  },
+  reload,
+};
+
+/** The pack's language for this page load (null: the usual language), with the banner shown. */
+export async function boot(value: string): Promise<Choice | null> {
+  try {
+    store = localStorage;
+    session = sessionStorage;
+  } catch {
+    // Storage blocked: there is no pack to read.
+  }
+  const out = await decide(value, {
+    store,
+    takeOnce: () => {
+      try {
+        const v = session?.getItem(ONCE_KEY);
+        session?.removeItem(ONCE_KEY);
+        return v === '1';
+      } catch {
+        return false;
+      }
+    },
+    fetch: (input, init) => fetch(input, init),
+    now: () => Date.now(),
+    ui: devpack.ui,
+    template: devpack.template,
+    search: location.search,
+    hash: location.hash,
+    languages: navigator.languages ?? [],
+    check: checkPack,
+    timeoutMs: 4000,
+  });
+  record = out.record;
+  installed = out.choice !== null;
+  if (out.view.kind !== 'none') {
+    devpack.active = true;
+    const host = document.createElement('div');
+    host.className = 'devpack-host';
+    document.body.insertBefore(host, document.getElementById('app'));
+    banner = mount(DevPackBanner, { target: host, props: { view: out.view, actions } });
+  }
+  if (record) watchServer(record, out.view, out.paused);
+  performance.mark('telltale.devpack.ready');
+  return out.choice;
+}
+
+function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
+  let first = true;
+  onServerBuild((commit) => {
+    const wasFirst = first;
+    first = false;
+    if (!record) return;
+    const named = { name: r.name, sha: r.sha, tag: r.tag };
+    if (commit !== r.server.commit) {
+      // Another server build: an upgrade, a rollback or a downgrade.
+      record = null;
+      write(store, notice('upgrade', r.name, Date.now()));
+      if (wasFirst) reload();
+      else banner?.set({ kind: 'updated', ...named });
+      return;
+    }
+    if (wasFirst && paused === 'signed-out' && view.kind === 'paused') {
+      banner?.set({ kind: 'signed-in', ...named });
+      reload();
+    }
+  });
+}
+
+/** The page failed to draw with the pack: it is removed, and the page reloads once without it. */
+export function failed(): boolean {
+  if (!installed || !record) return false;
+  const name = record.name;
+  record = null;
+  forget(store);
+  write(store, notice('failed', name, Date.now()));
+  reload();
+  return true;
+}

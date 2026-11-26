@@ -3,7 +3,13 @@ import './app.css';
 import App from './App.svelte';
 import { installFormat, makeFormat } from './lib/format';
 import { earlyCalls, install, load, tr, type Choice } from './lib/i18n';
-import { LOCALES } from './lib/i18n/locales.gen';
+import { DEVPACK_KEY, devpack } from './lib/i18n/devpack';
+import { LOCALES, TEMPLATE } from './lib/i18n/locales.gen';
+
+// REQ: API-013 (ADR-190) — this web UI's build (the entry's hashed name) and its template, for a
+// test language pack.
+devpack.ui = new URL(import.meta.url).pathname;
+devpack.template = TEMPLATE;
 
 // REQ: API-012 (ADR-189) — the language is settled before the page is drawn: `?lang=` (this page
 // load only, never stored), the stored choice, then the browser's languages. A catalog has 4 s to
@@ -18,14 +24,28 @@ function use(choice: Choice) {
 
 async function start() {
   let stored: string | null = null;
+  let pack: string | null = null;
   try {
     stored = localStorage.getItem('telltale.locale');
+    pack = localStorage.getItem(DEVPACK_KEY);
   } catch {
     // Storage blocked: the browser's languages decide.
   }
+  // REQ: API-013 (ADR-190) — a test pack's code loads only when this browser keeps one (or the
+  // notice after one); it comes before the stored choice, and pauses itself under `?lang=`.
+  let failed: (() => boolean) | undefined;
+  const value = pack;
+  const provider =
+    value === null
+      ? undefined
+      : async () => {
+          const m = await import('./lib/devpack/devpack-boot');
+          failed = m.failed;
+          return m.boot(value);
+        };
   let choice: Choice = { tag: 'en' };
   try {
-    choice = await load(LOCALES, { search: location.search, stored, languages: navigator.languages ?? [] }, fetch);
+    choice = await load(LOCALES, { search: location.search, stored, languages: navigator.languages ?? [] }, fetch, 4000, provider);
   } catch {
     // Whatever went wrong in choosing the language, the page is English.
   }
@@ -38,9 +58,11 @@ async function start() {
   try {
     mount(App, { target });
   } catch (e) {
-    // English is drawn as before; a page in another language that fails to draw is drawn in English.
+    // English is drawn as before; a page in another language that fails to draw is drawn in English
+    // (a test pack is removed instead, and the page loads once more without it).
     if (rt.lang === 'en') throw e;
     console.error(e);
+    if (failed?.()) return;
     target.replaceChildren();
     use({ tag: 'en' });
     mount(App, { target });

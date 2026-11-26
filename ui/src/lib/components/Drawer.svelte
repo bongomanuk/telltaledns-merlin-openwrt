@@ -27,15 +27,17 @@
 </div>
 
 <style>
+  /* REQ: API-013 — below a test language pack's banner, when there is one. */
   .backdrop {
     position: fixed;
     inset: 0;
+    top: var(--devpack-h, 0px);
     background: rgb(0 0 0 / 35%);
     z-index: 20;
   }
   .drawer {
     position: fixed;
-    top: 0;
+    top: var(--devpack-h, 0px);
     right: 0;
     bottom: 0;
     width: min(640px, 100vw);

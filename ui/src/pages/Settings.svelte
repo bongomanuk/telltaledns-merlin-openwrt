@@ -14,6 +14,7 @@
   import SupportPackage from '../lib/components/SupportPackage.svelte';
   import DomainIcon from '../lib/icons/DomainIcon.svelte';
   import { iconPrefs, setIconPrefs } from '../lib/icons/prefs.svelte';
+  import DevPackStub from '../lib/devpack/DevPackStub.svelte';
   import { tr } from '../lib/i18n';
   import T from '../lib/i18n/T.svelte';
   const { t, tn } = tr('settings');
@@ -553,6 +554,8 @@
           {/each}
         </ul>
       </section>
+      <!-- REQ: API-013 (ADR-190) — test a language pack (Advanced view, or while one is in this browser). -->
+      <DevPackStub />
     </div>
   {:else if tab === 'tokens'}
     <section class="card">
