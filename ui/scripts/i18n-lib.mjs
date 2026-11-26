@@ -11,12 +11,13 @@ import { gzipSync, constants } from 'node:zlib';
 import ts from 'typescript';
 import { parse as parseSvelte } from 'svelte/compiler';
 import { englishKey, hash, normalize } from '../src/lib/i18n/ident.ts';
-import { agree } from '../src/lib/i18n/agree.ts';
 import { CATEGORIES, LEFTOVER, LIMITS, merge, parse, serialize, shapeError, skeleton } from '../src/lib/i18n/pairs.ts';
+import { identity, ship } from '../src/lib/i18n/shipping.ts';
 
-/** The hash and normalization the runtime uses (one module, `src/lib/i18n/ident.ts`), and the pair
- * files' parser and canonical form (`src/lib/i18n/pairs.ts`). */
-export { hash, normalize, parse, CATEGORIES, LEFTOVER };
+/** The hash and normalization the runtime uses (one module, `src/lib/i18n/ident.ts`), the pair
+ * files' parser and canonical form (`src/lib/i18n/pairs.ts`), and what a locale file ships
+ * (`src/lib/i18n/shipping.ts`, shared with code in the browser). */
+export { hash, normalize, parse, ship, CATEGORIES, LEFTOVER };
 
 export const DATA_FILES = ['contexts.json', 'glossary.json', 'manifest.json', 'notes.json', 'plurals.json', 'verbatim.json'];
 const OPTIONAL_FILES = ['baseline.json'];
@@ -55,7 +56,6 @@ export function serializeJson(v) {
 }
 
 const pairNote = (p) => (typeof p[2] === 'string' ? p[2] : '');
-const canonValue = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(CATEGORIES.filter((c) => Object.hasOwn(v, c)).map((c) => [c, v[c]])) : v);
 
 /** A catalog-shaped file (a locale, notes, verbatim, baseline), byte for byte as ADR-189 writes it
  * (`src/lib/i18n/pairs.ts`). */
@@ -562,7 +562,6 @@ export function analyzeFile(rel, text, context) {
 const readJson = (p) => parse(readFileSync(p, 'utf8'));
 // A note holds one more level than a locale file: the list of tokens of `exemptAdded`.
 const NOTES_LIMITS = { ...LIMITS, depth: LIMITS.depth + 1 };
-const identity = (ctx, english, note) => `${ctx}\u0004${englishKey(english)}\u0004${note ?? ''}`;
 const show = (english) => (Array.isArray(english) ? `${english[0]} | ${english[1]}` : english);
 
 /** A language's plural categories, from the committed table (`src/locales/plurals.json`), never
@@ -862,63 +861,6 @@ function ratchetFindings(root, files, add) {
   for (const f of files) {
     if (f.usesLayer && f.scriptText.length) add({ level: 'report', rule: 'script-text', file: src(f.rel), msg: `script strings of two or more words on lines ${f.scriptText.join(', ')}: text the reader sees goes through t()` });
   }
-}
-
-/**
- * What one locale file ships. Every pair is checked against its own English half (so a change to
- * the English in the source alone can never make a locale fail); a pair that agrees and whose
- * identity (context, normalized English, note) is in the source now, compared as text, ships under
- * the hash of that source entry. Findings are structured: `{ level, rule, ctx, english,
- * translation?, check?, token?, at?, detail }` (`check`: the agreement rule that failed).
- */
-export function ship(cat, entries, { verbatim = new Map(), notes = new Map(), glossary = [], dir = 'ltr' } = {}) {
-  const findings = [];
-  const table = {};
-  const translated = new Set();
-  const leftovers = [];
-  const seen = new Set();
-  for (const [ctx, pairs] of Object.entries(cat)) {
-    if (ctx === LEFTOVER) continue;
-    for (const p of pairs) {
-      const note = pairNote(p) || undefined;
-      const id = identity(ctx, p[0], note);
-      if (seen.has(id)) {
-        findings.push({ level: 'fail', rule: 'malformed', ctx, english: p[0], detail: 'the same English twice' });
-        continue;
-      }
-      seen.add(id);
-      const empty = typeof p[1] === 'string' ? p[1] === '' : Object.values(p[1]).every((x) => x === '');
-      if (empty) continue;
-      // A maintainer's exemptions (notes.json, reviewed): the digit rule, and the tokens the
-      // added-token rule allows (then reported instead).
-      const ea = notes.get(id)?.exemptAdded;
-      const opts = { verbatim: verbatim.get(id) ?? [], glossary, dir, exemptDigits: !!notes.get(id)?.exemptDigits, exemptAdded: Array.isArray(ea) ? ea : undefined };
-      // A plural form against the English form of its category (`one`), else English `other`; a
-      // form other than `other` may leave out placeholders (a dual, or a "one" that names no number).
-      const forms = typeof p[1] === 'string' ? [[p[0], p[1], false]] : Object.entries(p[1]).map(([c, x]) => [c === 'one' ? p[0][0] : p[0][1], x, c !== 'other']);
-      let ok = true;
-      for (const [en, tx, subset] of forms) {
-        if (tx === '') {
-          ok = false;
-          continue;
-        }
-        const v = agree(en, tx, { ...opts, placeholderSubset: subset });
-        for (const x of v.fails) findings.push({ level: 'fail', rule: 'agreement', ctx, english: en, translation: tx, check: x.rule, token: x.token, at: x.at, detail: x.detail });
-        for (const x of v.reports) findings.push({ level: 'report', rule: `agreement-${x.rule}`, ctx, english: en, check: x.rule, token: x.token, at: x.at, detail: x.detail });
-        if (v.fails.length) ok = false;
-      }
-      const e = entries.get(id);
-      if (!e) {
-        leftovers.push({ ctx, english: p[0] });
-        continue;
-      }
-      if (ok) {
-        table[hash(e.ctx, e.english, e.note)] = typeof p[1] === 'string' ? p[1] : canonValue(p[1]);
-        translated.add(id);
-      }
-    }
-  }
-  return { table, translated, leftovers, findings };
 }
 
 function baselineCoverage(baseline, translated) {
