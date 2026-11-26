@@ -335,3 +335,14 @@ test('api_005 obs_032 the flow page: a group called other keeps its link, the fo
   await expect(folded).toHaveAttribute('aria-label', 'Groups other: 7 (0.7 %)');
   await expect(folded).not.toHaveAttribute('href', /./);
 });
+
+// ---- The listener checks (REQ: OBS-020): the extra targets are taken as listed, unchecked against the listeners and each
+// other, so a target can be probed twice on one node.
+
+test('api_005 obs_020 the listener checks: one target checked twice', async ({ page }) => {
+  const probe = (latencyMs: number) => ({ node: null, target: 'udp://127.0.0.1:53', proto: 'udp', listener: false, ok: true, checkedUnixSeconds: NOW, consecutiveFailures: 0, latencyMs, lastOkUnixSeconds: NOW, error: null, skipped: null });
+  await page.route('**/api/v1/system/probes', (r) => r.fulfill({ json: ITEMS([probe(0.4), probe(0.6)]) }));
+  await signIn(page);
+  await page.goto('/#/settings?tab=system');
+  await expect(page.getByTestId('probes').locator('tbody tr td:nth-child(3)')).toHaveText(['0.4 ms', '0.6 ms']);
+});
