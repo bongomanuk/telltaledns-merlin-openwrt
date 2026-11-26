@@ -139,7 +139,11 @@ for (const id of providers) {
     // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
     // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
     // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off.
-    const own = await chromium.launch({ ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+    // A full Chromium (DVP_FULL_CHROME, or the installed `chromium` channel), else the suite's own browser.
+    const o = { ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] };
+    const own = process.env.DVP_FULL_CHROME
+      ? await chromium.launch({ ...o, executablePath: process.env.DVP_FULL_CHROME })
+      : await chromium.launch({ ...o, executablePath: undefined, channel: 'chromium' }).catch(() => chromium.launch(o));
     try {
       const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
       // Notes in session storage when a page is shown again from the back-forward cache.
@@ -177,7 +181,7 @@ for (const id of providers) {
         const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
         return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type, notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
       });
-      console.log(`DVP_BFCACHE ${id} ${JSON.stringify(shown)}`);
+      console.log(`DVP_BFCACHE ${id} ${own.version()} ${JSON.stringify(shown)}`);
       await expect(page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
       await expect(page.getByTestId('devpack-banner')).toContainText('is paused on this page');
       await context.close();

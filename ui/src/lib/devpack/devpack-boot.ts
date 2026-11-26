@@ -8,7 +8,8 @@
 // says so, without a reload, so nothing typed is lost. It follows who is signed in, as the app tells it:
 // someone going away (a sign-out, a session that ends, the display page) takes a pack this load shows
 // away (a sign-out that goes on to the provider's lets the page leave, and the page it comes back to is
-// paused), and a sign-in on a page paused for nobody or for another user reloads (`whenSeen`, `lifecycle.ts`). Each of these reloads leaves a
+// paused; Back to the page that left, shown again from the browser's cache, reloads it), and a sign-in on a
+// page paused for nobody or for another user reloads (`whenSeen`, `lifecycle.ts`). Each of these reloads leaves a
 // flag for the load it lands on: after someone went away that load is paused, whoever the status says is
 // signed in; and after either reload it does not reload for the first user the app reports. So reads of who is
 // signed in that disagree (nodes that don't share sessions), in either direction or in turn, reload a page
@@ -142,7 +143,12 @@ function watchUser(r: PackRecord, out: Decision) {
       // Session storage blocked: the next load decides from the status alone.
     }
     // The provider's session would stay if this page reloaded now; the page the provider sends back to is paused.
-    if (act === 'leave') return;
+    // Back to this page may show it again as it is, from the browser's back-forward cache, with the pack and nobody
+    // signed in: it reloads then, into a paused load.
+    if (act === 'leave') {
+      addEventListener('pageshow', (e) => e.persisted && reload(), { once: true });
+      return;
+    }
     if (act === 'in' && who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
     reload();
   };

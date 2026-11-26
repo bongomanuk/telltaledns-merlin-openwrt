@@ -453,6 +453,15 @@ test('api_013 signing out at the provider leaves for it with a pack in use', asy
   }
 });
 
+/** A browser that keeps the back-forward cache, which Playwright turns off: a full Chromium (`DVP_FULL_CHROME`, or the
+ * installed `chromium` channel), else the suite's own (Playwright's headless shell never shows a page again from the
+ * cache, so a test then checks only that the page after Back is right). */
+async function cachingBrowser(): Promise<Browser> {
+  const o = { ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] };
+  const full = process.env.DVP_FULL_CHROME;
+  if (full) return chromium.launch({ ...o, executablePath: full });
+  return chromium.launch({ ...o, executablePath: undefined, channel: 'chromium' }).catch(() => chromium.launch(o));
+}
 /** Notes in session storage when the browser shows a page again from its back-forward cache (an init script). */
 const NOTE_RESTORED = () =>
   addEventListener('pageshow', (e) => {
@@ -470,7 +479,7 @@ test('api_013 back after signing out at the provider never shows the pack', asyn
   // provider's page returns to it, and the browser may show it again as it was, from its back-forward cache: it must
   // show the usual language with the pack paused. This test's browser keeps that cache, which the suite's browser
   // turns off. (3-oidc.spec.ts does it with a real provider.)
-  const own = await chromium.launch({ ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+  const own = await cachingBrowser();
   try {
     const s = await fresh(own, { signedOut: true, init: NOTE_RESTORED });
     await storePack(s.page, FR_TEXT);
@@ -486,7 +495,7 @@ test('api_013 back after signing out at the provider never shows the pack', asyn
     await expect(banner(s.page)).toContainText('is paused on this page');
     await s.page.goBack({ waitUntil: 'commit' });
     await expect(s.page).not.toHaveURL(/devpack-test=provider-logout/);
-    console.log(`DVP_BFCACHE marker ${JSON.stringify(await howShown(s.page))}`);
+    console.log(`DVP_BFCACHE marker ${own.version()} ${JSON.stringify(await howShown(s.page))}`);
     await expect(s.page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
     await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
     await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.');
