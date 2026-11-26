@@ -182,17 +182,29 @@ export function checkPack(text: string, bom: boolean, tpl: Template, tag: Tag, {
   const kept: Catalog = Object.create(null);
   for (const ctx of names) {
     const list: Pair[] = [];
+    // A plural's identity met before in this context: the later pair is set aside, as `sync` and Download for a pull
+    // request do ("twice"), and the first decides, whether or not it has the language's categories. So the shipping
+    // function never meets a repeated plural here, and never takes a later one for the first.
+    const plurals = new Set<string>();
     for (let i = 0; i < cat[ctx].length; i++) {
       const p: unknown = cat[ctx][i];
       const problem = shapeProblem(p, tag.categories, ctx);
       if (problem && problem.code !== 'categories') return { refused: { code: 'pair', ctx, n: i + 1, shape: problem.code } };
       if (longer(p)) return { refused: { code: 'long', ctx, n: i + 1 } };
       const pair = p as Pair;
+      const plural = ctx !== LEFTOVER && Array.isArray(pair[0]);
+      const id = plural || problem?.code === 'categories' ? identity(ctx, pair[0], noteOf(pair)) : '';
+      if (plural) {
+        if (plurals.has(id)) {
+          broken.push({ ctx, english: pair[0], note: noteOf(pair), rule: 'twice' });
+          continue;
+        }
+        plurals.add(id);
+      }
       if (problem?.code !== 'categories') {
         list.push(pair);
         continue;
       }
-      const id = identity(ctx, pair[0], noteOf(pair));
       if (!tpl.entries.has(id)) leftovers.push({ ctx, english: pair[0], note: noteOf(pair), reason: reason(ctx, pair[0]) });
       else {
         failed.add(id);

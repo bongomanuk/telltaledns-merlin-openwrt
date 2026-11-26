@@ -392,6 +392,37 @@ test('api_013 the count of texts that break a rule counts each pair once', () =>
   expect(two.broken.length).toBe(one.broken.length + 1);
 });
 
+test('api_013 the first of two plurals with one identity decides, whatever its categories', () => {
+  // A corrected plural pasted after the old one: the first pair decides for the page as it does for Download for a
+  // pull request and `sync` (round 4), and the card says the second is there twice. French uses one, many and other.
+  const FR_TAG: Tag = { tag: 'fr', language: 'fr', dir: 'ltr', categories: ['one', 'many', 'other'] };
+  const P: [string, string] = ['{n} entry', '{n} entries'];
+  const tpl = tplOf([{ ctx: 'cache', english: P }]);
+  const old = { one: '{n} entrée', other: '{n} entrées' };
+  const fixed = { one: '{n} entrée', many: '{n} d’entrées', other: '{n} entrées' };
+  const check = (pairs: unknown[]) => {
+    const r = checkPack(JSON.stringify({ cache: pairs }, null, 2), false, tpl, FR_TAG);
+    if (r.refused) throw new Error(`refused: ${JSON.stringify(r.refused)}`);
+    return r.checked;
+  };
+  // The old one first: English is shown, the old pair is kept for the pull request, the corrected one set aside.
+  const a = check([[P, old], [P, fixed]]);
+  expect(a.broken.map((b) => b.rule)).toEqual(['categories', 'twice']);
+  expect(a.brokenTexts).toBe(2);
+  expect(Object.keys(a.table)).toEqual([]);
+  const prA = JSON.parse(a.pr) as Record<string, [unknown, Record<string, string>][]>;
+  expect(prA.cache[0][1].one).toBe(old.one);
+  expect(prA['~leftover']).toEqual([[P, fixed]]);
+  // The corrected one first: it is shown and kept, and the old one is there twice.
+  const b = check([[P, fixed], [P, old]]);
+  expect(b.broken.map((x) => x.rule)).toEqual(['twice']);
+  expect(b.brokenTexts).toBe(1);
+  expect(Object.values(b.table)).toEqual([fixed]);
+  const prB = JSON.parse(b.pr) as Record<string, [unknown, Record<string, string>][]>;
+  expect(prB.cache[0][1]).toEqual(fixed);
+  expect(prB['~leftover']).toEqual([[P, old]]);
+});
+
 test('api_013 a limit of the check reads as the language writes numbers', () => {
   // The limits of a file are each message's count and {max}, the number formatted for the language: a translator
   // writes the noun in the form that number takes and copies no digit. A German file that keeps {max} passes the
