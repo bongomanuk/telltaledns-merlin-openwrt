@@ -268,3 +268,23 @@ test('api_005 a support package: a note the server repeats', async ({ page }) =>
   await page.getByTestId('support-preview').click();
   await expect(page.getByTestId('support-manifest').getByText('A note the server gave twice.', { exact: true })).toHaveCount(2);
 });
+
+// ---- Identities by id, not by the text shown.
+
+test('api_005 obs_026 the traffic map: two services with one name are two tiles', async ({ page }) => {
+  const service = (id: string) => ({ id, name: 'StreamCo', category: 'video', domains: [`${id}.example`] });
+  await page.route('**/api/v1/services', (r) => r.fulfill({ json: ITEMS([service('stream-a'), service('stream-b')]) }));
+  await page.route('**/api/v1/stats/top?**', (r) => {
+    const kind = new URL(r.request().url()).searchParams.get('kind');
+    return r.fulfill({ json: ITEMS(kind === 'blocked' ? [] : [topItem('www.stream-a.example', 600), topItem('www.stream-b.example', 400)]) });
+  });
+  await page.addInitScript(() => localStorage.setItem('traffic.mode', 'service'));
+  await signIn(page);
+  await page.goto('/#/traffic');
+  const tiles = page.locator('a.tile');
+  await expect(tiles.locator('.name')).toHaveText(['StreamCo', 'StreamCo']);
+  await expect(tiles.first()).toHaveAttribute('href', /name=stream-a\.example/);
+  await expect(tiles.last()).toHaveAttribute('href', /name=stream-b\.example/);
+  await tiles.last().hover({ position: { x: 5, y: 5 } });
+  await expect(page.locator('.details .members li a:not(.when)')).toHaveText(['www.stream-b.example']);
+});
