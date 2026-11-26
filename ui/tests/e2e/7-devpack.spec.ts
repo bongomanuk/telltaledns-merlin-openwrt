@@ -324,6 +324,20 @@ test('api_013 a pack is refused whole for its structure', () => {
   expect(bom.checked?.canonical).toBe(false);
 });
 
+test('api_012 a surrogate that is not half of a pair is a forbidden code point', () => {
+  // It draws as U+FFFD (review part A of T29.3, nit 10): the check fails it, the runtime shows the English instead,
+  // the check screen marks it, and a file's shown name drops it. A pair (one code point) and U+2800 stay allowed.
+  expect(safe.forbidden('a\uD800b')).toEqual([{ cp: 'U+D800', at: 1 }]);
+  expect(safe.forbidden('a\uDC00')).toEqual([{ cp: 'U+DC00', at: 1 }]);
+  expect(safe.forbidden('a\u{1F600}b⠀')).toEqual([]);
+  expect(agree('Keep', 'Qa\uD800').fails.map((f) => `${f.rule} ${f.token}`)).toEqual(['code-point U+D800']);
+  expect(safe.agreesAtRuntime('Keep', 'Qa\uD800')).toBe(false);
+  expect(safe.agreesAtRuntime('Keep', 'Qa\u{1F600}')).toBe(true);
+  expect(markers('a\uD800b')).toBe('a⟨U+D800⟩b');
+  expect(shownName('de\uD800.json')).toBe('de.json');
+  expect(checked({ cache: [['Holds', 'Hält\uDFFF']] }).broken.map((b) => `${b.rule} ${b.token}`)).toEqual(['code-point U+DFFF']);
+});
+
 test('api_013 pack text in a reason line is marked and limited', () => {
   // A plural form's key is the file's text too (review part A of T29.3, nit 10): longer than a string may be, the
   // file is refused whole, as for a value; a direction override in it shows as a marker in the reason line.

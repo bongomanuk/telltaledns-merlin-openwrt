@@ -176,8 +176,9 @@ const sameSet = (a: readonly string[], b: readonly string[]) => {
 // Forbidden code points: every format character (bidi controls and isolates, zero-width and
 // invisible characters, the soft hyphen, tag characters), every default-ignorable code point (the
 // invisible fillers, and every variation selector: U+FE00-FE0F, U+E0100-E01EF, the Mongolian ones),
-// C0 controls but the newline, DEL and C1 controls, and the line and paragraph separators.
-const FORBIDDEN = /[\p{Cf}\p{DI}\u0000-\u0009\u000B-\u001F\u007F-\u009F\u{2028}\u{2029}]/u;
+// C0 controls but the newline, DEL and C1 controls, the line and paragraph separators, and a surrogate
+// that is not half of a pair (it draws as U+FFFD).
+const FORBIDDEN = /[\p{Cf}\p{DI}\p{Cs}\u0000-\u0009\u000B-\u001F\u007F-\u009F\u{2028}\u{2029}]/u;
 // The joiners are allowed only between two letters of the scripts whose words need them (Arabic,
 // and the Indic scripts from Devanagari to Sinhala); the marks only in right-to-left text.
 const JOINERS = /[\u200C\u200D]/u;
