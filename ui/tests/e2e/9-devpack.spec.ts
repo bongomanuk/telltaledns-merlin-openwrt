@@ -416,6 +416,31 @@ test('api_013 signing out takes the pack off the page', async ({ browser }) => {
   await done(s);
 });
 
+test('api_013 signing out at the provider leaves for it with a pack in use', async ({ browser }) => {
+  // REQ: API-004 — an OIDC session signs out at the provider too: the page goes to the logout address the server
+  // gives, with a pack in use as without one (the page that leaves for it is never also reloaded). The provider is a
+  // marker on this address, put in the server's real answer; the first round, without a pack, is the control. The
+  // page the provider sends back to is paused, as after any sign-out. (3-oidc.spec.ts does it with a real provider.)
+  for (const pack of [false, true]) {
+    const s = await fresh(browser, { signedOut: true });
+    if (pack) await storePack(s.page, FR_TEXT);
+    await s.page.goto('/');
+    await signInHere(s.page);
+    await expect(s.page.locator('html')).toHaveAttribute('lang', pack ? 'fr' : 'en', { timeout: 30_000 });
+    await expect(s.page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    await s.page.route('**/api/v1/auth/logout', async (r) => {
+      const res = await r.fetch();
+      await r.fulfill({ response: res, status: 200, json: { logoutUrl: '/?devpack-test=provider-logout' } });
+    });
+    await s.page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(s.page, pack ? 'with a pack in use' : 'without a pack').toHaveURL(/\?devpack-test=provider-logout(#|$)/, { timeout: 15_000 });
+    await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+    if (pack) await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.');
+    await done(s);
+  }
+});
+
 test('api_013 a session that ends takes the pack off the page', async ({ browser }) => {
   // A request that finds the session gone draws the sign-in page: after one reload, in the usual language, and
   // the pack paused. Here the status still says signed in (as two nodes that disagree could): that load stays

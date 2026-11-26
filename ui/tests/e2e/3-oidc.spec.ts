@@ -2,6 +2,10 @@
 // ../oidc/compose.yml). Runs when OIDC_E2E lists the providers, after 1-ui.spec.ts (which
 // creates the local admin). Each test uses a fresh browser context.
 import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 const providers = (process.env.OIDC_E2E ?? '').split(',').filter(Boolean);
 test.skip(providers.length === 0, 'set OIDC_E2E=keycloak,authentik with the providers running');
@@ -34,6 +38,20 @@ async function signIn(page: Page, id: string, name: string, user: keyof typeof U
   await page.goto('/#/queries');
   await page.getByRole('link', { name: `Sign in with ${name}` }).click();
   await providerLogin(page, id, user);
+}
+
+/** REQ: API-013 (ADR-190) — a test language pack kept in this browser as the card's Use keeps it, for `user` on the
+ * server build `commit`: French, the web UI build read from the built page (its one module script, the entry; the
+ * build keeps the page gzipped). */
+function devpack(user: string, commit: string) {
+  const dist = resolve(import.meta.dirname, '../../dist');
+  const html = existsSync(join(dist, 'index.html')) ? readFileSync(join(dist, 'index.html'), 'utf8') : gunzipSync(readFileSync(join(dist, 'index.html.gz'))).toString('utf8');
+  const modules = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]).filter((s) => /\btype="module"/.test(s));
+  const ui = modules.length === 1 ? (/\bsrc="([^"]+)"/.exec(modules[0])?.[1] ?? '') : '';
+  const text = JSON.stringify({ settings: [['Settings', 'Réglages']] });
+  const loadedAt = Date.now();
+  const sha = createHash('sha256').update(text).digest('hex');
+  return { v: 1, ui, server: { commit }, user, loadedAt, expires: loadedAt + 7 * 86_400_000, name: 'fr.json', sha, tag: 'fr', dir: 'ltr', fails: 0, text };
 }
 
 for (const id of providers) {
@@ -79,6 +97,41 @@ for (const id of providers) {
     await signIn(page, id, name, 'carol');
     await expect(page.locator('.provider-error')).toContainText('group', { timeout: 20_000 });
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await page.close();
+  });
+
+  test(`${id}: with a test language pack in use, signing out also signs out at the provider`, async ({ browser }) => {
+    // REQ: API-004, API-013 (ADR-190) — the page that leaves for the provider's sign-out is never also reloaded by
+    // the pack's code: the provider's page is reached, and signing in again asks for the password.
+    const page = await browser.newPage();
+    await signIn(page, id, name, 'alice');
+    await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
+    const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
+    const commit = (await (await page.request.get('/api/v1/system/info')).json()).build.commit as string;
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), ['telltale.devpack', JSON.stringify(devpack(who, commit))]);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 20_000 });
+    await expect(page.getByTestId('devpack-banner')).toContainText('Test language pack: fr.json');
+    const here = new URL(page.url()).origin;
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.waitForURL((u) => u.origin !== here, { timeout: 20_000 });
+    const confirm = page.getByRole('button', { name: /^(Logout|Log out)$/i });
+    const asked = await confirm
+      .waitFor({ state: 'visible', timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    if (asked) await confirm.click();
+    await expect(
+      page.getByRole('heading', { name: 'Sign in' }).or(page.getByRole('heading', { name: /logged out of TelltaleDNS/ })),
+    ).toBeVisible({ timeout: 20_000 });
+    // Back on TelltaleDNS: the sign-in page, in English, with the pack paused.
+    await page.goto('/#/');
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await expect(page.getByTestId('devpack-banner')).toContainText('is paused on this page');
+    // The provider's session is over: signing in again asks for the password.
+    await page.getByRole('link', { name: `Sign in with ${name}` }).click();
+    await expect(id === 'keycloak' ? page.locator('#username') : page.locator('input[name="uidField"]')).toBeVisible({ timeout: 20_000 });
     await page.close();
   });
 }

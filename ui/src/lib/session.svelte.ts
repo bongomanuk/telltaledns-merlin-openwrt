@@ -1,6 +1,7 @@
 // Who is signed in. Loaded from GET /auth/status on start and after sign-in/out.
 
 import { api, setCsrf, whenSignedOut, type S } from './api';
+import { devpack } from './i18n/devpack';
 
 export const session = $state({
   loaded: false,
@@ -47,6 +48,9 @@ export async function signOut() {
     next = (await api.logout())?.logoutUrl ?? undefined;
   } finally {
     setCsrf(undefined);
+    // REQ: API-013 (ADR-190) — set before the user is cleared: a test pack's code never reloads a page that
+    // leaves for the provider.
+    devpack.leaving = !!next;
     session.user = null;
   }
   if (next) location.href = next;

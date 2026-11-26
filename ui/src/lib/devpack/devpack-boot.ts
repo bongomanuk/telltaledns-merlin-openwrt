@@ -7,7 +7,8 @@
 // on: the first answer of a load that differs removes the pack and reloads; a later one removes it and
 // says so, without a reload, so nothing typed is lost. It follows who is signed in, as the app tells it:
 // someone going away (a sign-out, a session that ends, the display page) takes a pack this load shows
-// away, and a sign-in on a page paused for nobody or for another user reloads; each reload lands on a
+// away (a sign-out that goes on to the provider's lets the page leave, and the page it comes back to is
+// paused), and a sign-in on a page paused for nobody or for another user reloads; each reload lands on a
 // load that decides for whoever is there, so none repeats. "Show the test pack on this page" keeps its
 // one load as it is. A tab removes or writes over only what it read, and reloads only once the key no
 // longer holds the pack, so a value it cannot change never makes it reload again.
@@ -122,7 +123,8 @@ function watchServer(r: PackRecord) {
 
 /** Who is signed in, as the app says whenever it changes (null: nobody, or the display page), against who was
  * when this load decided: someone going away takes a pack this load shows away (the next load is paused,
- * whatever the status says then), and a sign-in on a page paused for nobody or for another user reloads (into
+ * whatever the status says then; a sign-out that goes on to the provider's is not reloaded, as the page is
+ * leaving), and a sign-in on a page paused for nobody or for another user reloads (into
  * the pack for the user who loaded it). "Show the test pack on this page" keeps its load as it is. */
 function watchUser(r: PackRecord, out: Decision) {
   devpack.seen = (who) => {
@@ -133,6 +135,9 @@ function watchUser(r: PackRecord, out: Decision) {
       } catch {
         // Session storage blocked: the next load decides from the status alone.
       }
+      // A sign-out that goes on to the provider's: the page is leaving, and a reload would cancel that navigation
+      // (the provider's session would stay). The page the provider sends back to is paused, by the flag.
+      if (who === null && devpack.leaving) return;
       reload();
     } else if (who !== null && (out.paused === 'signed-out' || out.paused === 'user')) {
       if (who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });

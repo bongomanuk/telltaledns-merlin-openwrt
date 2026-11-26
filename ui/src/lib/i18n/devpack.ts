@@ -18,4 +18,7 @@ export const devpack: {
   /** Set by the pack's code: the app calls it with who is signed in (null: nobody, or the display page),
    * whenever that changes, so the pack follows a sign-out, a session that ends and the next sign-in. */
   seen?: (who: string | null) => void;
+  /** Set by the app's sign-out before it says nobody is signed in: true when the page then leaves for the
+   * provider's sign-out (OIDC), which the pack's code must not cancel by reloading the page. */
+  leaving?: boolean;
 } = { template: null, active: false };
