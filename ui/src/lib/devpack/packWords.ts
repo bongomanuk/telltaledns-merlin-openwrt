@@ -4,7 +4,7 @@
 // in the template); a token or a key from the file is a parameter, shown as text.
 import { tr } from '../i18n';
 import { num } from '../format';
-import { MAX_CHARS, MAX_CONTEXTS, MAX_PAIRS, markers, type Broken, type Leftover, type Refusal, type TagRefusal, type Worth } from '../i18n/pack';
+import { markers, type Broken, type Leftover, type Refusal, type TagRefusal, type Worth } from '../i18n/pack';
 
 /** Why a whole file is refused. */
 export function refusalWords(r: Refusal): string {
@@ -23,13 +23,15 @@ export function refusalWords(r: Refusal): string {
     case 'shape':
       return t("This file can't be used: it isn't a language file (each context holds a list of pairs).");
     case 'contexts':
-      return t("This file can't be used: it has more than {max} contexts.", { max: num(MAX_CONTEXTS) });
+      // The limits are written in the English (`pack.ts`'s MAX_CONTEXTS, MAX_PAIRS and MAX_CHARS; a test holds
+      // them equal), so a translator writes the noun in the form its number takes.
+      return t("This file can't be used: it has more than 600 contexts.");
     case 'pairs':
-      return t("This file can't be used: it has more than {max} pairs.", { max: num(MAX_PAIRS) });
+      return t("This file can't be used: it has more than 10,000 pairs.");
     case 'context':
       return t('This file can\'t be used: "{ctx}" is not a context name.', { ctx: markers(r.ctx) });
     case 'long':
-      return t('This file can\'t be used: pair {n} of "{ctx}" has a text longer than {max} characters.', { n: num(r.n), ctx: markers(r.ctx), max: num(MAX_CHARS) });
+      return t('This file can\'t be used: pair {n} of "{ctx}" has a text longer than 4,000 characters.', { n: num(r.n), ctx: markers(r.ctx) });
     case 'pair':
       return t('This file can\'t be used: pair {n} of "{ctx}" is not in the form of the template.', { n: num(r.n), ctx: markers(r.ctx) });
   }
@@ -46,7 +48,7 @@ export function brokenWords(b: Broken): string {
     case 'tags':
       return added ? t("The tag {token} isn't in the English.", { token }) : t('Keep the tag {token} exactly as in the English.', { token });
     case 'urls':
-      if (!added) return t('Keep the web address exactly as in English: {token}', { token });
+      if (!added) return t('Keep the web address exactly as in the English: {token}', { token });
       return b.token?.includes('://') ? t("This web address isn't in the English: {token}", { token }) : t('The translation has more web addresses than the English.');
     case 'structural':
       return added ? t('Remove {token}: a translation adds no address, port, path or setting.', { token }) : t('Keep {token} as written.', { token });
@@ -59,7 +61,7 @@ export function brokenWords(b: Broken): string {
     case 'code':
       return added ? t("{token} isn't in the English: a translation adds no code.", { token }) : t('Keep {token} as written: it is code.', { token });
     case 'code-point':
-      return t('Remove the invisible or direction-changing character {token}.', { token });
+      return t("Remove the character {token}: it is invisible, changes the direction, or can't be shown.", { token });
     case 'twice':
       return t('The same English and note are in this context twice: only the first is used.');
     case 'categories':

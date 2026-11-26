@@ -15,7 +15,7 @@ import { agree } from '../../src/lib/i18n/agree';
 import { hash } from '../../src/lib/i18n/ident';
 import { load, tr } from '../../src/lib/i18n';
 import { parse, type Catalog } from '../../src/lib/i18n/pairs';
-import { MAX_BYTES, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tagInfo, type Tag } from '../../src/lib/i18n/pack';
+import { MAX_BYTES, MAX_CHARS, MAX_CONTEXTS, MAX_PAIRS, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tagInfo, type Tag } from '../../src/lib/i18n/pack';
 import { identity, ship } from '../../src/lib/i18n/shipping';
 import { forPullRequest, materialize, readTemplate, writeTemplate, type Template } from '../../src/lib/i18n/template';
 import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from '../../src/lib/devpack/packWords';
@@ -361,6 +361,11 @@ test('api_013 a pack is refused whole for its structure', () => {
   }
   expect(refusalWords({ code: 'duplicate', key: 'cache', line: 1, column: 29 })).toBe('This file can\'t be used: the key "cache" appears twice (line 1, column 29); the second would hide the first.');
   expect(refusalWords({ code: 'json', line: 41, column: 7 })).toBe("This file can't be used: it isn't valid JSON (line 41, column 7).");
+  // The limits are written in the English, so a translator picks the noun's form: they are the check's own.
+  expect(refusalWords({ code: 'contexts' })).toContain(`more than ${MAX_CONTEXTS.toLocaleString('en-US')} contexts`);
+  expect(refusalWords({ code: 'pairs' })).toContain(`more than ${MAX_PAIRS.toLocaleString('en-US')} pairs`);
+  expect(refusalWords({ code: 'long', ctx: 'cache', n: 1 })).toContain(`longer than ${MAX_CHARS.toLocaleString('en-US')} characters`);
+  expect(refusalWords({ code: 'size' })).toContain(`larger than ${MAX_BYTES / 1024 / 1024} MiB`);
   // Strict UTF-8; a byte-order mark is read past (and noted: the file is not in the repository's form).
   expect(decodeFile(new Uint8Array([0x7b, 0xff, 0x7d]))).toBeNull();
   expect(decodeFile(new TextEncoder().encode('\uFEFF{}'))).toEqual({ text: '{}', bom: true });
@@ -411,13 +416,13 @@ test('api_013 a pack entry that breaks the agreement rule is dropped and named i
   const words = c.broken.map(brokenWords);
   for (const w of [
     'Keep {kind} exactly as it is: it is replaced by a value.',
-    'Keep the web address exactly as in English: https://example.com/docs',
+    'Keep the web address exactly as in the English: https://example.com/docs',
     "This web address isn't in the English: https://evil.example/docs",
     'Keep smtp://mail.example:587 as written.',
     'Keep the number 587.',
     'Keep email untranslated: it is a value people type.',
     'Keep the tag <b> exactly as in the English.',
-    'Remove the invisible or direction-changing character U+202E.',
+    "Remove the character U+202E: it is invisible, changes the direction, or can't be shown.",
     'A word mixes Latin letters with Cyrillic or Greek ones that look alike: Sаve',
   ])
     expect(words).toContain(w);

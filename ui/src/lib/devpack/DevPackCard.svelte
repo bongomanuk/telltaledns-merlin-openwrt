@@ -209,7 +209,7 @@
 {#snippet summary(c: Checked, name: string)}
   <p role="status" data-testid="devpack-summary">
     <T ctx="devPackCard" msg={'<file>{name}</file>: {done} of {total} texts translated ({share}).'} params={{ name: shownName(name), done: num(c.translated), total: num(c.total), share: share(c.translated, c.total) }} {file} />
-    {#if c.broken.length}{tn('{n} breaks a rule and will show in English.', '{n} break a rule and will show in English.', c.broken.length, { n: num(c.broken.length) })}{/if}
+    {#if c.broken.length}{tn('{n} text breaks a rule and shows in English.', '{n} texts break a rule and show in English.', c.broken.length, { n: num(c.broken.length) })}{/if}
     {#if c.leftovers.length}{tn('{n} pair is left over.', '{n} pairs are left over.', c.leftovers.length, { n: num(c.leftovers.length) })}{/if}
   </p>
 {/snippet}
