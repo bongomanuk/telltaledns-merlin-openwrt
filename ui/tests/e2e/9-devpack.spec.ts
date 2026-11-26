@@ -6,7 +6,7 @@
 // alone, as 1-ui.spec.ts does), keep the cookies only, and give each test a fresh context: no pack reaches another
 // test. On the server they create one viewer of their own and sign in and out; nothing about a pack reaches it.
 // (The parts that need no browser are 7-devpack.spec.ts.)
-import { expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { chromium, expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -465,12 +465,12 @@ const howShown = (page: Page) =>
     return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type, notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
   });
 
-test('api_013 back after signing out at the provider never shows the pack', async ({ browserType, launchOptions }) => {
+test('api_013 back after signing out at the provider never shows the pack', async () => {
   // REQ: API-004 — the page that leaves for the provider's sign-out is not reloaded on its way out. Back from the
   // provider's page returns to it, and the browser may show it again as it was, from its back-forward cache: it must
   // show the usual language with the pack paused. This test's browser keeps that cache, which the suite's browser
   // turns off. (3-oidc.spec.ts does it with a real provider.)
-  const own = await browserType.launch({ ...launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+  const own = await chromium.launch({ ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
   try {
     const s = await fresh(own, { signedOut: true, init: NOTE_RESTORED });
     await storePack(s.page, FR_TEXT);

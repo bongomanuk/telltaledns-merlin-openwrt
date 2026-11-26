@@ -1,7 +1,7 @@
 // REQ: API-004 — T3.6 acceptance: sign in through real Keycloak and Authentik (see
 // ../oidc/compose.yml). Runs when OIDC_E2E lists the providers, after 1-ui.spec.ts (which
 // creates the local admin). Each test uses a fresh browser context.
-import { expect, test, type Page } from '@playwright/test';
+import { chromium, expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -135,11 +135,11 @@ for (const id of providers) {
     await page.close();
   });
 
-  test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async ({ browserType, launchOptions }) => {
+  test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async () => {
     // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
     // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
     // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off.
-    const own = await browserType.launch({ ...launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+    const own = await chromium.launch({ ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
     try {
       const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
       // Notes in session storage when a page is shown again from the back-forward cache.
