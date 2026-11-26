@@ -219,9 +219,13 @@ test('api_013 a loaded pack shows after apply and reload', async ({ browser }) =
   await expect(s.page.getByTestId('devpack-summary')).toContainText(`fr.json: 3 of ${ENTRIES.length.toLocaleString('en-US')} texts translated`);
   await s.page.getByTestId('devpack-use').click();
   await expect(s.page.getByTestId('devpack-confirm')).toContainText('Use this language pack in this browser?');
+  // Use reloads into Settings, where the card opens with the pack in use and fetches the template itself (after
+  // the load event, at times): wait for that, so the count below covers the next page load alone.
+  const cardTemplate = s.page.waitForResponse((r) => new URL(r.url()).pathname.startsWith('/assets/locales/template-'));
   await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-confirm-use').click()]);
+  await cardTemplate;
   // The record keeps the check's table for this build and this file: a load after Use fetches neither the
-  // template nor the checking code (the card, when open, fetches the template itself).
+  // template nor the checking code.
   expect(JSON.parse((await kept(s.page)) ?? '{}').checked).toMatchObject({ ui: ENTRY, sha: createHash('sha256').update(FR_TEXT).digest('hex') });
   const after: string[] = [];
   s.page.on('request', (r) => after.push(new URL(r.url()).pathname));
@@ -573,6 +577,12 @@ async function record(s: { context: BrowserContext; page: Page }) {
 test('api_013 pack text never reaches a request or storage', async ({ browser }) => {
   const s = await fresh(browser);
   const r = await record(s);
+  // No change markers on the charts: what earlier spec files changed is not this test's subject, and in a dense
+  // last hour the Cache page's charts can repeat a marker column's key (a page error unrelated to packs).
+  await s.page.route(
+    (u) => u.pathname === '/api/v1/annotations',
+    (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: [], truncated: false } }) : q.fallback()),
+  );
   await storePack(s.page, ALL_TEXT);
   for (const [path, testid] of [['/#/', 'dashboard-chart'], ['/#/queries', ''], ['/#/clients', ''], ['/#/settings?tab=account', 'devpack-card'], ['/#/settings?tab=tokens', ''], ['/#/cache', 'cache-card']]) {
     await s.page.goto(path);
