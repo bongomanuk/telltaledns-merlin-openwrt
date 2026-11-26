@@ -36,6 +36,7 @@
       <tr><td><code>2-shots.spec.ts</code></td><td>Screenshots for the documentation.</td></tr>
       <tr><td><code>3-oidc.spec.ts</code></td><td>Sign-in through real Keycloak and Authentik (the <code>oidc</code> job).</td></tr>
       <tr><td><code>4-icons</code>, <code>5-markers</code>, <code>6-markup</code></td><td>Tests that need no browser page: pure functions and a scan of the source. Fast, and immune to everything on this page.</td></tr>
+      <tr><td><code>7-devpack.spec.ts</code>, <code>9-devpack.spec.ts</code></td><td>Testing a language pack: the template, the check and the record without a browser (<code>7-</code>), then the card, the banner and a page load with a pack against the real server, each test in a fresh context (<code>9-</code>, last, so no pack reaches another file).</td></tr>
       <tr><td><code>server.mjs</code>, <code>dns.ts</code></td><td>The test server and a DNS helper. <code>server.mjs</code> writes a configuration, starts the binary with it on <code>127.0.0.1:18054</code> with the query log flushed every second, and runs a stub upstream that answers any name. <code>query(name)</code> asks the server over UDP and returns the response code.</td></tr>
     </tbody>
   </table></div>
