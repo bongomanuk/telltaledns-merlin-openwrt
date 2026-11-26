@@ -14,6 +14,7 @@ import * as added from '../../src/lib/i18n/added';
 import { agree } from '../../src/lib/i18n/agree';
 import { hash } from '../../src/lib/i18n/ident';
 import { load, tr } from '../../src/lib/i18n';
+import { installFormat, makeFormat } from '../../src/lib/format';
 import { parse, type Catalog } from '../../src/lib/i18n/pairs';
 import { MAX_BYTES, MAX_CHARS, MAX_CONTEXTS, MAX_PAIRS, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tagInfo, type Tag } from '../../src/lib/i18n/pack';
 import { identity, ship } from '../../src/lib/i18n/shipping';
@@ -398,9 +399,15 @@ test('api_013 a limit of the check reads as the language writes numbers', () => 
   expect(c.broken).toEqual([]);
   expect(Object.keys(c.table)).toHaveLength(3);
   under({ tag: 'de', table: c.table as never, formatLocale: 'de-DE' }, () => {
-    expect(refusalWords({ code: 'contexts' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 600 Kontexte.');
-    expect(refusalWords({ code: 'pairs' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 10.000 Paare.');
-    expect(refusalWords({ code: 'long', ctx: 'cache', n: 2 })).toBe('Diese Datei ist nicht verwendbar: Paar 2 von "cache" hat einen Text, der länger als 4.000 Zeichen ist.');
+    // The formats follow the page's language, as main.ts installs them before the app is drawn.
+    installFormat(makeFormat('de-DE', (ctx) => tr(ctx as never)));
+    try {
+      expect(refusalWords({ code: 'contexts' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 600 Kontexte.');
+      expect(refusalWords({ code: 'pairs' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 10.000 Paare.');
+      expect(refusalWords({ code: 'long', ctx: 'cache', n: 2 })).toBe('Diese Datei ist nicht verwendbar: Paar 2 von "cache" hat einen Text, der länger als 4.000 Zeichen ist.');
+    } finally {
+      installFormat(makeFormat(undefined, (ctx) => tr(ctx as never)));
+    }
   });
   // A translator who types the number in place of {max} is told to keep it, whatever way the number is written.
   const typed = checked({ packWords: [[limits[1].english, { one: de[1].one, other: 'Diese Datei ist nicht verwendbar: Sie hat mehr als 10000 Paare.' }]] }, tplOf(limits));
