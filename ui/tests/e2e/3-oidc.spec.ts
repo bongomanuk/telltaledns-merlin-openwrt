@@ -138,8 +138,9 @@ for (const id of providers) {
   test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async () => {
     // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
     // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
-    // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off.
-    // A full Chromium (DVP_FULL_CHROME, or the installed `chromium` channel), else the suite's own browser.
+    // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off:
+    // a full Chromium (DVP_FULL_CHROME, or the installed `chromium` channel), else the suite's own browser. A browser
+    // that never shows a page again from that cache cannot exercise the fix, and the test says so by skipping.
     const o = { ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] };
     const own = process.env.DVP_FULL_CHROME
       ? await chromium.launch({ ...o, executablePath: process.env.DVP_FULL_CHROME })
@@ -153,6 +154,24 @@ for (const id of providers) {
         }),
       );
       const page = await context.newPage();
+      const shown = () =>
+        page
+          .evaluate(() => {
+            const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
+            return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type ?? '', notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
+          })
+          .catch((e: Error) => ({ restored: 0, type: '', notRestored: `not read: ${e.message.slice(0, 80)}` }));
+      // Does this browser show a page of TelltaleDNS again from that cache? The sign-in page, another document of this
+      // address, then Back.
+      await page.goto('/?devpack-probe=1');
+      await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+      await page.goto('/livez');
+      await page.goBack({ waitUntil: 'commit' });
+      await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+      const probe = await shown();
+      await page.evaluate(() => sessionStorage.removeItem('dvp-restored')).catch(() => undefined);
+      console.log(`DVP_BFCACHE ${id} probe ${own.version()} ${JSON.stringify(probe)}`);
+      test.skip(probe.restored === 0, `this browser (${own.version()}) never shows a page again from its back-forward cache (${probe.notRestored}): the Back fix is not exercised here`);
       await signIn(page, id, name, 'alice');
       await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
       const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
@@ -177,13 +196,12 @@ for (const id of providers) {
         await page.waitForTimeout(500);
       }
       expect(await atLeft(), 'Back reached the page that left for the provider').toBe(true);
-      const shown = await page.evaluate(() => {
-        const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
-        return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type, notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
-      });
-      console.log(`DVP_BFCACHE ${id} ${own.version()} ${JSON.stringify(shown)}`);
       await expect(page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
       await expect(page.getByTestId('devpack-banner')).toContainText('is paused on this page');
+      // The page that left was shown again from the cache (then reloaded): the fix was exercised.
+      const back = await shown();
+      console.log(`DVP_BFCACHE ${id} back ${own.version()} ${JSON.stringify(back)}`);
+      expect(back.restored, 'Back showed the page that left again from the back-forward cache').toBeGreaterThanOrEqual(1);
       await context.close();
     } finally {
       await own.close();
