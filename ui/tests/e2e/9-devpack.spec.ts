@@ -6,13 +6,14 @@
 // alone, as 1-ui.spec.ts does), keep the cookies only, and give each test a fresh context: no pack reaches another
 // test. On the server they create one viewer of their own and sign in and out; nothing about a pack reaches it.
 // (The parts that need no browser are 7-devpack.spec.ts.)
-import { chromium, expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
+import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
 
 const UI = resolve(import.meta.dirname, '../..');
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
@@ -453,54 +454,18 @@ test('api_013 signing out at the provider leaves for it with a pack in use', asy
   }
 });
 
-/** A browser that keeps the back-forward cache, which Playwright turns off: a full Chromium (`DVP_FULL_CHROME`, or the
- * installed `chromium` channel), else the suite's own. Whether it really shows pages again from that cache is for
- * `restoresPages` to say (Playwright's headless shell never does). */
-async function cachingBrowser(): Promise<Browser> {
-  const o = { ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] };
-  const full = process.env.DVP_FULL_CHROME;
-  if (full) return chromium.launch({ ...o, executablePath: full });
-  return chromium.launch({ ...o, executablePath: undefined, channel: 'chromium' }).catch(() => chromium.launch(o));
-}
-/** Notes in session storage when the browser shows a page again from its back-forward cache (an init script). */
-const NOTE_RESTORED = () =>
-  addEventListener('pageshow', (e) => {
-    if (e.persisted) sessionStorage.setItem('dvp-restored', String((Number(sessionStorage.getItem('dvp-restored')) || 0) + 1));
-  });
-/** What the page says about how it was shown: restored from the back-forward cache (how often), and why not. A read
- * that a navigation interrupts (the page reloading) says nothing. */
-const howShown = (page: Page) =>
-  page
-    .evaluate(() => {
-      const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
-      return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type ?? '', notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
-    })
-    .catch((e: Error) => ({ restored: 0, type: '', notRestored: `not read: ${e.message.slice(0, 80)}` }));
-/** Whether the browser of `page` (with NOTE_RESTORED) shows a page of this app again from its back-forward cache: the
- * sign-in page, another document of this address, then Back. The count is reset afterwards. */
-async function restoresPages(page: Page): Promise<{ restored: boolean; why: string }> {
-  await page.goto('/?devpack-probe=1');
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  await page.goto('/livez');
-  await page.goBack({ waitUntil: 'commit' });
-  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-  const r = await howShown(page);
-  await page.evaluate(() => sessionStorage.removeItem('dvp-restored')).catch(() => undefined);
-  return { restored: r.restored > 0, why: r.notRestored };
-}
-
 test('api_013 back after signing out at the provider never shows the pack', async () => {
   // REQ: API-004 — the page that leaves for the provider's sign-out is not reloaded on its way out. Back from the
   // provider's page returns to it, and the browser may show it again as it was, from its back-forward cache: it must
   // show the usual language with the pack paused. This test's browser keeps that cache, which the suite's browser
   // turns off; a browser that never shows a page again from it cannot exercise the fix, and the test says so by
   // skipping. (3-oidc.spec.ts does it with a real provider.)
-  const own = await cachingBrowser();
+  const { browser: own, note } = await cachingBrowser(test.info().project.use.launchOptions ?? {}, process.env.DVP_FULL_CHROME);
   try {
     const s = await fresh(own, { signedOut: true, init: NOTE_RESTORED });
     const probe = await restoresPages(s.page);
-    console.log(`DVP_BFCACHE marker probe ${own.version()} ${JSON.stringify(probe)}`);
-    test.skip(!probe.restored, `this browser (${own.version()}) never shows a page again from its back-forward cache (${probe.why}): the Back fix is not exercised here`);
+    console.log(`DVP_BFCACHE marker probe ${own.version()} ${note}${JSON.stringify(probe)}`);
+    test.skip(!probe.restored, noCache(own, note, probe.why));
     await storePack(s.page, FR_TEXT);
     await s.page.goto('/');
     await signInHere(s.page);

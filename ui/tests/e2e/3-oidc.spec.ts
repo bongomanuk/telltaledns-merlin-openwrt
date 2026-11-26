@@ -1,11 +1,12 @@
 // REQ: API-004 — T3.6 acceptance: sign in through real Keycloak and Authentik (see
 // ../oidc/compose.yml). Runs when OIDC_E2E lists the providers, after 1-ui.spec.ts (which
 // creates the local admin). Each test uses a fresh browser context.
-import { chromium, expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
 
 const providers = (process.env.OIDC_E2E ?? '').split(',').filter(Boolean);
 test.skip(providers.length === 0, 'set OIDC_E2E=keycloak,authentik with the providers running');
@@ -141,37 +142,15 @@ for (const id of providers) {
     // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off:
     // a full Chromium (DVP_FULL_CHROME, or the installed `chromium` channel), else the suite's own browser. A browser
     // that never shows a page again from that cache cannot exercise the fix, and the test says so by skipping.
-    const o = { ...test.info().project.use.launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] };
-    const own = process.env.DVP_FULL_CHROME
-      ? await chromium.launch({ ...o, executablePath: process.env.DVP_FULL_CHROME })
-      : await chromium.launch({ ...o, executablePath: undefined, channel: 'chromium' }).catch(() => chromium.launch(o));
+    const { browser: own, note } = await cachingBrowser(test.info().project.use.launchOptions ?? {}, process.env.DVP_FULL_CHROME);
     try {
       const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
-      // Notes in session storage when a page is shown again from the back-forward cache.
-      await context.addInitScript(() =>
-        addEventListener('pageshow', (e) => {
-          if (e.persisted) sessionStorage.setItem('dvp-restored', String((Number(sessionStorage.getItem('dvp-restored')) || 0) + 1));
-        }),
-      );
+      await context.addInitScript(NOTE_RESTORED);
       const page = await context.newPage();
-      const shown = () =>
-        page
-          .evaluate(() => {
-            const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
-            return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type ?? '', notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
-          })
-          .catch((e: Error) => ({ restored: 0, type: '', notRestored: `not read: ${e.message.slice(0, 80)}` }));
-      // Does this browser show a page of TelltaleDNS again from that cache? The sign-in page, another document of this
-      // address, then Back.
-      await page.goto('/?devpack-probe=1');
-      await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-      await page.goto('/livez');
-      await page.goBack({ waitUntil: 'commit' });
-      await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-      const probe = await shown();
-      await page.evaluate(() => sessionStorage.removeItem('dvp-restored')).catch(() => undefined);
-      console.log(`DVP_BFCACHE ${id} probe ${own.version()} ${JSON.stringify(probe)}`);
-      test.skip(probe.restored === 0, `this browser (${own.version()}) never shows a page again from its back-forward cache (${probe.notRestored}): the Back fix is not exercised here`);
+      // Does this browser show a page of TelltaleDNS again from that cache?
+      const probe = await restoresPages(page);
+      console.log(`DVP_BFCACHE ${id} probe ${own.version()} ${note}${JSON.stringify(probe)}`);
+      test.skip(!probe.restored, noCache(own, note, probe.why));
       await signIn(page, id, name, 'alice');
       await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
       const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
@@ -199,7 +178,7 @@ for (const id of providers) {
       await expect(page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
       await expect(page.getByTestId('devpack-banner')).toContainText('is paused on this page');
       // The page that left was shown again from the cache (then reloaded): the fix was exercised.
-      const back = await shown();
+      const back = await howShown(page);
       console.log(`DVP_BFCACHE ${id} back ${own.version()} ${JSON.stringify(back)}`);
       expect(back.restored, 'Back showed the page that left again from the back-forward cache').toBeGreaterThanOrEqual(1);
       await context.close();

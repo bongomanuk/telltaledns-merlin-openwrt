@@ -2,13 +2,14 @@
 // browser, without a browser: the whole agreement rule apart from the runtime's first-use check, the shipping
 // function, the template's slot in the build; and testing a language pack: the template, the check of a
 // translated file, the tag, and what a page keeps in its storage. (The pages are 9-devpack.spec.ts.)
-import { expect, test } from '@playwright/test';
+import { expect, test, type Browser, type LaunchOptions } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { cleanup, project, put, table, uiCopy, under } from './i18n-fixture';
+import { cachingBrowser, resetRestored } from './bfcache';
 import * as safe from '../../src/lib/i18n/safe';
 import * as added from '../../src/lib/i18n/added';
 import { agree } from '../../src/lib/i18n/agree';
@@ -1154,6 +1155,31 @@ test('api_013 reads of who is signed in that disagree reload a page twice at mos
   expect(whenSeen(shown, null, { installed: true, last: 'admin', leaving: true })).toBe('leave');
   expect(whenSeen(shown, null, { installed: true, last: 'admin', leaving: false })).toBe('away');
   expect(whenSeen(shown, null, { installed: true, last: null, leaving: false })).toBe('none');
+});
+
+test('api_013 the back tests name why the full chromium did not start', async () => {
+  // The Back tests' browser (bfcache.ts): when the full Chromium does not start, the suite's own is used, and the skip's
+  // reason carries the first line of that error, so a log says why the Back fix was not exercised.
+  const fake = { version: () => 'shell' } as unknown as Browser;
+  const tried: (string | undefined)[] = [];
+  const got = await cachingBrowser({ headless: true }, undefined, async (o) => {
+    tried.push(o.channel);
+    if (o.channel === 'chromium') throw new Error("browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1254/chrome-linux64/chrome\nLooks like Playwright was just installed or updated.");
+    return fake;
+  });
+  expect(tried).toEqual(['chromium', undefined]);
+  expect(got.browser).toBe(fake);
+  expect(got.note).toBe("the full Chromium did not start: browserType.launch: Executable doesn't exist at /ms-playwright/chromium-1254/chrome-linux64/chrome; ");
+  // A full Chromium named by its path is launched as it is (an error there fails the test), keeping the cache.
+  const seen: LaunchOptions[] = [];
+  const named = await cachingBrowser({}, '/opt/chrome', async (o) => (seen.push(o), fake));
+  expect(named.note).toBe('');
+  expect(seen).toEqual([{ ignoreDefaultArgs: ['--disable-back-forward-cache'], executablePath: '/opt/chrome' }]);
+});
+
+test('api_013 the back tests fail when the probe cannot forget its own count', async () => {
+  // The probe's own restore must not pass for the Back test's: a reset that fails fails the test.
+  await expect(resetRestored({ evaluate: () => Promise.reject(new Error('the page is gone')) } as never)).rejects.toThrow('the page is gone');
 });
 
 test('api_013 the clock is checked both ways', async () => {
