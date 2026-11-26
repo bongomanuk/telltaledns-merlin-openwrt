@@ -284,7 +284,7 @@ i18n: 2 failure(s)</code></pre>
   <h2>Safety</h2>
   <ul>
     <li><b>A pack never runs code.</b> It is data, read by a strict parser. The card shows its text as plain text, never as markup.</li>
-    <li><b>Nothing leaves your browser.</b> The card downloads the template, and asks the server for its build and who is signed in when you choose <b class="ui">Use it and reload</b>. The file itself is never sent.</li>
+    <li><b>Nothing leaves your browser.</b> The card fetches the template from your own TelltaleDNS. When you choose <b class="ui">Use it and reload</b>, it also asks that server for its build and for who is signed in. The file itself is never sent.</li>
     <li><b>A pack can still make a label lie.</b> A button that deletes something could say "Cancel", and no structural check notices. Load only a file you made, or one from someone you trust, and ideally on a test installation.</li>
     <li><b>The safeguards:</b> a confirmation before a pack is used, and a banner above every page with the file's name and fingerprint. A pack is paused for any other user and on the sign-in screens. <code>?lang=en</code> shows real English, and a pack ends after 7 days or on any upgrade.</li>
     <li><b>What the checks cannot know is meaning.</b> That is why every language has a human owner, and why a sensitive message needs a back-translation.</li>
