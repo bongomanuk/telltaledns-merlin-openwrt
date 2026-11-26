@@ -4,6 +4,7 @@
 // the page draws, and fails on a page error; a pure function is tested without a page. Expects the state 1-ui.spec.ts leaves
 // (the admin, some queries), as 8-i18n-pages.spec.ts does.
 import { expect, test, type Page } from '@playwright/test';
+import { partKey, partsOf } from '../../src/lib/donut';
 import { failOnPageErrors } from './page-errors';
 
 failOnPageErrors(test);
@@ -75,4 +76,34 @@ test('api_005 obs_033 markers that share a pixel in two columns: the dashboard',
 test('api_005 obs_033 markers that share a pixel in two columns: the previous dashboard', async ({ page }) => {
   await signIn(page);
   await straddle(page, '/?view=legacy', 1, NOW - 22.8 * 3600, NOW - 1.2 * 3600);
+});
+
+// ---- The previous dashboard's donut ("Answers by status"): a part is a status, keyed by its id; its words are shown only.
+
+test('api_005 api_012 the donut keys its parts by status: two statuses whose words read alike keep two parts', () => {
+  // In a language, "cached" and "refreshed" may be one word.
+  const parts = partsOf([
+    { id: 'cached', label: 'W', color: '--s-cached', values: [1, 2] },
+    { id: 'refreshed', label: 'W', color: '--s-refreshed', values: [4] },
+  ]);
+  expect(parts).toEqual([
+    { id: 'cached', label: 'W', color: '--s-cached', value: 3 },
+    { id: 'refreshed', label: 'W', color: '--s-refreshed', value: 4 },
+  ]);
+  expect(parts.map(partKey)).toEqual(['cached', 'refreshed']);
+});
+
+const bucket = (t: number, byStatus: Record<string, number>) => {
+  const total = Object.values(byStatus).reduce((a, n) => a + n, 0);
+  return { startUnixSeconds: t, total, byStatus, byQtype: { A: total }, byRcode: { NOERROR: total }, upstreamQueries: 0, upstreamFailures: 0, byGroup: {}, blockedByGroup: {}, slow: 0 };
+};
+
+test('api_005 the previous dashboard draws a donut of two statuses', async ({ page }) => {
+  const last = Math.floor(NOW / 60) * 60;
+  await page.route('**/api/v1/stats/timeseries?**', (r) => r.fulfill({ json: { items: Array.from({ length: 30 }, (_, i) => bucket(last - i * 60, { blocked: 3, forwarded: 7 })) } }));
+  await signIn(page);
+  await page.goto('/#/?view=legacy');
+  const donut = page.locator('.donut');
+  await expect(donut.locator('.breakdown li .name')).toHaveText(['blocked', 'forwarded']);
+  await expect(donut.locator('circle.seg')).toHaveCount(2);
 });

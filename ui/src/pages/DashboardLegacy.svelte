@@ -10,6 +10,7 @@
   import Chart from '../lib/components/Chart.svelte';
   import Tip from '../lib/components/Tip.svelte';
   import Donut from '../lib/components/Donut.svelte';
+  import { partsOf } from '../lib/donut';
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import BreakerBadge from '../lib/components/BreakerBadge.svelte';
   import ClientChip from '../lib/components/ClientChip.svelte';
@@ -242,7 +243,7 @@
   };
   const times = $derived(buckets.map((b) => b.startUnixSeconds));
   const statusSeries = $derived.by(() => {
-    const series = [...main, 'other'].map((k) => ({ label: statusText[k], color: colors[k], values: [] as number[] }));
+    const series = [...main, 'other'].map((k) => ({ id: k, label: statusText[k], color: colors[k], values: [] as number[] }));
     for (const b of buckets) {
       let rest = b.total;
       main.forEach((k, i) => {
@@ -304,10 +305,8 @@
   );
   const sparkFailures = $derived(buckets.map((b) => b.upstreamFailures));
 
-  // T6.8 — the same statuses as the chart, as totals over the range.
-  const statusParts = $derived(
-    statusSeries.map((s) => ({ label: s.label, color: s.color, value: s.values.reduce((a, v) => a + v, 0) })),
-  );
+  // T6.8 — the same statuses as the chart, as totals over the range (REQ: API-005 — each part keeps its status id).
+  const statusParts = $derived(partsOf(statusSeries));
 
   const totalUpstream = $derived(upstreams.reduce((a, u) => a + u.requests, 0));
   const maxTop = (items: S['TopItem'][]) => Math.max(1, ...items.map((i) => i.count));
