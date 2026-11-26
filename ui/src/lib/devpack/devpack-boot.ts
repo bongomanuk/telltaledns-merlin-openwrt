@@ -125,6 +125,9 @@ function watchServer(r: PackRecord) {
   };
 }
 
+/** A page that left for the provider's sign-out, shown again from the browser's back-forward cache: it reloads. */
+const shownAgain = (e: PageTransitionEvent) => e.persisted && reload();
+
 /** Who is signed in, as the app says on every change of page (null: nobody, or the display page), against who was
  * when this load decided, by the rules of `whenSeen`: the flag for the next load, then the reload (none while the
  * page leaves for the provider's sign-out, which a reload would cancel). */
@@ -133,7 +136,10 @@ function watchUser(r: PackRecord, out: Decision) {
   devpack.seen = (who) => {
     // Someone is signed in again: a page that was to leave for the provider's sign-out did not (its address never
     // replaced the page), and the next sign-out or session end takes the pack away as any does.
-    if (who !== null) devpack.leaving = false;
+    if (who !== null && devpack.leaving) {
+      devpack.leaving = false;
+      removeEventListener('pageshow', shownAgain);
+    }
     const act = whenSeen(out, who, { installed, last, leaving: !!devpack.leaving });
     last = who;
     if (act === 'none') return;
@@ -146,7 +152,7 @@ function watchUser(r: PackRecord, out: Decision) {
     // Back to this page may show it again as it is, from the browser's back-forward cache, with the pack and nobody
     // signed in: it reloads then, into a paused load.
     if (act === 'leave') {
-      addEventListener('pageshow', (e) => e.persisted && reload(), { once: true });
+      addEventListener('pageshow', shownAgain, { once: true });
       return;
     }
     if (act === 'in' && who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
