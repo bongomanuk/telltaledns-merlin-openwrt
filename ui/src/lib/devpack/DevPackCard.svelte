@@ -209,7 +209,7 @@
 {#snippet summary(c: Checked, name: string)}
   <p role="status" data-testid="devpack-summary">
     <T ctx="devPackCard" msg={'<file>{name}</file>: {done} of {total} texts translated ({share}).'} params={{ name: shownName(name), done: num(c.translated), total: num(c.total), share: share(c.translated, c.total) }} {file} />
-    {#if c.broken.length}{tn('{n} text breaks a rule and shows in English.', '{n} texts break a rule and show in English.', c.broken.length, { n: num(c.broken.length) })}{/if}
+    {#if c.brokenTexts}{tn('{n} text breaks a rule and shows in English.', '{n} texts break a rule and show in English.', c.brokenTexts, { n: num(c.brokenTexts) })}{/if}
     {#if c.leftovers.length}{tn('{n} pair is left over.', '{n} pairs are left over.', c.leftovers.length, { n: num(c.leftovers.length) })}{/if}
   </p>
 {/snippet}
@@ -308,7 +308,7 @@
       {@render summary(c, chosen.name)}
       {#if !c.canonical}<p class="notice warn" data-testid="devpack-not-canonical">{t('Not in the repository\'s exact form: "Download for a pull request" fixes that.')}</p>{/if}
       <details bind:open={openBroken} data-testid="devpack-broken">
-        <summary>{t('Breaks a rule, shown in English ({n})', { n: num(c.broken.length) })}</summary>
+        <summary>{t('Breaks a rule, shown in English ({n})', { n: num(c.brokenTexts) })}</summary>
         {#if openBroken}
           <ul class="entries">
             {#each c.broken.slice(0, LIST_MAX) as b, i (i)}{@render entry(b.ctx, b.english, b.translation, lang, brokenWords(b))}{/each}

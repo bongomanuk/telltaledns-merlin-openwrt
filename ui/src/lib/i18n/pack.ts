@@ -116,7 +116,10 @@ export type Checked = {
   readonly table: Readonly<Record<string, string | Readonly<Record<string, string>>>>;
   readonly total: number;
   readonly translated: number;
+  /** Every finding that drops an entry: one text of the file can have several. */
   readonly broken: readonly Broken[];
+  /** How many texts of the file (pairs) break a rule: a pair with several findings counts once. */
+  readonly brokenTexts: number;
   readonly worth: readonly Worth[];
   readonly missing: readonly { readonly ctx: string; readonly english: Pair[0]; readonly note?: string }[];
   readonly leftovers: readonly Leftover[];
@@ -203,7 +206,7 @@ export function checkPack(text: string, bom: boolean, tpl: Template, tag: Tag, {
   const s = ship(kept, tpl.entries, { verbatim: tpl.verbatim, notes: tpl.notes, glossary: tpl.glossary, dir: tag.dir, currentOnly: true, positions: false });
   const table = Object.assign(Object.create(null), s.table) as Checked['table'];
   const base = { table, total: tpl.entries.size, translated: s.translated.size };
-  if (!full) return { checked: { ...base, broken: [], worth: [], missing: [], leftovers: [], coverage: [], canonical: true, pr: '' } };
+  if (!full) return { checked: { ...base, broken: [], brokenTexts: 0, worth: [], missing: [], leftovers: [], coverage: [], canonical: true, pr: '' } };
   const worth: Worth[] = [];
   // A pair's findings come together: its identity is read once.
   let last: (typeof s.findings)[number] | undefined;
@@ -232,5 +235,8 @@ export function checkPack(text: string, bom: boolean, tpl: Template, tag: Tag, {
   }
   const share = (c: Coverage) => (c.total ? c.translated / c.total : 1);
   const coverage = [...per.values()].sort((a, b) => share(a) - share(b) || code(a.ctx, b.ctx));
-  return { checked: { ...base, broken, worth, missing, leftovers, coverage, canonical: !bom && serialize(cat) === text, pr: forPullRequest(cat, tpl, tag.categories) } };
+  // The texts that break a rule: each current pair that failed (`failed`, by identity, once whatever its findings),
+  // and each later pair of an identity the file repeats (one finding each).
+  const brokenTexts = failed.size + broken.filter((b) => b.rule === 'twice').length;
+  return { checked: { ...base, broken, brokenTexts, worth, missing, leftovers, coverage, canonical: !bom && serialize(cat) === text, pr: forPullRequest(cat, tpl, tag.categories) } };
 }

@@ -374,6 +374,24 @@ test('api_013 a pack is refused whole for its structure', () => {
   expect(bom.checked?.canonical).toBe(false);
 });
 
+test('api_013 the count of texts that break a rule counts each pair once', () => {
+  // The card's "{n} text breaks a rule" and the list's heading count texts (pairs); the list shows every finding. One
+  // pair with a changed placeholder and a translated web address is one text with several findings.
+  const tpl = tplOf([
+    { ctx: 'cache', english: 'Open {name} at https://example.org/help' },
+    { ctx: 'cache', english: 'Holds {n}' },
+    { ctx: 'cache', english: 'Holds' },
+  ]);
+  const one = checked({ cache: [['Open {name} at https://example.org/help', 'Öffne {nom} unter https://beispiel.org/hilfe']] }, tpl);
+  expect(one.broken.map((b) => b.rule)).toEqual(expect.arrayContaining(['placeholders', 'urls']));
+  expect(one.broken.length).toBeGreaterThanOrEqual(2);
+  expect(one.brokenTexts).toBe(1);
+  // Another pair that breaks a rule is a second text; a pair that agrees is none.
+  const two = checked({ cache: [['Open {name} at https://example.org/help', 'Öffne {nom} unter https://beispiel.org/hilfe'], ['Holds {n}', 'Hält'], ['Holds', 'Hält']] }, tpl);
+  expect(two.brokenTexts).toBe(2);
+  expect(two.broken.length).toBe(one.broken.length + 1);
+});
+
 test('api_013 a limit of the check reads as the language writes numbers', () => {
   // The limits of a file are each message's count and {max}, the number formatted for the language: a translator
   // writes the noun in the form that number takes and copies no digit. A German file that keeps {max} passes the
