@@ -13,19 +13,27 @@ export const LEFTOVER = '~leftover';
 
 export const LIMITS = { bytes: 4 * 1024 * 1024, depth: 4 } as const;
 
-/** Thrown by `parse`, with the offset where the text stops being acceptable. */
+/** Why `parse` refused a text: over the size limit, nested too deep, a key twice, or not JSON. */
+export type Refusal = 'size' | 'depth' | 'duplicate' | 'syntax';
+
+/** Thrown by `parse`, with the offset where the text stops being acceptable, the reason, and the
+ * key a `duplicate` repeats (so a page can say it in its own words). */
 export class PairFileError extends Error {
   readonly at: number;
-  constructor(message: string, at: number) {
+  readonly reason: Refusal;
+  readonly key?: string;
+  constructor(message: string, at: number, reason: Refusal = 'syntax', key?: string) {
     super(`${message} at offset ${at}`);
     this.at = at;
+    this.reason = reason;
+    this.key = key;
   }
 }
 
 /** JSON as `JSON.parse` reads it, but refusing what would be lost silently: a key twice in one
  * object (at any depth), nesting deeper than `depth` containers, and text over `bytes` UTF-16 units. */
 export function parse(text: string, limits: { bytes: number; depth: number } = LIMITS): unknown {
-  if (text.length > limits.bytes) throw new PairFileError(`over ${limits.bytes} characters`, limits.bytes);
+  if (text.length > limits.bytes) throw new PairFileError(`over ${limits.bytes} characters`, limits.bytes, 'size');
   let i = 0;
   const ws = () => {
     while (i < text.length && ' \t\n\r'.includes(text[i])) i++;
@@ -46,7 +54,7 @@ export function parse(text: string, limits: { bytes: number; depth: number } = L
     ws();
     const c = text[i];
     if (c === '{' || c === '[') {
-      if (depth >= limits.depth) throw new PairFileError(`nesting deeper than ${limits.depth}`, i);
+      if (depth >= limits.depth) throw new PairFileError(`nesting deeper than ${limits.depth}`, i, 'depth');
       const open = i++;
       const obj = c === '{';
       const out: Record<string, unknown> | unknown[] = obj ? Object.create(null) : [];
@@ -61,7 +69,7 @@ export function parse(text: string, limits: { bytes: number; depth: number } = L
           if (text[i] !== '"') throw new PairFileError('a key that is not a string', i);
           const at = i;
           const k = str();
-          if (Object.hasOwn(out, k)) throw new PairFileError(`the key ${JSON.stringify(k)} twice`, at);
+          if (Object.hasOwn(out, k)) throw new PairFileError(`the key ${JSON.stringify(k)} twice`, at, 'duplicate', k);
           ws();
           if (text[i++] !== ':') throw new PairFileError('a missing colon', i - 1);
           (out as Record<string, unknown>)[k] = value(depth + 1);
@@ -124,22 +132,43 @@ export function serialize(cat: Catalog, kind: 'locale' | 'data' = 'locale'): str
   return `${out}}\n`;
 }
 
+/** What is wrong with a pair's shape, as a code (a page says it in its own words; `shapeError` is
+ * the check's wording). `categories`: the pair's plural categories against the language's. */
+export type ShapeProblem =
+  | { readonly code: 'pair' | 'note' | 'english' | 'text' | 'plural-english' | 'plural-text' }
+  | { readonly code: 'categories'; readonly got: readonly string[]; readonly want: readonly string[] };
+
 /** What a pair must look like; `categories` are the language's plural categories. Null when fine. */
-export function shapeError(p: unknown, categories: readonly string[], section: string): string | null {
-  if (!Array.isArray(p) || p.length < 2 || p.length > 3) return 'a pair is [english, translation] or [english, translation, note]';
-  if (p.length === 3 && (typeof p[2] !== 'string' || p[2] === '')) return 'a note is a non-empty string';
+export function shapeProblem(p: unknown, categories: readonly string[], section: string): ShapeProblem | null {
+  if (!Array.isArray(p) || p.length < 2 || p.length > 3) return { code: 'pair' };
+  if (p.length === 3 && (typeof p[2] !== 'string' || p[2] === '')) return { code: 'note' };
   if (typeof p[0] === 'string') {
-    if (p[0] === '') return 'the English is empty';
-    if (typeof p[1] !== 'string') return 'the translation of a message is a string';
+    if (p[0] === '') return { code: 'english' };
+    if (typeof p[1] !== 'string') return { code: 'text' };
     return null;
   }
-  if (!Array.isArray(p[0]) || p[0].length !== 2 || !p[0].every((s) => typeof s === 'string' && s)) return 'the English of a plural is [one, other]';
+  if (!Array.isArray(p[0]) || p[0].length !== 2 || !p[0].every((s) => typeof s === 'string' && s)) return { code: 'plural-english' };
   const v = p[1];
-  if (!v || typeof v !== 'object' || Array.isArray(v) || !Object.values(v).every((s) => typeof s === 'string')) return 'the translation of a plural is an object of strings';
+  if (!v || typeof v !== 'object' || Array.isArray(v) || !Object.values(v).every((s) => typeof s === 'string')) return { code: 'plural-text' };
   const got = Object.keys(v).sort(cmp);
-  if (section !== LEFTOVER && (got.length !== categories.length || !categories.every((c) => got.includes(c))))
-    return `plural categories ${JSON.stringify(got)}; this language has ${JSON.stringify(categories)}`;
+  if (section !== LEFTOVER && (got.length !== categories.length || !categories.every((c) => got.includes(c)))) return { code: 'categories', got, want: categories };
   return null;
+}
+
+const SHAPE = {
+  pair: 'a pair is [english, translation] or [english, translation, note]',
+  note: 'a note is a non-empty string',
+  english: 'the English is empty',
+  text: 'the translation of a message is a string',
+  'plural-english': 'the English of a plural is [one, other]',
+  'plural-text': 'the translation of a plural is an object of strings',
+};
+
+/** `shapeProblem` in the check's words. Null when fine. */
+export function shapeError(p: unknown, categories: readonly string[], section: string): string | null {
+  const x = shapeProblem(p, categories, section);
+  if (!x) return null;
+  return x.code === 'categories' ? `plural categories ${JSON.stringify(x.got)}; this language has ${JSON.stringify(x.want)}` : SHAPE[x.code];
 }
 
 /** An English message of the source: its context, English and note. */

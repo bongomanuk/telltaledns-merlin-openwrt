@@ -8,7 +8,7 @@ import { candidates, canonical, match, type Request } from '../../src/lib/i18n/m
 import { agree, agreesAtRuntime, codePoints, schemes, tokens, urls } from '../../src/lib/i18n/safe';
 import { LOWER, UPPER, pseudo } from '../../src/lib/i18n/pseudo';
 import { hash } from '../../src/lib/i18n/ident';
-import { PairFileError, merge, parse, skeleton } from '../../src/lib/i18n/pairs';
+import { PairFileError, merge, parse, shapeError, shapeProblem, skeleton } from '../../src/lib/i18n/pairs';
 import { catalogRuntime, install, load, parseCatalog, tk, tr, type Choice } from '../../src/lib/i18n';
 import * as fmt from '../../src/lib/format';
 import { makeFormat } from '../../src/lib/format';
@@ -583,6 +583,49 @@ test('api_012 the pair-file parser refuses what json would lose', () => {
     const m = merge(parse(`{"${ctx}": [["Holds", "Qa"]]}`) as never, s, key);
     expect(m[ctx], ctx).toEqual([['Holds', 'Qa']]);
   }
+});
+
+// A page that checks a file says why in its own words: the parser's refusal carries its reason (and the
+// repeated key), and a pair's shape problem is a code. The check keeps its wording.
+test('api_012 a pair-file refusal and a shape problem name their reason', () => {
+  const why = (text: string, limits?: { bytes: number; depth: number }) => {
+    try {
+      parse(text, limits);
+      return null;
+    } catch (e) {
+      expect(e).toBeInstanceOf(PairFileError);
+      const x = e as PairFileError;
+      return { reason: x.reason, key: x.key, at: x.at };
+    }
+  };
+  expect(why('{"a": [], "a": []}')).toEqual({ reason: 'duplicate', key: 'a', at: 10 });
+  expect(why('{"c": [[["one", "other"], {"other": "x", "other": "y"}]]}')).toMatchObject({ reason: 'duplicate', key: 'other' });
+  expect(why('[[[[[1]]]]]')).toEqual({ reason: 'depth', key: undefined, at: 4 });
+  expect(why('{"a": 1}', { bytes: 4, depth: 4 })).toMatchObject({ reason: 'size' });
+  for (const text of ['{"a": 1} x', '{"a": 1,}', '{"a": "\u0001"}', '{"a": [1, 2', '']) expect(why(text)?.reason, JSON.stringify(text)).toBe('syntax');
+  const cats = ['one', 'other'];
+  const cases: [unknown, string | null, string | null][] = [
+    [['Holds', 'Qa'], null, null],
+    [['Holds'], 'pair', 'a pair is [english, translation] or [english, translation, note]'],
+    [['Holds', 'Qa', 'n', 'x'], 'pair', 'a pair is [english, translation] or [english, translation, note]'],
+    ['Holds', 'pair', 'a pair is [english, translation] or [english, translation, note]'],
+    [['Holds', 'Qa', ''], 'note', 'a note is a non-empty string'],
+    [['Holds', 'Qa', 3], 'note', 'a note is a non-empty string'],
+    [['', 'Qa'], 'english', 'the English is empty'],
+    [['Holds', 3], 'text', 'the translation of a message is a string'],
+    [[['a'], { one: '', other: '' }], 'plural-english', 'the English of a plural is [one, other]'],
+    [[['a', ''], { one: '', other: '' }], 'plural-english', 'the English of a plural is [one, other]'],
+    [[['a', 'b'], 'x'], 'plural-text', 'the translation of a plural is an object of strings'],
+    [[['a', 'b'], { one: 1, other: '' }], 'plural-text', 'the translation of a plural is an object of strings'],
+    [[['a', 'b'], { other: '' }], 'categories', 'plural categories ["other"]; this language has ["one","other"]'],
+    [[['a', 'b'], { one: '', other: '' }], null, null],
+  ];
+  for (const [p, code, words] of cases) {
+    expect(shapeProblem(p, cats, 'c')?.code ?? null, JSON.stringify(p)).toBe(code);
+    expect(shapeError(p, cats, 'c'), JSON.stringify(p)).toBe(words);
+  }
+  expect(shapeProblem([['a', 'b'], { other: '' }], cats, 'c')).toEqual({ code: 'categories', got: ['other'], want: ['one', 'other'] });
+  expect(shapeProblem([['a', 'b'], { other: '' }], cats, '~leftover')).toBeNull();
 });
 
 // ---------------------------------------------------------------------------------------------
