@@ -18,6 +18,9 @@ import { MAX_BYTES, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tag
 import { identity, ship } from '../../src/lib/i18n/shipping';
 import { forPullRequest, materialize, readTemplate, writeTemplate, type Template } from '../../src/lib/i18n/template';
 import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from '../../src/lib/devpack/packWords';
+import { decide, type Deps } from '../../src/lib/devpack/lifecycle';
+import { LIFETIME_MS, newRecord, notice, type Store } from '../../src/lib/devpack/store';
+import { DEVPACK_KEY } from '../../src/lib/i18n/devpack';
 import * as lib from '../../scripts/i18n-lib.mjs';
 
 const UI = resolve(import.meta.dirname, '../..');
@@ -481,4 +484,160 @@ test('api_013 a displayed file name loses forbidden code points and is cut to 48
   expect(markers('ab‮cd')).toBe('ab⟨U+202E⟩cd');
   expect(markers('a\u{E0041}b')).toBe('a⟨U+E0041⟩b');
   expect(markers('plain')).toBe('plain');
+});
+
+// ---------------------------------------------------------------------------------------------
+// API-013: what a page load does with the pack this browser keeps
+
+const NOW = Date.UTC(2026, 10, 26, 12);
+const UI_A = '/assets/index-A1.js';
+const TPL_URL = '/assets/locales/template-1a2b3c4d.json';
+class MemStore implements Store {
+  m = new Map<string, string>();
+  getItem(k: string) {
+    return this.m.get(k) ?? null;
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v);
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
+}
+/** The fixture's template, with German in its plural table. */
+const deJson = () => {
+  const f = fixture();
+  return writeTemplate(f.entries.values(), { notes: f.notes, verbatim: f.verbatim, glossary: f.glossary, plurals: { de: ['one', 'other'] } });
+};
+const REC = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text: JSON.stringify({ cache: [['Holds', 'Hält']] }) }, NOW - 60_000);
+type Fake = { status?: object | null; tpl?: string | null; calls: string[] };
+/** Deps of a page load: signed in, the fixture's template, nothing slow (override any). */
+function deps(o: Partial<Deps> = {}, fake: Fake = { calls: [] }): Deps {
+  const answer = async (url: string): Promise<Response> => {
+    fake.calls.push(url);
+    if (url === '/api/v1/auth/status') {
+      if (fake.status === null) throw new Error('unreachable');
+      return Response.json(fake.status ?? { user: { username: 'admin', display: null }, setupRequired: false });
+    }
+    if (url === TPL_URL) return fake.tpl === null ? new Response('', { status: 500 }) : new Response(fake.tpl ?? deJson());
+    return new Response('', { status: 404 });
+  };
+  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], check: checkPack, timeoutMs: 4000, ...o };
+}
+const stored = (s: MemStore) => JSON.parse(s.getItem(DEVPACK_KEY) ?? 'null');
+
+test('api_013 a stored pack is cleared on another build after seven days and when damaged', async () => {
+  const ok = await decide(JSON.stringify(REC), deps());
+  expect(ok.view).toEqual({ kind: 'active', name: 'de.json', sha: REC.sha, tag: 'de' });
+  expect(ok.choice).toMatchObject({ tag: 'de', dir: 'ltr', formatLocale: 'de-DE' });
+  expect(Object.values(ok.choice?.table ?? {})).toEqual(['Hält']);
+  // Another web UI build: removed, and the one key holds the notice.
+  const up = new MemStore();
+  const fake: Fake = { calls: [] };
+  expect(await decide(JSON.stringify(REC), deps({ store: up, ui: '/assets/index-B2.js' }, fake))).toEqual({ choice: null, view: { kind: 'notice', gone: 'upgrade', name: 'de.json' }, record: null });
+  expect(stored(up)).toEqual({ v: 1, gone: 'upgrade', name: 'de.json', at: NOW });
+  // Seven days after loading; a moment before, it still applies.
+  const exp = new MemStore();
+  expect((await decide(JSON.stringify(REC), deps({ store: exp, now: () => REC.expires }))).view).toEqual({ kind: 'notice', gone: 'expired', name: 'de.json' });
+  expect(stored(exp).gone).toBe('expired');
+  expect((await decide(JSON.stringify(REC), deps({ now: () => REC.expires - 1 }))).view.kind).toBe('active');
+  // A value that is not a record: damaged.
+  for (const v of ['{', 'null', '[]', '{"v":2}', JSON.stringify({ ...REC, sha: 'x' }), JSON.stringify({ ...REC, fails: -1 }), JSON.stringify({ ...REC, text: 3 }), JSON.stringify({ ...REC, server: {} })]) {
+    const s = new MemStore();
+    expect((await decide(v, deps({ store: s }, fake))).view, v).toEqual({ kind: 'notice', gone: 'damaged', name: '' });
+    expect(stored(s).gone).toBe('damaged');
+  }
+  // A text that is no longer a pack (refused whole) is damaged too.
+  const bad = new MemStore();
+  expect((await decide(JSON.stringify({ ...REC, text: '{"cache": [["Holds"]]}' }), deps({ store: bad }))).view).toEqual({ kind: 'notice', gone: 'damaged', name: 'de.json' });
+  // A notice stays until dismissed, 7 days at most, then goes by itself; nothing is fetched for one.
+  const n = new MemStore();
+  n.setItem(DEVPACK_KEY, JSON.stringify(notice('expired', 'de.json', NOW - 1000)));
+  expect((await decide(n.getItem(DEVPACK_KEY) ?? '', deps({ store: n }, fake))).view).toEqual({ kind: 'notice', gone: 'expired', name: 'de.json' });
+  n.setItem(DEVPACK_KEY, JSON.stringify(notice('expired', 'de.json', NOW - LIFETIME_MS - 1)));
+  expect((await decide(n.getItem(DEVPACK_KEY) ?? '', deps({ store: n }, fake))).view).toEqual({ kind: 'none' });
+  expect(n.getItem(DEVPACK_KEY)).toBeNull();
+  expect(fake.calls).toEqual([]);
+});
+
+test('api_013 a check that throws twice in a row retires the pack', async () => {
+  const store = new MemStore();
+  store.setItem(DEVPACK_KEY, JSON.stringify(REC));
+  const throwing = (() => {
+    throw new Error('a fault this file sets off');
+  }) as typeof checkPack;
+  const first = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, check: throwing }));
+  expect([first.view.kind, first.choice]).toEqual(['unchecked', null]);
+  expect(stored(store).fails).toBe(1);
+  const second = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, check: throwing }));
+  expect(second.view).toEqual({ kind: 'notice', gone: 'failed', name: 'de.json' });
+  expect(stored(store).gone).toBe('failed');
+  // A template that can't be fetched, read or reached in time is not the file's doing: not counted.
+  const s = new MemStore();
+  s.setItem(DEVPACK_KEY, JSON.stringify({ ...REC, fails: 1 }));
+  const hung = ((_u: string, init?: RequestInit) => new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))))) as typeof fetch;
+  for (const [what, d] of [
+    ['an answer 500', deps({ store: s }, { tpl: null, calls: [] })],
+    ['a damaged template', deps({ store: s }, { tpl: '{"v": 1, "contexts"', calls: [] })],
+    ['an empty answer', deps({ store: s }, { tpl: '', calls: [] })],
+    ['no template in the build', deps({ store: s, template: null })],
+    ['a server that hangs', deps({ store: s, fetch: hung, timeoutMs: 30 })],
+  ] as const) {
+    expect((await decide(s.getItem(DEVPACK_KEY) ?? '', d)).view.kind, what).toBe('unchecked');
+    expect(stored(s).fails, what).toBe(1);
+  }
+  // A check that passes sets the count back to zero.
+  expect((await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s }))).view.kind).toBe('active');
+  expect(stored(s).fails).toBe(0);
+});
+
+test('api_013 a page load pauses the pack where someone else may be next', async () => {
+  const v = JSON.stringify(REC);
+  const paused = async (o: Partial<Deps>, fake: Fake = { calls: [] }) => {
+    const r = await decide(v, deps(o, fake));
+    return [r.view.kind === 'paused' ? r.view.why : r.view.kind, r.choice === null ? 'usual language' : 'the pack'];
+  };
+  expect(await paused({}, { status: { user: null, setupRequired: false }, calls: [] })).toEqual(['signed-out', 'usual language']);
+  expect(await paused({}, { status: { user: null, setupRequired: true }, calls: [] })).toEqual(['signed-out', 'usual language']);
+  expect(await paused({}, { status: { user: { username: 'wall', display: { id: 1 } }, setupRequired: false }, calls: [] })).toEqual(['display', 'usual language']);
+  expect(await paused({ hash: '#/display?token=x' })).toEqual(['display', 'usual language']);
+  // `?lang=` is this load's language, whatever it is; nothing is requested for the pack.
+  const fake: Fake = { calls: [] };
+  expect(await paused({ search: '?lang=en' }, fake)).toEqual(['param', 'usual language']);
+  expect(fake.calls).toEqual([]);
+  // "Show the test pack on this page": this one load, signed out or on a display.
+  expect(await paused({ takeOnce: () => true }, { status: { user: null, setupRequired: false }, calls: [] })).toEqual(['active', 'the pack']);
+  expect(await paused({ takeOnce: () => true, hash: '#/display?token=x' })).toEqual(['active', 'the pack']);
+  // A server that can't be reached: the usual language, and the pack stays.
+  expect(await paused({}, { status: null, calls: [] })).toEqual(['unchecked', 'usual language']);
+});
+
+test('api_013 a pack lookup never throws', () => {
+  // A table of every kind of value, under the hashes of messages and plurals, and keys named like members.
+  const odd: unknown[] = [1, null, true, [], {}, { one: 'x' }, { other: 3 }, { other: '{n}', one: {} }, { other: null }, 'x'.repeat(100_000), '\uD800', '{n} {n}', '<b>', '%s $1', ''];
+  const table: Record<string, unknown> = Object.create(null);
+  odd.forEach((v, i) => {
+    table[hash('c', `m${i}`)] = v;
+    table[hash('c', [`p${i}`, `ps${i}`])] = v;
+  });
+  for (const k of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) table[k] = { other: 'x' };
+  under({ tag: 'de', table: table as never }, () => {
+    const { t, tn } = tr('c');
+    odd.forEach((_, i) => {
+      expect(() => t(`m${i}` as never), `m${i}`).not.toThrow();
+      for (const n of [0, 1, 2, 5, -1, 1.5, NaN]) expect(() => tn(`p${i}` as never, `ps${i}` as never, n, { n } as never), `p${i} ${n}`).not.toThrow();
+    });
+    expect(t('constructor' as never)).toBe('constructor');
+    expect(tn('{n} file' as never, '{n} files' as never, 2, { n: 2 } as never)).toBe('2 files');
+  });
+  // And what a hostile file installs: every message of the template reads without a throw.
+  const tpl = readTemplate(deJson());
+  const hostile = { cache: [...tpl.entries.values()].filter((e) => e.ctx === 'cache').map((e) => [e.english, typeof e.english === 'string' ? `‮${'{x}'.repeat(50)}<b>` : { one: '\uD800', other: '{n}'.repeat(999) }]) };
+  const r = checkPack(JSON.stringify(hostile), false, tpl, DE);
+  under({ tag: 'de', table: (r.checked?.table ?? {}) as never }, () => {
+    for (const e of tpl.entries.values()) {
+      const b = tr(e.ctx as never);
+      expect(() => (typeof e.english === 'string' ? b.t(e.english as never, {} as never) : b.tn(e.english[0] as never, e.english[1] as never, 3, { n: 3 } as never))).not.toThrow();
+    }
+  });
 });

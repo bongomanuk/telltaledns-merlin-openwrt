@@ -120,7 +120,7 @@ export function catalogRuntime(tag: string, table: Table, dir: 'ltr' | 'rtl', lo
         if (v && typeof v === 'object') {
           // Each form against the English form of its category, or English `other`; a form other
           // than `other` may leave out placeholders (a dual or a "one" that names no number).
-          const ok = Object.entries(v).every(([c, s]) => s !== '' && agreesAtRuntime(c === 'one' ? one : other, s, dir, { subset: c !== 'other', built }));
+          const ok = Object.entries(v).every(([c, s]) => typeof s === 'string' && s !== '' && agreesAtRuntime(c === 'one' ? one : other, s, dir, { subset: c !== 'other', built }));
           if (ok) return { lang: tag, forms: v };
         }
         return { lang: 'en', forms: { one, other } };
