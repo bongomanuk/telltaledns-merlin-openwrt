@@ -2044,7 +2044,7 @@ REQ: FLT-006, FLT-005, API-010, CLU-002, CLU-010, OBS-005, AGT-004. Implemented 
 - Each offered language adds about its gzipped size to the image (the binary embeds the compressed file, ADR-168): about 41 KiB for the first one, at most 0.39 MiB for all languages under the envelope.
 - A developer adds text by writing `t()` in the file that shows it: one file changes. Text typed straight into the markup, or into a text prop of a component (a label, a title, an empty state, a noun, a summary, a hint, a placeholder), fails the check in a file the ratchet baseline holds at zero and in a file it does not list (a new one).
 - A translation pull request touches only that language's file. A reviewer who cannot read it checks that, the green check, the report's sensitive and swap lines and the language owner's approval.
-- An English edit that changes more than punctuation or spacing drops that string's translations until they are confirmed again (`carry` keeps them when the meaning is unchanged); English is shown meanwhile.
+- An English edit that changes the text in anything but its spacing and the form of its quotes, dashes and ellipsis (a full stop added or a capital letter changed counts) drops that string's translations until they are confirmed again (`carry` keeps them when the meaning is unchanged); English is shown meanwhile.
 - Strings have no stable names: tests and docs refer to the text.
 - `spec/07` §3 states the three budgets; `ui/README.md` has the contributor guide; `docs/running.md` describes the setting once a language is offered.
 
