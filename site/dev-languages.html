@@ -297,23 +297,20 @@ i18n: 2 failure(s)</code></pre>
   <p>Find your tag in <a href="#tags">the table of tags</a>. The card tells you what to add or change. A language of several scripts needs its script (<code>zh-Hans</code>, not <code>zh</code>). If <code>sync</code> wrote a file but the check refuses its tag, follow the card's rules: see the note under that table.</p>
 
   <h3>The card says my file is damaged</h3>
-  <p>The card refuses a file whole, and keeps nothing, with a message that starts <q>This file can't be used:</q>. These are its limits and messages:</p>
-  <div class="table-wrap"><table class="std wrap">
-    <thead><tr><th>The card says</th><th>What it means</th></tr></thead>
-    <tbody>
-      <tr><td><q>This file can't be used: it is larger than 1 MiB.</q></td><td>The file is over 1 MiB. A language file is far smaller: you may have chosen the wrong file.</td></tr>
-      <tr><td><q>This file can't be used: it isn't UTF-8 text.</q></td><td>Save the file as UTF-8.</td></tr>
-      <tr><td><q>This file can't be used: it isn't valid JSON (line 1, column 12).</q></td><td>A comma, bracket or quote is wrong at that place. The line and column are the card's.</td></tr>
-      <tr><td><q>This file can't be used: the key "cache" appears twice (line 1, column 15); the second would hide the first.</q></td><td>A part of the UI appears twice. Merge them.</td></tr>
-      <tr><td><q>This file can't be used: it is nested deeper than a language file.</q></td><td>The file has more levels than a language file.</td></tr>
-      <tr><td><q>This file can't be used: it isn't a language file (each context holds a list of pairs).</q></td><td>The top level must be an object whose values are lists of pairs.</td></tr>
-      <tr><td><q>This file can't be used: it has more than 600 contexts.</q></td><td>At most 600 parts.</td></tr>
-      <tr><td><q>This file can't be used: it has more than 10,000 pairs.</q></td><td>At most 10,000 pairs.</td></tr>
-      <tr><td><q>This file can't be used: "Bad Context" is not a context name.</q></td><td>A part's name starts with a lower-case letter and has only letters and digits (at most 64), or is <code>~leftover</code>.</td></tr>
-      <tr><td><q>This file can't be used: pair 1 of "cache" is not in the form of the template.</q></td><td>A pair must be <code>["English","translation"]</code>, with an optional third item that is a note, or a plural.</td></tr>
-      <tr><td><q>This file can't be used: pair 1 of "cache" has a text longer than 4,000 characters.</q></td><td>Any one text is at most 4,000 characters.</td></tr>
-    </tbody>
-  </table></div>
+  <p>The card refuses a file whole, and keeps nothing, with a message that starts <q>This file can't be used:</q>. These are its messages, with their limits. The line and column in the messages are examples: the card gives your own.</p>
+  <ul>
+    <li><q>This file can't be used: it is larger than 1 MiB.</q> A language file is far smaller, so you may have chosen the wrong file.</li>
+    <li><q>This file can't be used: it isn't UTF-8 text.</q> Save the file as UTF-8.</li>
+    <li><q>This file can't be used: it isn't valid JSON (line 1, column 12).</q> A comma, bracket or quote is wrong at that place.</li>
+    <li><q>This file can't be used: the key "cache" appears twice (line 1, column 15); the second would hide the first.</q> A part of the UI appears twice. Merge them.</li>
+    <li><q>This file can't be used: it is nested deeper than a language file.</q> The file has more levels than a language file.</li>
+    <li><q>This file can't be used: it isn't a language file (each context holds a list of pairs).</q> The top level must be an object whose values are lists of pairs.</li>
+    <li><q>This file can't be used: it has more than 600 contexts.</q> A language file has at most 600 parts.</li>
+    <li><q>This file can't be used: it has more than 10,000 pairs.</q> A language file has at most 10,000 pairs.</li>
+    <li><q>This file can't be used: "Bad Context" is not a context name.</q> A part's name starts with a lower-case letter and has only letters and digits (64 characters at most), or is <code>~leftover</code>.</li>
+    <li><q>This file can't be used: pair 1 of "cache" is not in the form of the template.</q> A pair is <code>["English","translation"]</code>, with an optional third item that is a note. A plural pair has two English forms and an object of forms.</li>
+    <li><q>This file can't be used: pair 1 of "cache" has a text longer than 4,000 characters.</q> Any one text is at most 4,000 characters.</li>
+  </ul>
 
   <h3>My language's plural categories are refused</h3>
   <p>The card says <q>This language uses other; this entry has one, other.</q> (with your own forms). The categories come from the project's table, not from your browser or your own knowledge of the language, and a plural pair needs exactly those forms. The header of your notes file lists them. If you believe the table is wrong for your language, say so in an issue: a maintainer changes it, after a review of the diff. The tool fails the whole file for this, the card one text.</p>
@@ -327,20 +324,18 @@ i18n: 2 failure(s)</code></pre>
   </ul>
 
   <h3>What the banner says</h3>
-  <div class="table-wrap"><table class="std wrap">
-    <thead><tr><th>The banner says</th><th>What to do</th></tr></thead>
-    <tbody>
-      <tr><td><q>The test language pack … is paused on this page.</q></td><td>Nobody is signed in on this page (the sign-in, setup and two-factor screens), or it is a display page. Choose <b class="ui">Show the test pack on this page</b> to see the pack for one page load.</td></tr>
-      <tr><td><q>The test language pack … is paused: another user of this browser loaded it.</q></td><td>The pack is the user's who loaded it. Choose <b class="ui">Show the test pack on this page</b>, or sign in as that user.</td></tr>
-      <tr><td><q>The test language pack … is paused for this page load: the address asks for a language.</q></td><td>Remove <code>?lang=</code> from the address.</td></tr>
-      <tr><td><q>The test language pack … could not be checked, so this page is in your usual language. Reload to try again.</q></td><td>Choose <b class="ui">Reload</b>. The pack stays.</td></tr>
-      <tr><td><q>TelltaleDNS was updated: the test pack goes away when you reload.</q></td><td>Reload, then download the template again and check your file. Translations whose English did not change still apply.</td></tr>
-      <tr><td><q>The test language pack … was removed: TelltaleDNS was updated. Download the template again and check your file: translations whose English didn't change still apply.</q></td><td>Do as it says, then use the file again.</td></tr>
-      <tr><td><q>The test language pack … was removed: it was loaded 7 days ago.</q></td><td>Use the file again.</td></tr>
-      <tr><td><q>The test language pack … was removed: the copy kept in this browser couldn't be read.</q></td><td>Choose the file again.</td></tr>
-      <tr><td><q>The test language pack … was removed: it could not be checked twice in a row. Check the file again under Settings.</q></td><td>Check the file on the card, and fix what it lists.</td></tr>
-    </tbody>
-  </table></div>
+  <p>The dots stand for the file's name. The banner is always in English.</p>
+  <ul>
+    <li><q>The test language pack … is paused on this page.</q> Nobody is signed in on this page (the sign-in, setup and two-factor screens), or it is a display page. Choose <b class="ui">Show the test pack on this page</b> to see the pack for one page load.</li>
+    <li><q>The test language pack … is paused: another user of this browser loaded it.</q> The pack belongs to the user who loaded it. Choose <b class="ui">Show the test pack on this page</b>, or sign in as that user.</li>
+    <li><q>The test language pack … is paused for this page load: the address asks for a language.</q> Take <code>?lang=</code> out of the address.</li>
+    <li><q>The test language pack … could not be checked, so this page is in your usual language. Reload to try again.</q> Choose <b class="ui">Reload</b>. The pack stays.</li>
+    <li><q>TelltaleDNS was updated: the test pack goes away when you reload.</q> Reload, then download the template again and check your file. Translations whose English did not change still apply.</li>
+    <li><q>The test language pack … was removed: TelltaleDNS was updated. Download the template again and check your file: translations whose English didn't change still apply.</q> Do as it says, then use the file again.</li>
+    <li><q>The test language pack … was removed: it was loaded 7 days ago.</q> Use the file again.</li>
+    <li><q>The test language pack … was removed: the copy kept in this browser couldn't be read.</q> Choose the file again.</li>
+    <li><q>The test language pack … was removed: it could not be checked twice in a row. Check the file again under Settings.</q> Check the file on the card, and fix what it lists.</li>
+  </ul>
 
   <h3>The tool says FAIL about a file or a field I did not write</h3>
   <ul>
