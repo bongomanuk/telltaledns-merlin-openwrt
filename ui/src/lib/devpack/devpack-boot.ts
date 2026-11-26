@@ -132,6 +132,9 @@ function watchServer(r: PackRecord) {
 function watchUser(r: PackRecord, out: Decision) {
   let first = true;
   devpack.seen = (who) => {
+    // Someone is signed in again: a page that was to leave for the provider's sign-out did not (its address never
+    // replaced the page), and the next sign-out or session end takes the pack away as any does.
+    if (who !== null) devpack.leaving = false;
     const again = first && out.reloaded;
     first = false;
     if (who === out.user || out.user === undefined || out.shown) return;

@@ -497,6 +497,47 @@ test('api_013 back after signing out at the provider never shows the pack', asyn
   }
 });
 
+test('api_013 a provider sign-out that never leaves the page lets a later session end take the pack away', async ({ browser }) => {
+  // The provider's address never replaces the page (here it answers 204, so the browser stays): the sign-in page stays
+  // drawn with the pack. Signing in again there, then a session that ends, takes the pack off the page as any session
+  // end does: the page reloads once, in the usual language, with the pack paused.
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  const logout = async (r: Route) => {
+    const res = await r.fetch();
+    await r.fulfill({ response: res, status: 200, json: { logoutUrl: '/?devpack-test=nowhere' } });
+  };
+  await s.page.route('**/api/v1/auth/logout', logout);
+  await s.page.route((u) => u.searchParams.get('devpack-test') === 'nowhere', (r) => r.fulfill({ status: 204, body: '' }));
+  let loads = 0;
+  s.page.on('load', () => loads++);
+  await s.page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(s.page.getByRole('heading', { name: valueOf(SIGN_IN.ctx) })).toBeVisible();
+  await s.page.waitForTimeout(1500);
+  expect(s.page.url()).not.toContain('devpack-test=nowhere');
+  // Signed in again on that page: the pack's language, and no reload (the user who loaded it).
+  await s.page.unroute('**/api/v1/auth/logout', logout);
+  await s.page.getByLabel('Username', { exact: true }).fill(ADMIN.user);
+  await s.page.getByLabel('Password', { exact: true }).fill(ADMIN.pass);
+  await s.page.getByRole('button', { name: valueOf(SIGN_IN.ctx), exact: true }).click();
+  await expect(s.page.getByRole('button', { name: 'Sign out' })).toBeVisible({ timeout: 30_000 });
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  expect(loads).toBe(0);
+  // Then the session ends: the next request finds it gone.
+  await s.page.route(
+    (u) => u.pathname.startsWith('/api/v1/') && !u.pathname.startsWith('/api/v1/auth/'),
+    (r) => r.fulfill({ status: 401, json: { type: 'about:blank', title: 'Unauthorized', status: 401, code: 'unauthorized', detail: 'the session is gone' } }),
+  );
+  await Promise.all([s.page.waitForEvent('load'), s.page.evaluate(() => (location.hash = '#/queries')).catch(() => undefined)]);
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible({ timeout: 30_000 });
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('is paused on this page');
+  await done(s);
+});
+
 test('api_013 a session that ends takes the pack off the page', async ({ browser }) => {
   // A request that finds the session gone draws the sign-in page: after one reload, in the usual language, and
   // the pack paused. Here the status still says signed in (as two nodes that disagree could): that load stays
