@@ -7,7 +7,7 @@ import { hash } from './ident';
 import { PSEUDO, formatLocale, match, type Request } from './match';
 import { CATEGORIES, interpolate, plural, type Binder, type Forms, type Msg, type Params } from './message';
 import { pseudo } from './pseudo';
-import { agreesAtRuntime } from './safe';
+import { agreesAtRuntime, type Extra } from './safe';
 
 export type { Binder, Msg, Param, Params } from './message';
 
@@ -30,6 +30,9 @@ export type Choice = {
    * (with a maintainer's exemptions), so the browser does not re-check those two. Set only by
    * `load()` for a catalog of the build's table; anything else is re-checked in full. */
   readonly built?: boolean;
+  /** For a catalog the build did not ship: the digit and added-token rules, which the code that brought it
+   * gives (`extraAgrees`, `added.ts`). Without them, no translation of such a catalog is shown. */
+  readonly extra?: Extra;
 };
 
 /** One language for the life of the page. */
@@ -90,8 +93,8 @@ export function parseCatalog(json: string): Table {
 }
 
 /** A translated runtime. Each message is looked up once per context and checked against the
- * English literal it would replace; one that disagrees is never shown. `built`: see `Choice`. */
-export function catalogRuntime(tag: string, table: Table, dir: 'ltr' | 'rtl', locale: string, built = false): Runtime {
+ * English literal it would replace; one that disagrees is never shown. `built`, `extra`: see `Choice`. */
+export function catalogRuntime(tag: string, table: Table, dir: 'ltr' | 'rtl', locale: string, built = false, extra?: Extra): Runtime {
   const texts = new Map<string, Map<string, string>>();
   const plurals = new Map<string, Map<string, { lang: string; forms: Forms }>>();
   const memo = <V>(m: Map<string, Map<string, V>>, context: string, id: string, make: () => V): V => {
@@ -111,7 +114,7 @@ export function catalogRuntime(tag: string, table: Table, dir: 'ltr' | 'rtl', lo
       memo(texts, context, english + NOTE + (note ?? ''), () => {
         const k = hash(context, english, note);
         const v = Object.hasOwn(table, k) ? table[k] : undefined;
-        return typeof v === 'string' && v !== '' && agreesAtRuntime(english, v, dir, { built }) ? v : english;
+        return typeof v === 'string' && v !== '' && agreesAtRuntime(english, v, dir, { built, extra }) ? v : english;
       }),
     forms: (context: string, one: string, other: string, note?: string) =>
       memo(plurals, context, one + NOTE + other + NOTE + (note ?? ''), () => {
@@ -120,7 +123,7 @@ export function catalogRuntime(tag: string, table: Table, dir: 'ltr' | 'rtl', lo
         if (v && typeof v === 'object') {
           // Each form against the English form of its category, or English `other`; a form other
           // than `other` may leave out placeholders (a dual or a "one" that names no number).
-          const ok = Object.entries(v).every(([c, s]) => typeof s === 'string' && s !== '' && agreesAtRuntime(c === 'one' ? one : other, s, dir, { subset: c !== 'other', built }));
+          const ok = Object.entries(v).every(([c, s]) => typeof s === 'string' && s !== '' && agreesAtRuntime(c === 'one' ? one : other, s, dir, { subset: c !== 'other', built, extra }));
           if (ok) return { lang: tag, forms: v };
         }
         return { lang: 'en', forms: { one, other } };
@@ -142,7 +145,7 @@ function runtime(): Runtime {
 export function runtimeOf(c: Choice): Runtime {
   if (c.tag === PSEUDO) return PSEUDO_RUNTIME;
   if (c.tag === 'en' || !c.table || !Object.keys(c.table).length) return ENGLISH;
-  return catalogRuntime(c.tag, c.table, c.dir ?? 'ltr', c.formatLocale ?? c.tag, c.built);
+  return catalogRuntime(c.tag, c.table, c.dir ?? 'ltr', c.formatLocale ?? c.tag, c.built, c.extra);
 }
 
 /** Called before the app mounts (and again only to fall back to English). */

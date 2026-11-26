@@ -5,8 +5,9 @@
 // findings with the token and its position); the browser re-checks what needs no data file
 // (`agreesAtRuntime`, a yes or no that stops at the first problem) the first time it shows a
 // translation, and shows English instead when they disagree. This module holds the readings both
-// use and the runtime's check; the full rule is a module of its own, so code loaded later can run
-// it without the page's first load carrying it. Pure; no imports.
+// use and the runtime's check; the full rule is a module of its own, and so are the digit and
+// added-token rules the browser applies only to a catalog the build did not ship (`added.ts`), so
+// code loaded later can run them without the page's first load carrying them. Pure; no imports.
 
 /** One problem: the rule, the token concerned, and where it is in the translation (-1: absent). */
 export type Finding = { readonly rule: string; readonly token: string; readonly at: number; readonly detail: string };
@@ -55,7 +56,7 @@ const SCHEME = /[a-z0-9+.-]:\/\//gi;
 const TOKEN = /[A-Za-z0-9._:/[\]=$|-]+/g;
 // Structural by pattern, wherever they appear. A translation may not add one of these (but may add
 // `_` or `[x]`, and words and acronyms, which are only reported), in either reading.
-const ADDED = [
+export const ADDED = [
   /:\/\//, // a scheme
   /\/[A-Za-z0-9._-]+\//, // a /x/ path
   /=/,
@@ -63,10 +64,8 @@ const ADDED = [
   /\|/,
   /\b\d{1,3}(?:\.\d{1,3}){3}\b/, // an IPv4 address
 ];
-// A host and port. In the folded reading only a dotted host counts: a fullwidth colon there may
-// just follow a word (`DNS：53`).
-const HOST_PORT = /[A-Za-z0-9-]:\d/;
-const DOTTED_HOST_PORT = /\.[A-Za-z0-9-]+:\d/;
+// A host and port (the folded reading's own, a dotted host, is in `added.ts`).
+export const HOST_PORT = /[A-Za-z0-9-]:\d/;
 /** `s` without the characters of `chars` at either end (a loop: no regex backtracking). */
 function trim(s: string, chars: string): string {
   let a = 0;
@@ -121,51 +120,7 @@ export function structural(token: string, glossary: readonly string[] = []): boo
   return glossary.includes(token) || STRUCTURAL.some((re) => re.test(token));
 }
 
-/** Whether a token a translation adds is an address, a port, a path or a setting (`also`: the
- * host-and-port pattern of that reading). */
-export const isAdded = (token: string, also = HOST_PORT) => also.test(token) || ADDED.some((re) => re.test(token));
-
-/** `w` as a whole word: not inside a longer run of letters, digits or `_`. */
-export const whole = (w: string, flags?: string) => new RegExp(`(?<![A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, flags);
-
-/** The tokens a translation adds that are an address, a port, a path or a setting: in the prepared
- * reading, then in the folded one. There a token the first reading already judged is left out, and
- * a token is judged without the English's own addresses in it, each where it stands whole, since
- * `：` and `。` also join those (`https://a.example。OPNsense：https://b.lan`). The English's words
- * stay in (`ｅｖｉｌ．ｈｅｌｐ：８５３` when the English says "help"), and so do its numbers and
- * an address inside a longer one (`２１．１．１．１５` when it says `1.1.1.1`). */
-export function addedStructural(english: string, translation: string): string[] {
-  // Sets, so a long translation is read in linear time; each of the English's own patterns is built once
-  // and applied only to a token that holds it.
-  const te = new Set(tokens(english));
-  const tt = tokens(translation);
-  const ts = new Set(tt);
-  const fe = new Set(tokens(english, true));
-  const own = unique([...te, ...fe])
-    .filter((e) => structural(e))
-    .sort((a, b) => b.length - a.length)
-    .map((e) => [e, whole(e, 'g')] as const);
-  const rest = (t: string) => own.reduce((s, [e, re]) => (s.includes(e) ? s.replace(re, ' ') : s), t);
-  // Taking the English's own out (each as a whole word, for a space) never makes a token added: it is read
-  // only for a token that is added as it stands.
-  return unique([...tt.filter((t) => !te.has(t) && isAdded(t)), ...tokens(translation, true).filter((t) => !fe.has(t) && !ts.has(t) && isAdded(t, DOTTED_HOST_PORT) && isAdded(rest(t), DOTTED_HOST_PORT))]);
-}
-
-export const digits = (s: string): string[] => prepare(s).replace(PLACEHOLDER, ' ').match(/\d+/g) ?? [];
 export const all = (s: string, re: RegExp): string[] => s.match(re) ?? [];
-
-/** The members of multiset `a` that `b` lacks. */
-export function missingFrom(a: readonly string[], b: readonly string[]): string[] {
-  const left = new Map<string, number>();
-  for (const v of b) left.set(v, (left.get(v) ?? 0) + 1);
-  const out: string[] = [];
-  for (const v of a) {
-    const n = left.get(v) ?? 0;
-    if (n > 0) left.set(v, n - 1);
-    else out.push(v);
-  }
-  return out;
-}
 export const unique = (xs: readonly string[]) => [...new Set(xs)];
 const sameSet = (a: readonly string[], b: readonly string[]) => {
   const x = new Set(a);
@@ -215,12 +170,16 @@ export function mixedScript(s: string): { word: string; at: number }[] {
   return [...s.matchAll(WORD)].filter((m) => LATIN.test(m[0]) && CYRILLIC_OR_GREEK.test(m[0])).map((m) => ({ word: m[0], at: m.index }));
 }
 
+/** The digit and added-token rules, as a yes or no (`extraAgrees` in `added.ts`). */
+export type Extra = (english: string, translation: string) => boolean;
+
 /** What the browser checks before it shows a translation: the same rules without the data files
  * (`verbatim`, glossary), as a yes or no that stops at the first problem. `built` for a catalog
  * the build shipped: the check held it to the digit and added-token rules, with a maintainer's
- * exemptions, so those two are left out; anything else is held to them. `subset` for a plural form
+ * exemptions, so those two are left out. Anything else is held to them by `extra`, which the code that
+ * brought the catalog gives; without it, the translation is not shown. `subset` for a plural form
  * other than `other`. */
-export function agreesAtRuntime(english: string, translation: string, dir: 'ltr' | 'rtl' = 'ltr', o: { subset?: boolean; built?: boolean } = {}): boolean {
+export function agreesAtRuntime(english: string, translation: string, dir: 'ltr' | 'rtl' = 'ltr', o: { subset?: boolean; built?: boolean; extra?: Extra } = {}): boolean {
   const pe = all(english, PLACEHOLDER);
   const pt = all(translation, PLACEHOLDER);
   if (o.subset ? pt.some((p) => !pe.includes(p)) : !sameSet(pe, pt)) return false;
@@ -229,7 +188,7 @@ export function agreesAtRuntime(english: string, translation: string, dir: 'ltr'
   const te = tokens(english);
   const tt = tokens(translation);
   if (te.some((t) => structural(t) && !tt.includes(t))) return false;
-  if (!o.built && (addedStructural(english, translation).length || missingFrom(digits(english), digits(translation)).length)) return false;
+  if (!o.built && !o.extra?.(english, translation)) return false;
   if (!sameSet(all(english, CODE_SPAN), all(translation, CODE_SPAN))) return false;
   return mixedScript(translation).length === 0 && forbidden(translation, dir).length === 0;
 }

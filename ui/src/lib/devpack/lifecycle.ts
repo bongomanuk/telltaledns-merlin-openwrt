@@ -13,13 +13,15 @@
 //   e. otherwise the template is fetched (a failure: the usual language, and the pack stays for the next
 //      load) and the file is checked again with the build's rules (a check that throws twice in a row
 //      retires it), and the record keeps the new table, in the same one write;
-//   f. the table is installed as the page's language (the runtime re-checks each translation against its
-//      English the first time it shows it, as for a catalog the build did not ship).
+//   f. the table is installed as the page's language, with the digit and added-token rules (the runtime
+//      re-checks each translation against its English the first time it shows it, as for any catalog the
+//      build did not ship, and needs those two rules from the code that brought it).
 // It writes over or removes only what it read, while the key still holds it (another tab may have loaded a
 // newer pack), and gives up the requests and the checking code when the page load stops waiting. Pure:
 // storage, network, time and the checking code (loaded only for e) come in `Deps`, so the tests hold
 // every path.
 import type { Choice } from '../i18n';
+import { extraAgrees } from '../i18n/added';
 import { formatLocale } from '../i18n/match';
 import type { checkPack, tagInfo } from '../i18n/pack';
 import type { readTemplate } from '../i18n/template';
@@ -110,7 +112,9 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   let user: string | null = null;
   let shown = false;
   const use = (table: NonNullable<Choice['table']>, checked: boolean): Decision => ({
-    choice: { tag: r.tag, table, dir: r.dir, formatLocale: formatLocale(r.tag, d.languages) },
+    // The digit and added-token rules go with the pack: the runtime holds a catalog the build did not ship to
+    // them, and shows English without them.
+    choice: { tag: r.tag, table, dir: r.dir, formatLocale: formatLocale(r.tag, d.languages), extra: extraAgrees },
     view: { kind: 'active', ...named },
     record: r,
     checked,

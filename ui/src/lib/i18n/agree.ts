@@ -2,18 +2,15 @@
 // FAIL and REPORT, with the token and where it is in the translation. A module of its own, apart
 // from the runtime's first-use check (`agreesAtRuntime` in `safe.ts`), so code loaded later can run
 // the build's rule without the page's first load carrying it. Pure; it imports the readings of
-// `safe.ts` only, by its file name (`.ts`), as Node's own type stripping needs (the check script
-// imports this module).
+// `safe.ts` and the digit and added-token rules of `added.ts` only, by their file names (`.ts`), as
+// Node's own type stripping needs (the check script imports this module).
+import { addedStructural, digits, isAdded, missingFrom, whole } from './added.ts';
 import {
   CODE_SPAN,
   PLACEHOLDER,
   TAG,
-  addedStructural,
   all,
-  digits,
   forbidden,
-  isAdded,
-  missingFrom,
   mixedScript,
   prepare,
   schemes,
@@ -21,7 +18,6 @@ import {
   tokens,
   unique,
   urls,
-  whole,
   type AgreeOptions,
   type Finding,
   type Verdict,

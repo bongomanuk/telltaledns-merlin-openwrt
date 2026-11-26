@@ -8,8 +8,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { cleanup, project, put, uiCopy, under } from './i18n-fixture';
+import { cleanup, project, put, table, uiCopy, under } from './i18n-fixture';
 import * as safe from '../../src/lib/i18n/safe';
+import * as added from '../../src/lib/i18n/added';
 import { agree } from '../../src/lib/i18n/agree';
 import { hash } from '../../src/lib/i18n/ident';
 import { load, tr } from '../../src/lib/i18n';
@@ -70,10 +71,33 @@ test('api_012 the runtime check stays apart from the whole rule', () => {
   expect(Object.hasOwn(safe, 'agree')).toBe(false);
   expect(typeof safe.agreesAtRuntime).toBe('function');
   expect(agree('Keep {n}', 'Qa').fails.map((f) => `${f.rule} ${f.token}`)).toEqual(['placeholders {n}']);
-  // No module the runtime loads imports it, so the first load of a page never carries it.
+  // No module the runtime loads imports it, so the first load of a page never carries it; nor the digit and
+  // added-token rules, which only a catalog the build did not ship needs (it brings them).
   const runtime = importedFrom('index.ts');
   expect(runtime.has('safe.ts')).toBe(true);
   expect([...runtime]).not.toContain('agree.ts');
+  expect([...runtime]).not.toContain('added.ts');
+});
+
+test('api_012 a catalog the build did not ship is shown only with the rules its code brings', async () => {
+  // The code that brings such a catalog (a test pack's boot) gives the runtime the digit and added-token rules, so an
+  // English reader's first load does not carry them. Without them nothing of such a catalog is shown, not even a
+  // translation that agrees: the conservative direction (review part B of T29.3, finding 3).
+  const t = table({ [hash('c', 'Holds')]: 'Qa-holds', [hash('c', 'Wait 7 days')]: 'Qa-wait a week' });
+  under({ tag: 'qaa', table: t, extra: undefined }, () => {
+    expect(tr('c').t('Holds')).toBe('Holds');
+    expect(tr('c').t('Wait 7 days')).toBe('Wait 7 days');
+  });
+  under({ tag: 'qaa', table: t, extra: added.extraAgrees }, () => {
+    expect(tr('c').t('Holds')).toBe('Qa-holds');
+    expect(tr('c').t('Wait 7 days')).toBe('Wait 7 days');
+  });
+  // A catalog the build shipped was held to them by the check: the runtime leaves them out.
+  under({ tag: 'qaa', table: t, built: true }, () => expect(tr('c').t('Wait 7 days')).toBe('Qa-wait a week'));
+  expect(safe.agreesAtRuntime('Holds', 'Qa-holds')).toBe(false);
+  expect(safe.agreesAtRuntime('Holds', 'Qa-holds', 'ltr', { extra: added.extraAgrees })).toBe(true);
+  // A page load's choice of a pack carries them (the differential test compares them with the old rule).
+  expect((await decide(JSON.stringify(REC), deps())).choice?.extra).toBe(added.extraAgrees);
 });
 
 test('api_012 the build admits one template on its own line and the entry holds its name', () => {
@@ -349,10 +373,10 @@ test('api_012 a surrogate that is not half of a pair is a forbidden code point',
   // the check screen marks it, and a file's shown name drops it. A pair (one code point) and U+2800 stay allowed.
   expect(safe.forbidden('a\uD800b')).toEqual([{ cp: 'U+D800', at: 1 }]);
   expect(safe.forbidden('a\uDC00')).toEqual([{ cp: 'U+DC00', at: 1 }]);
-  expect(safe.forbidden('a\u{1F600}b⠀')).toEqual([]);
+  expect(safe.forbidden('a\u{1F600}b\u{2800}')).toEqual([]);
   expect(agree('Keep', 'Qa\uD800').fails.map((f) => `${f.rule} ${f.token}`)).toEqual(['code-point U+D800']);
-  expect(safe.agreesAtRuntime('Keep', 'Qa\uD800')).toBe(false);
-  expect(safe.agreesAtRuntime('Keep', 'Qa\u{1F600}')).toBe(true);
+  expect(safe.agreesAtRuntime('Keep', 'Qa\uD800', 'ltr', { extra: added.extraAgrees })).toBe(false);
+  expect(safe.agreesAtRuntime('Keep', 'Qa\u{1F600}', 'ltr', { extra: added.extraAgrees })).toBe(true);
   expect(markers('a\uD800b')).toBe('a⟨U+D800⟩b');
   expect(shownName('de\uD800.json')).toBe('de.json');
   expect(checked({ cache: [['Holds', 'Hält\uDFFF']] }).broken.map((b) => `${b.rule} ${b.token}`)).toEqual(['code-point U+DFFF']);
@@ -641,7 +665,8 @@ function draw(rand: () => number): { english: string; translation: string; o: ob
 
 test('api_012 the agreement rule gives what it gave before it was made linear', () => {
   // The rule as at 934a9fb7 (a copy, byte for byte), against the rule now: every finding the same, in the same
-  // order, on a few thousand drawn pairs and on the shapes of finding 2 at several sizes.
+  // order, on a few thousand drawn pairs and on the shapes of finding 2 at several sizes. The runtime's check is
+  // given the digit and added-token rules, as a catalog the build did not ship brings them.
   const before = { agree: agreeBefore };
   const beforeSafe = safeBefore;
   const rand = seeded(20261126);
@@ -665,9 +690,9 @@ test('api_012 the agreement rule gives what it gave before it was made linear', 
     expect(JSON.stringify(now), what).toBe(JSON.stringify(then));
     // Without positions: the same findings, only placed nowhere.
     expect(noAt(agree(english, translation, { ...o, positions: false })), what).toBe(noAt(then));
-    expect(safe.addedStructural(english, translation), what).toEqual(beforeSafe.addedStructural(english, translation));
+    expect(added.addedStructural(english, translation), what).toEqual(beforeSafe.addedStructural(english, translation));
     const subset = 'placeholderSubset' in o;
-    for (const built of [false, true]) expect(safe.agreesAtRuntime(english, translation, 'ltr', { built, subset }), what).toBe(beforeSafe.agreesAtRuntime(english, translation, 'ltr', { built, subset }));
+    for (const built of [false, true]) expect(safe.agreesAtRuntime(english, translation, 'ltr', { built, subset, extra: added.extraAgrees }), what).toBe(beforeSafe.agreesAtRuntime(english, translation, 'ltr', { built, subset }));
     findings += then.fails.length + then.reports.length;
   }
   // The drawn pairs reach the rule's findings, not only agreement.

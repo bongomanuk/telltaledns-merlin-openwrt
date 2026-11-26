@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { install, parseCatalog, type Choice } from '../../src/lib/i18n';
+import { extraAgrees } from '../../src/lib/i18n/added';
 
 export const UI = resolve(import.meta.dirname, '../..');
 export const FIXTURE = resolve(UI, 'tests/i18n-fixtures/project');
@@ -68,9 +69,10 @@ let ui: Result | null = null;
 /** The check on the UI itself (once per worker). */
 export const checkUi = (): Result => (ui ??= lib.check(UI));
 
-/** Runs `body` with `c` installed, then English again. */
+/** Runs `body` with `c` installed, then English again. A catalog the build did not ship gets the digit and
+ * added-token rules, as the code that brings one gives them (ADR-190), unless `c` names its own `extra`. */
 export function under(c: Choice, body: () => void) {
-  install(c);
+  install(c.built || 'extra' in c ? c : { ...c, extra: extraAgrees });
   try {
     body();
   } finally {
