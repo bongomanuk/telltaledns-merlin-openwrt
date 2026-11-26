@@ -11,7 +11,7 @@
 import { DEVPACK_KEY } from '../i18n/devpack';
 
 /** The one-load flag (session storage, removed when read): `1` after "Show the test pack on this page",
- * `away` after the pack left a page because someone went away. */
+ * `away` after the pack left a page because someone went away, `in` after a page reloaded for a sign-in. */
 export const ONCE_KEY = 'telltale.devpack.once';
 /** This web UI's build: the path of the page's entry module (`/assets/index-<hash>.js`, whose content-hashed
  * name changes with the English by construction), from the page's one module script. */

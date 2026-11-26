@@ -44,7 +44,8 @@ export type Deps = {
   readonly store: Store | null;
   /** Reads and removes the one-load flag: `1` after "Show the test pack on this page" (this load shows the
    * pack where it would pause), `away` after the pack left a page because someone went away (this load is
-   * paused, whoever the status says is signed in). */
+   * paused, whoever the status says is signed in), `in` after a page reloaded for a sign-in (this load does
+   * not reload for the first user the app reports). */
   readonly takeOnce: () => string | null;
   readonly fetch: typeof fetch;
   readonly now: () => number;
@@ -64,7 +65,8 @@ export type Deps = {
 /** The page's language from the pack (null: the usual language), what the banner shows, the record that
  * still applies (null when there is none, or it was just removed), the notice shown, and whether the file was
  * checked. `user`: who is signed in on this load (null: nobody), once the status was read; `shown`: "Show the
- * test pack on this page" lifted a pause for this one load. */
+ * test pack on this page" lifted a pause for this one load; `reloaded`: a paused load that follows a reload for
+ * a sign-in. */
 export type Decision = {
   readonly choice: Choice | null;
   readonly view: View;
@@ -74,6 +76,7 @@ export type Decision = {
   readonly checked?: boolean;
   readonly user?: string | null;
   readonly shown?: boolean;
+  readonly reloaded?: boolean;
 };
 
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
@@ -107,7 +110,7 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   const gone = lifetime(r, d.ui, now);
   if (gone) return removed(gone, r.name, r);
   const named: Named = { name: r.name, sha: r.sha, tag: r.tag };
-  const paused = (why: Paused, user?: string | null): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why, user });
+  const paused = (why: Paused, user?: string | null): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why, user, reloaded: flag === 'in' });
   const unchecked: Decision = { choice: null, view: { kind: 'unchecked', ...named }, record: r };
   let user: string | null = null;
   let shown = false;

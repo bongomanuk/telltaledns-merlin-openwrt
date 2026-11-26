@@ -8,9 +8,11 @@
 // says so, without a reload, so nothing typed is lost. It follows who is signed in, as the app tells it:
 // someone going away (a sign-out, a session that ends, the display page) takes a pack this load shows
 // away (a sign-out that goes on to the provider's lets the page leave, and the page it comes back to is
-// paused), and a sign-in on a page paused for nobody or for another user reloads; each reload lands on a
-// load that decides for whoever is there, so none repeats. "Show the test pack on this page" keeps its
-// one load as it is. A tab removes or writes over only what it read, and reloads only once the key no
+// paused), and a sign-in on a page paused for nobody or for another user reloads. Each of these reloads
+// leaves a flag for the load it lands on: after someone went away that load is paused, whoever the status
+// says is signed in; after a sign-in it does not reload for the first user the app reports. So two reads of
+// who is signed in that disagree (nodes that don't share sessions) reload a page once, never again and
+// again. "Show the test pack on this page" keeps its one load as it is. A tab removes or writes over only what it read, and reloads only once the key no
 // longer holds the pack, so a value it cannot change never makes it reload again.
 import { mount } from 'svelte';
 import type { Choice } from '../i18n';
@@ -124,10 +126,14 @@ function watchServer(r: PackRecord) {
 /** Who is signed in, as the app says whenever it changes (null: nobody, or the display page), against who was
  * when this load decided: someone going away takes a pack this load shows away (the next load is paused,
  * whatever the status says then; a sign-out that goes on to the provider's is not reloaded, as the page is
- * leaving), and a sign-in on a page paused for nobody or for another user reloads (into
- * the pack for the user who loaded it). "Show the test pack on this page" keeps its load as it is. */
+ * leaving), and a sign-in on a page paused for nobody or for another user reloads (into the pack for the user
+ * who loaded it), except for the first user the app reports on a load that follows such a reload: the two reads
+ * disagreed, and would again. "Show the test pack on this page" keeps its load as it is. */
 function watchUser(r: PackRecord, out: Decision) {
+  let first = true;
   devpack.seen = (who) => {
+    const again = first && out.reloaded;
+    first = false;
     if (who === out.user || out.user === undefined || out.shown) return;
     if (installed) {
       try {
@@ -139,8 +145,13 @@ function watchUser(r: PackRecord, out: Decision) {
       // (the provider's session would stay). The page the provider sends back to is paused, by the flag.
       if (who === null && devpack.leaving) return;
       reload();
-    } else if (who !== null && (out.paused === 'signed-out' || out.paused === 'user')) {
+    } else if (who !== null && !again && (out.paused === 'signed-out' || out.paused === 'user')) {
       if (who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
+      try {
+        session?.setItem(ONCE_KEY, 'in');
+      } catch {
+        // Session storage blocked: the next load decides from the status alone.
+      }
       reload();
     }
   };

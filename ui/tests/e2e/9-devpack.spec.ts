@@ -6,7 +6,7 @@
 // alone, as 1-ui.spec.ts does), keep the cookies only, and give each test a fresh context: no pack reaches another
 // test. On the server they create one viewer of their own and sign in and out; nothing about a pack reaches it.
 // (The parts that need no browser are 7-devpack.spec.ts.)
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -463,6 +463,45 @@ test('api_013 a session that ends takes the pack off the page', async ({ browser
   await expect(banner(s.page)).toContainText('is paused on this page');
   await s.page.waitForTimeout(3000);
   expect(loads).toBe(1);
+  await done(s);
+});
+
+test('api_013 reads of who is signed in that disagree reload a page once for a sign-in', async ({ browser }) => {
+  // The pack's code reads who is signed in before the page is drawn, and the app reads it again: nodes behind one
+  // address that don't share sessions can disagree. Here, on every load, the pack's read says nobody and the app's
+  // says the user: the page reloads once for that sign-in, and the load it lands on does not again. A sign-in on
+  // that load, after a sign-out, still reloads into the pack.
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  // From here, the first status request of each page load (the pack's own) says nobody is signed in.
+  let first = true;
+  s.page.on('request', (q) => {
+    if (q.isNavigationRequest() && q.frame() === s.page.mainFrame()) first = true;
+  });
+  const nobody = async (r: Route) => {
+    if (!first) return r.fallback();
+    first = false;
+    const res = await r.fetch();
+    await r.fulfill({ response: res, json: { ...(await res.json()), user: null } });
+  };
+  await s.page.route('**/api/v1/auth/status', nobody);
+  let loads = 0;
+  s.page.on('load', () => loads++);
+  await s.page.reload();
+  await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.', { timeout: 30_000 });
+  await s.page.waitForTimeout(4000);
+  expect(loads, 'the reload asked for, and one for the sign-in the app reports').toBe(2);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(s.page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await s.page.unroute('**/api/v1/auth/status', nobody);
+  await s.page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await Promise.all([s.page.waitForEvent('load'), signInHere(s.page)]);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  await expect(banner(s.page)).toContainText('Test language pack: fr.json');
   await done(s);
 });
 
