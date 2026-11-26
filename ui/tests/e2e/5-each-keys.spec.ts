@@ -346,3 +346,29 @@ test('api_005 obs_020 the listener checks: one target checked twice', async ({ p
   await page.goto('/#/settings?tab=system');
   await expect(page.getByTestId('probes').locator('tbody tr td:nth-child(3)')).toHaveText(['0.4 ms', '0.6 ms']);
 });
+
+// ---- Names shown as the server keeps them: unescaped (a label that holds a dot, bytes that are not UTF-8) and, for a
+// device's rhythm, cut at 64 characters, so two names can read alike.
+
+test('api_005 obs_018 a shadow list: two of its names read alike', async ({ page }) => {
+  const at = new Date(NOW * 1000).toISOString();
+  const list = { list: 'trackers', hits: 9, devices: 1, since: at, lastHitAt: at, topNames: [{ name: 'a.b.example', count: 5 }, { name: 'a.b.example', count: 4 }], nodes: [] };
+  await page.route('**/api/v1/analytics/shadow-lists', (r) => r.fulfill({ json: ITEMS([list]) }));
+  await signIn(page);
+  await page.goto('/#/lists');
+  await expect(page.getByTestId('shadow-lists').locator('.names .name')).toHaveText(['a.b.example 5', 'a.b.example 4']);
+});
+
+test("api_005 obs_031 a device's rhythm: two domains that read alike", async ({ page }) => {
+  // Two registrable domains of 67 characters (a 63-character label, then .com or .net), each cut to its first 64.
+  const cut = `${'x'.repeat(63)}.`;
+  const bins = Array.from({ length: 24 }, (_, i) => (i === 9 ? 30 : 0));
+  const domain = (meanPerHour: number) => ({ domain: cut, dominantBin: 9, dominantSharePct: 100, hour: bins, recent: bins, knownPeriodic: false, meanPerHour, nodes: [], period: 'every 38 s', regularHours: 0, since: new Date(NOW * 1000).toISOString() });
+  const rhythm = { available: true, client: '127.0.1.11', missingNodes: [], reason: null, binsS: [1, 1.5, 2.2, 3.3, 5, 7.5, 11, 17, 25, 38, 56, 84, 126, 190, 285, 427, 640, 960, 1440, 2160, 3240, 4860, 7290], domains: [domain(60), domain(30)] };
+  await page.route('**/api/v1/clients/*/rhythm', (r) => r.fulfill({ json: rhythm }));
+  await signIn(page);
+  await page.goto('/#/clients?device=127.0.1.11');
+  await expect(page.getByTestId('rhythm-row')).toHaveCount(2);
+  await page.getByTestId('rhythm-table-toggle').click();
+  await expect(page.getByTestId('rhythm-table').locator('tbody tr')).toHaveCount(2);
+});

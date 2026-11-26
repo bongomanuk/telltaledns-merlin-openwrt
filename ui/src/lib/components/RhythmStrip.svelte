@@ -89,7 +89,7 @@
           <tr><th>{t('Domain')}</th>{#each Array(N) as _, i (i)}<th class="num" title={labels[i]}>{i}</th>{/each}</tr>
         </thead>
         <tbody>
-          {#each rows as r (r.domain)}
+          {#each rows as r, ri (ri)}
             <tr><td class="mono" translate="no">{r.domain}</td>{#each bins(r) as n, i (i)}<td class="num">{n ? num(n) : ''}</td>{/each}</tr>
           {/each}
         </tbody>
@@ -99,7 +99,7 @@
   {:else}
     <div class="scroll">
       <div class="grid">
-        {#each rows as r (r.domain)}
+        {#each rows as r, ri (ri)}
           {@const cs = cells(r)}
           {@const top = cs.reduce((a, c) => (c.n > a.n ? c : a), cs[0] ?? { i: 0, n: 0, share: 0, shade: 0 })}
           <a
