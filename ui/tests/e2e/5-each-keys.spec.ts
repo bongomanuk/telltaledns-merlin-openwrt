@@ -5,6 +5,7 @@
 // (the admin, some queries), as 8-i18n-pages.spec.ts does.
 import { expect, test, type Page } from '@playwright/test';
 import { partKey, partsOf } from '../../src/lib/donut';
+import { fold } from '../../src/lib/sankey';
 import { failOnPageErrors } from './page-errors';
 
 failOnPageErrors(test);
@@ -287,4 +288,43 @@ test('api_005 obs_026 the traffic map: two services with one name are two tiles'
   await expect(tiles.last()).toHaveAttribute('href', /name=stream-b\.example/);
   await tiles.last().hover({ position: { x: 5, y: 5 } });
   await expect(page.locator('.details .members li a:not(.when)')).toHaveText(['www.stream-b.example']);
+});
+
+test('api_005 obs_032 the flow folds small groups into one marked node, and a group called other stays itself', () => {
+  const n = (stage: string, name: string, count: number) => ({ id: `${stage}:${name}`, stage, name, count, deadEnd: 0 });
+  const l = (source: string, target: string, count: number) => ({ source, target, count, failure: false });
+  const nodes = [n('group', 'default', 595), n('group', 'other', 393), n('group', 'guests', 5), n('group', 'iot', 4), n('group', 'tv', 3), n('status', 'forwarded', 1000)];
+  const links = nodes.filter((x) => x.stage === 'group').map((x) => l(x.id, 'status:forwarded', x.count));
+  const f = fold(nodes, links, 1000, 0.005);
+  expect(f.folded).toBe(2);
+  // The group called other keeps its count and its place; the folded node is last, after a smaller one.
+  expect(f.nodes.filter((x) => x.stage === 'group').map((x) => [x.id, x.name, x.count, x.folded === true])).toEqual([
+    ['group:default', 'default', 595, false],
+    ['group:other', 'other', 393, false],
+    ['group:guests', 'guests', 5, false],
+    ['group/other', 'other', 7, true],
+  ]);
+  expect(f.links.map((x) => [x.source, x.count])).toEqual([['group:default', 595], ['group:other', 393], ['group/other', 7], ['group:guests', 5]]);
+  expect(new Set(f.nodes.map((x) => x.id)).size).toBe(f.nodes.length);
+});
+
+test('api_005 obs_032 the flow page: a group called other keeps its link, the folded node has none', async ({ page }) => {
+  const n = (stage: string, name: string, count: number) => ({ id: `${stage}:${name}`, stage, name, count, deadEnd: 0 });
+  const l = (source: string, target: string, count: number) => ({ source, target, count, failure: false });
+  const groups = [n('group', 'default', 600), n('group', 'other', 393), n('group', 'iot', 4), n('group', 'tv', 3)];
+  const flow = {
+    from: new Date((NOW - 3600) * 1000).toISOString(), to: new Date(NOW * 1000).toISOString(), client: null, source: 'buckets', total: 1000, partial: false, truncated: false, missingNodes: [],
+    nodes: [...groups, n('status', 'forwarded', 1000), n('rcode', 'NOERROR', 1000)],
+    links: [...groups.map((g) => l(g.id, 'status:forwarded', g.count)), l('status:forwarded', 'rcode:NOERROR', 1000)],
+  };
+  await page.route('**/api/v1/stats/flow?**', (r) => r.fulfill({ json: flow }));
+  await signIn(page);
+  await page.goto('/#/flow');
+  const svg = page.getByTestId('flow-svg');
+  const other = svg.locator('[data-id="group:other"]');
+  await expect(other).toHaveAttribute('href', '#/groups');
+  await expect(other).toHaveAttribute('aria-label', 'Groups other: 393 (39.3 %)');
+  const folded = svg.locator('[data-id="group/other"]');
+  await expect(folded).toHaveAttribute('aria-label', 'Groups other: 7 (0.7 %)');
+  await expect(folded).not.toHaveAttribute('href', /./);
 });

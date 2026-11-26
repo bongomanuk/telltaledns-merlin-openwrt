@@ -6,7 +6,15 @@ import { tk, tr, type Msg } from './i18n';
 
 const { t, m } = tr('sankey');
 
-export type FlowNode = { id: string; stage: string; name: string; count: number; deadEnd: number };
+export type FlowNode = {
+  id: string;
+  stage: string;
+  name: string;
+  count: number;
+  deadEnd: number;
+  /** REQ: API-005 — the node `fold` made of a stage's small nodes ("other"): never a node of the server's, whatever its name. */
+  folded?: boolean;
+};
 export type FlowLink = { source: string; target: string; count: number; failure: boolean };
 
 export const STAGES = ['group', 'status', 'upstream', 'rcode'] as const;
@@ -36,14 +44,15 @@ export type PlacedLink = FlowLink & {
 export type Layout = { nodes: PlacedNode[]; links: PlacedLink[]; scale: number; vertical: boolean; width: number; height: number };
 
 /**
- * Folds nodes carrying less than `share` of `total` into one `<stage>:other` node per stage
- * (their links merged), so the diagram stays readable; `share` 0 keeps everything.
+ * Folds nodes carrying less than `share` of `total` into one node per stage, named `other` and marked `folded` (their links
+ * merged), so the diagram stays readable; `share` 0 keeps everything. The folded node's id, `<stage>/other`, is none of the
+ * server's (`<stage>:<name>`): a group the configuration calls `other` stays itself.
  */
 export function fold(nodes: FlowNode[], links: FlowLink[], total: number, share: number): { nodes: FlowNode[]; links: FlowLink[]; folded: number } {
   if (share <= 0 || total <= 0) return { nodes, links, folded: 0 };
   const min = total * share;
   const to = new Map<string, string>();
-  for (const n of nodes) if (n.count < min) to.set(n.id, `${n.stage}:other`);
+  for (const n of nodes) if (n.count < min) to.set(n.id, `${n.stage}/other`);
   // A stage with one small node keeps it: folding it would only rename it.
   for (const s of STAGES) {
     const small = nodes.filter((n) => n.stage === s && to.has(n.id));
@@ -58,7 +67,7 @@ export function fold(nodes: FlowNode[], links: FlowLink[], total: number, share:
     if (into) {
       into.count += n.count;
       into.deadEnd += n.deadEnd;
-    } else byId.set(id, { ...n, id, name: id === n.id ? n.name : 'other' });
+    } else byId.set(id, id === n.id ? { ...n } : { ...n, id, name: 'other', folded: true });
   }
   const byPair = new Map<string, FlowLink>();
   for (const l of links) {
@@ -70,7 +79,7 @@ export function fold(nodes: FlowNode[], links: FlowLink[], total: number, share:
     } else byPair.set(k, { ...l, source: map(l.source), target: map(l.target) });
   }
   const order = (a: FlowNode, b: FlowNode) =>
-    STAGES.indexOf(a.stage as never) - STAGES.indexOf(b.stage as never) || Number(a.name === 'other') - Number(b.name === 'other') || b.count - a.count;
+    STAGES.indexOf(a.stage as never) - STAGES.indexOf(b.stage as never) || Number(!!a.folded) - Number(!!b.folded) || b.count - a.count;
   return { nodes: [...byId.values()].sort(order), links: [...byPair.values()].sort((a, b) => b.count - a.count), folded: to.size };
 }
 
