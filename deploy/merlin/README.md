@@ -455,8 +455,11 @@ service restart_dnsmasq
   with the list, and the shipped config also sets `[filter] compile_memory =
   "16MiB"` as a ceiling. The binary itself runs from the data volume (the ext4
   image on the USB drive), not from `/tmp`: unpacking it into RAM costs about
-  35 MB on a 512 MB router, and that memory is needed for the compile. Without a
-  USB drive it falls back to `/tmp`, as before. The launcher marks the resolver with
+  35 MB on a 512 MB router, and that memory is needed for the compile. The 15 MB
+  bundle lives there too, not on `/jffs`: writing it to the 47 MB flash partition
+  can trigger JFFS2 garbage collection, which panics the kernel on some ASUS
+  firmware. Without a USB drive it falls back to `/tmp` and `/jffs`, as before,
+  and the installer says so. The launcher marks the resolver with
   `oom_score_adj=500` so that, if there is still an OOM, the resolver is killed
   and not the router. dnsmasq keeps port 53, serves local names and falls back
   to the plain upstreams from `dnsmasq.conf.add`, so the LAN survives it. Re-run

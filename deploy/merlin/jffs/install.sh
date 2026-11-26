@@ -92,7 +92,21 @@ if [ -n "$old_data" ] && [ "$old_data" != "$data_dir" ]; then
     echo "The account database does not move between filesystems: if the login"
     echo "stops working, create the first admin again with the setup token."
 fi
-cp "$here/telltale.gz" "$dest/telltale.gz"
+# The 15 MB bundle must not live on the 47 MB JFFS2 partition: writing it can
+# trigger JFFS2 garbage collection, and on some ASUS firmware that panics the
+# kernel. Keep it on the data volume and leave only the small launcher and
+# config on flash.
+bundle_dir=$dest
+if [ -n "$usb" ] && mount | grep -q " on /tmp/mnt/telltale "; then
+    bundle_dir=/tmp/mnt/telltale
+fi
+cp "$here/telltale.gz" "$bundle_dir/telltale.gz"
+[ "$bundle_dir" = "$dest" ] || rm -f "$dest/telltale.gz"
+if [ "$bundle_dir" = "$dest" ]; then
+    echo "warning: no data volume is mounted, so the 15 MB bundle is on the 47 MB"
+    echo "flash partition. Writing it can trigger JFFS2 garbage collection, which"
+    echo "panics on some ASUS firmware. Plug in a USB drive and run this again."
+fi
 cp "$here/ui.sh" "$dest/ui.sh"
 cp "$here/telltale.asp" "$dest/telltale.asp"
 [ -f "$here/telltale_icon.png" ] && cp "$here/telltale_icon.png" "$dest/telltale_icon.png"
@@ -107,25 +121,30 @@ chmod 644 "$dest/telltale.asp"
 
 cat > "$dest/telltale" <<'LAUNCH'
 #!/bin/sh
-# Prefer the copy on the data volume. Unpacking a 35 MB binary into /tmp costs
-# 35 MB of RAM, which on a 512 MB router is memory the filter compile needs.
+# Run from the data volume: unpacking a 35 MB binary into /tmp costs RAM that a
+# 512 MB router needs for its filter compile.
 BIN=/tmp/mnt/telltale/telltale.bin
 if [ -x "$BIN" ]; then
     exec "$BIN" "$@"
 fi
-BIN=/tmp/telltale.bin
-if [ ! -x "$BIN" ]; then
-    gzip -dc /jffs/telltale/telltale.gz > "$BIN" || exit 1
-    chmod 755 "$BIN"
-fi
-exec "$BIN" "$@"
+# The bundle lives on the data volume; /jffs keeps only a small launcher. Fall
+# back to an old flash copy if one is still there.
+for gz in /tmp/mnt/*/telltale/telltale.gz /jffs/telltale/telltale.gz; do
+    [ -f "$gz" ] || continue
+    out=/tmp/telltale.bin
+    [ -d /tmp/mnt/telltale ] && out=/tmp/mnt/telltale/telltale.bin
+    gzip -dc "$gz" > "$out" || exit 1
+    chmod 755 "$out"
+    exec "$out" "$@"
+done
+exit 1
 LAUNCH
 chmod 755 "$dest/telltale"
 rm -f /tmp/telltale.bin
 # If the data volume is already mounted (a re-install on a running router), put
 # the binary there now rather than waiting for the next boot.
 if [ -d /tmp/mnt/telltale ]; then
-    gzip -dc "$dest/telltale.gz" > /tmp/mnt/telltale/telltale.bin 2>/dev/null &&
+    gzip -dc "$bundle_dir/telltale.gz" > /tmp/mnt/telltale/telltale.bin 2>/dev/null &&
         chmod 755 /tmp/mnt/telltale/telltale.bin
 fi
 
@@ -172,12 +191,17 @@ if [ -x /jffs/telltale/telltale ]; then
         fi
     fi
     # Run the binary from the data volume, not from /tmp: the unpacked copy is
-    # 35 MB of RAM that a 512 MB router needs for its filter compile. Refresh it
-    # when the flash bundle is newer (an upgrade).
+    # 35 MB of RAM that a 512 MB router needs for its filter compile. The bundle
+    # is there too, so an upgrade writes nothing large to the flash. Refresh the
+    # binary when a newer bundle is present.
     bin=/tmp/mnt/telltale/telltale.bin
-    if [ -d /tmp/mnt/telltale ] &&
-        { [ ! -x "$bin" ] || [ /jffs/telltale/telltale.gz -nt "$bin" ]; }; then
-        gzip -dc /jffs/telltale/telltale.gz > "$bin.tmp" 2>/dev/null &&
+    bundle=/jffs/telltale/telltale.gz
+    for g in /tmp/mnt/*/telltale/telltale.gz; do
+        [ -f "$g" ] && bundle=$g && break
+    done
+    if [ -d /tmp/mnt/telltale ] && [ -f "$bundle" ] &&
+        { [ ! -x "$bin" ] || [ "$bundle" -nt "$bin" ]; }; then
+        gzip -dc "$bundle" > "$bin.tmp" 2>/dev/null &&
             chmod 755 "$bin.tmp" && mv -f "$bin.tmp" "$bin"
     fi
     # Connection accounting for the Traffic page, and clear yesterday's firewall pauses.
