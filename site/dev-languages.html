@@ -251,7 +251,7 @@ i18n: 2 failure(s)</code></pre>
 
 <section id="send">
   <h2>Send it</h2>
-  <p>A pull request for a new language carries two things: your pack, and the language's entry in the manifest. The check fails either one alone. Ask in an issue first (<a href="https://github.com/paimonsoror/telltaledns/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING.md</a> says so).</p>
+  <p>A pull request for a new language carries two things: your pack, and the language's entry in the manifest. The check fails either one alone. Ask in an issue first (<a href="https://github.com/paimonsoror/telltaledns/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING.md</a> says so). A pull request that updates a language already in the manifest changes only its pack.</p>
   <ol class="steps">
     <li class="step">Be sure nothing is under <b class="ui">Breaks a rule, shown in English</b>.</li>
     <li class="step">Choose <b class="ui">Download for a pull request (de.json)</b>. It is your file in the exact form the project keeps, with the texts you have not translated added as empty pairs. Or use the file <code>sync</code> wrote. Do not edit it afterwards: an editor can add Windows line ends or a byte-order mark.</li>
@@ -273,7 +273,7 @@ i18n: 2 failure(s)</code></pre>
   </ol>
   <h3>Who checks what</h3>
   <ul>
-    <li><b>The reviewers check structure and need not read the language.</b> The pull request holds that language's pack and its manifest entry, and nothing else. <code>npm run check:i18n</code> is green. Every sensitive and swap line in the job summary is explained. The language's owner has approved.</li>
+    <li><b>The reviewers check structure and need not read the language.</b> The pull request changes only that language's pack, with its manifest entry when the language is new. <code>npm run check:i18n</code> is green. Every sensitive and swap line in the job summary is explained. The language's owner has approved.</li>
     <li><b>The language's owner checks the translation:</b> that it is right, reads well and means what the English means. The checks cannot know that.</li>
   </ul>
   <h3>How a language is offered, and taken off</h3>
