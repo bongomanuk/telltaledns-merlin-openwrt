@@ -232,7 +232,6 @@ test('api_005 analyze: a statistic asked twice', async ({ page }) => {
   const res = await page.request.get(`/api/v1/analytics/vqlog?q=${encodeURIComponent(q)}`);
   expect(res.status()).toBe(200);
   const body = await res.json();
-  console.log(`EACHKEYS_VQLOG ${res.status()} columns=${JSON.stringify(body.columns)} rows=${JSON.stringify(body.rows)}`);
   expect(body.columns).toEqual(['count', 'count']);
   await page.goto(`/#/analyze?q=${encodeURIComponent(q)}`);
   await expect(page.getByTestId('vqlog-result').locator('thead th')).toHaveText(['count', 'count']);

@@ -150,7 +150,7 @@ test('api_005 obs_033 marker columns over three thousand random sets: unique key
     if (new Set(columns.map((c) => c.x)).size === columns.length) expect(cols.map(({ x, marks }) => ({ x, marks })), `set ${run}: the columns`).toEqual(columns);
     else met++;
   }
-  // The case came up, often.
-  console.log(`EACHKEYS_MARKERS sets=3000 columns-met=${met} identical-to-the-columns=${3000 - met}`);
-  expect(met).toBeGreaterThan(300);
+  // Both cases came up, often.
+  expect(met, 'sets where two columns met').toBeGreaterThan(300);
+  expect(3000 - met, 'sets where none met').toBeGreaterThan(300);
 });
