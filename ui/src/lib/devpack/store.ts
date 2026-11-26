@@ -14,12 +14,12 @@ import { DEVPACK_KEY } from '../i18n/devpack';
  * `away` after the pack left a page because someone went away, `in` after a page reloaded for a sign-in. */
 export const ONCE_KEY = 'telltale.devpack.once';
 /** This web UI's build: the path of the page's entry module (`/assets/index-<hash>.js`, whose content-hashed
- * name changes with the English by construction; under the development server, `/src/main.ts`), whatever other
- * module scripts the page holds (a browser extension's, the development server's client). */
+ * name changes with the English by construction; under the development server, `/src/main.ts`), from this
+ * address, whatever other module scripts the page holds (a browser extension's, from this address or another, the
+ * development server's client). */
 export function entryPath(): string {
-  const s =
-    document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]') ?? document.querySelector<HTMLScriptElement>('script[type="module"][src*="/src/main."]');
-  return s ? new URL(s.src, location.href).pathname : '';
+  const own = (sel: string) => [...document.querySelectorAll<HTMLScriptElement>(sel)].map((s) => new URL(s.src, location.href)).find((u) => u.origin === location.origin);
+  return (own('script[type="module"][src*="/assets/index-"]') ?? own('script[type="module"][src*="/src/main."]'))?.pathname ?? '';
 }
 
 /** How long a pack (and the notice after one) lasts. */

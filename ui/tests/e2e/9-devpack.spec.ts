@@ -707,10 +707,11 @@ test('api_013 a pack is cleared when the web ui build changes', async ({ browser
 });
 
 test('api_013 the web ui build is the entry module whatever module script comes first', async ({ browser }) => {
-  // Another module script before the entry (a browser extension's; an inline one here, which the page's policy keeps
-  // from running) leaves this web UI's build as the pack's code reads it: a kept pack stays in use, and Use stamps the
-  // entry, as the build wrote it.
-  const s = await fresh(browser, { allow: /Content Security Policy|inline script/ });
+  // Other module scripts before the entry (a browser extension's; here an inline one and one from another address
+  // whose path looks like an entry's, which the page's policy keeps from running) leave this web UI's build as the
+  // pack's code reads it: a kept pack stays in use, and Use stamps the entry, as the build wrote it.
+  const OTHER = 'https://extension.invalid/assets/index-NOTOURS.js';
+  const s = await fresh(browser, { allow: /Content Security Policy|inline script|extension\.invalid|ERR_NAME_NOT_RESOLVED/ });
   await s.context.route(
     (u) => u.pathname === '/',
     async (r) => {
@@ -719,13 +720,13 @@ test('api_013 the web ui build is the entry module whatever module script comes 
       const headers = { ...res.headers() };
       delete headers['content-encoding'];
       delete headers['content-length'];
-      const body = (await res.text()).replace('<script type="module"', '<script type="module">window.dvpInline = 1;</script><script type="module"');
+      const body = (await res.text()).replace('<script type="module"', `<script type="module">window.dvpInline = 1;</script><script type="module" src="${OTHER}"></script><script type="module"`);
       await r.fulfill({ status: res.status(), headers, body });
     },
   );
   await storePack(s.page, FR_TEXT);
   await s.page.goto('/#/settings?tab=account');
-  expect(await s.page.evaluate(() => [...document.querySelectorAll('script[type="module"]')].map((x) => x.getAttribute('src')))).toEqual([null, ENTRY]);
+  expect(await s.page.evaluate(() => [...document.querySelectorAll('script[type="module"]')].map((x) => x.getAttribute('src')))).toEqual([null, OTHER, ENTRY]);
   await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
   await expect(banner(s.page)).toContainText('Test language pack: fr.json');
   await openCard(s.page);
