@@ -2,7 +2,8 @@
   the template for a language tag (what `sync` writes for a new language) and the notes for translators;
   check a translated file with the build's own rules; use it in this browser after a confirmation; download
   it in the repository's exact form for a pull request; see and remove the pack in use. Only the template
-  is fetched, and `/system/info` once on Use; nothing about a file leaves the browser. Text from a file is
+  is fetched, and `/system/info` and `/auth/status` once on Use (the server's build, and who is signed in:
+  the pack is that user's); nothing about a file leaves the browser. Text from a file is
   shown as plain text, isolated for direction (`<bdi>`), with forbidden code points as visible markers and
   never as message markup. The confirmation, the line naming the pack in use, the notices, and the buttons
   Use, Download for a pull request and Remove are English on purpose (a pack must not change them): they
@@ -152,8 +153,12 @@
     busy = true;
     useError = '';
     let commit: string;
+    let user: string;
     try {
-      commit = (await api.info()).build?.commit ?? '';
+      // The server's build, and who is signed in: the pack is that user's (another is paused).
+      const [info, status] = await Promise.all([api.info(), api.status()]);
+      commit = info.build?.commit ?? '';
+      user = status.user?.username ?? '';
     } catch {
       useError = 'server';
       busy = false;
@@ -161,7 +166,7 @@
     }
     // The record keeps the check's table for this build and fingerprint, so a page load need not check
     // the file again; when that does not fit, the record alone (each load then checks the file).
-    const rec = newRecord({ ui: devpack.ui, commit, name: chosen.name, sha: chosen.sha, tag: outcome.tag.tag, dir: outcome.tag.dir, text: chosen.text ?? '', table: outcome.checked.table }, Date.now());
+    const rec = newRecord({ ui: devpack.ui, commit, user, name: chosen.name, sha: chosen.sha, tag: outcome.tag.tag, dir: outcome.tag.dir, text: chosen.text ?? '', table: outcome.checked.table }, Date.now());
     if (!write(store, rec) && !write(store, { ...rec, checked: undefined })) {
       useError = 'storage';
       busy = false;

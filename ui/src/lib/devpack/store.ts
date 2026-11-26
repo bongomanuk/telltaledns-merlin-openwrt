@@ -4,7 +4,8 @@
 // carries two stamps, the web UI build and the server's build commit, and lasts 7 days. With them it
 // keeps what the check of the text gave (the table a page installs), stamped with the build and the
 // fingerprint it was made for: a page load uses it only while both are unchanged, and checks the text
-// again otherwise (or when the kept table is not well formed). Same record, same write. A tab writes over
+// again otherwise (or when the kept table is not well formed). Same record, same write. It also names the
+// user who loaded it: the pack is that user's, paused for anyone else. A tab writes over
 // or removes only what it read, while the key still holds it, so a tab left open never replaces or deletes
 // a pack another tab loaded since.
 import { DEVPACK_KEY } from '../i18n/devpack';
@@ -22,6 +23,8 @@ export type PackRecord = {
   readonly ui: string;
   /** The server build it was loaded on. */
   readonly server: { readonly commit: string };
+  /** Who was signed in when it was loaded: the pack applies to that user only (ADR-190). */
+  readonly user: string;
   readonly loadedAt: number;
   readonly expires: number;
   /** The file's name as chosen (shown sanitized), its SHA-256 (64 hex), the language tag and direction. */
@@ -43,6 +46,7 @@ const isRecord = (x: Record<string, unknown>): boolean =>
   typeof x.ui === 'string' &&
   !!x.server &&
   typeof (x.server as { commit?: unknown }).commit === 'string' &&
+  typeof x.user === 'string' &&
   Number.isFinite(x.loadedAt) &&
   Number.isFinite(x.expires) &&
   typeof x.name === 'string' &&
@@ -143,10 +147,10 @@ export function retire(store: Store | null, ref: Held, next?: Notice): boolean {
 
 /** The record of a pack loaded now from a checked file (with the check's table, when given). */
 export function newRecord(
-  p: { ui: string; commit: string; name: string; sha: string; tag: string; dir: 'ltr' | 'rtl'; text: string; table?: Readonly<Record<string, unknown>> },
+  p: { ui: string; commit: string; user: string; name: string; sha: string; tag: string; dir: 'ltr' | 'rtl'; text: string; table?: Readonly<Record<string, unknown>> },
   now: number,
 ): PackRecord {
-  const rec: PackRecord = { v: 1, ui: p.ui, server: { commit: p.commit }, loadedAt: now, expires: now + LIFETIME_MS, name: p.name, sha: p.sha, tag: p.tag, dir: p.dir, fails: 0, text: p.text };
+  const rec: PackRecord = { v: 1, ui: p.ui, server: { commit: p.commit }, user: p.user, loadedAt: now, expires: now + LIFETIME_MS, name: p.name, sha: p.sha, tag: p.tag, dir: p.dir, fails: 0, text: p.text };
   return p.table ? { ...rec, checked: { ui: p.ui, sha: p.sha, table: p.table } } : rec;
 }
 

@@ -661,7 +661,7 @@ const deJson = () => {
   const f = fixture();
   return writeTemplate(f.entries.values(), { notes: f.notes, verbatim: f.verbatim, glossary: f.glossary, plurals: { de: ['one', 'other'] } });
 };
-const REC = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text: JSON.stringify({ cache: [['Holds', 'Hält']] }) }, NOW - 60_000);
+const REC = newRecord({ ui: UI_A, commit: 'c0ffee1', user: 'admin', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text: JSON.stringify({ cache: [['Holds', 'Hält']] }) }, NOW - 60_000);
 type Fake = { status?: object | null; tpl?: string | null; calls: string[] };
 /** Deps of a page load: signed in, the fixture's template, nothing slow (override any). */
 function deps(o: Partial<Deps> = {}, fake: Fake = { calls: [] }): Deps {
@@ -707,7 +707,7 @@ test('api_013 a stored pack is cleared on another build after seven days and whe
   expect(stored(exp).gone).toBe('expired');
   expect((await decide(JSON.stringify(REC), deps({ now: () => REC.expires - 1 }))).view.kind).toBe('active');
   // A value that is not a record: damaged.
-  for (const v of ['{', 'null', '[]', '{"v":2}', JSON.stringify({ ...REC, sha: 'x' }), JSON.stringify({ ...REC, fails: -1 }), JSON.stringify({ ...REC, text: 3 }), JSON.stringify({ ...REC, server: {} })]) {
+  for (const v of ['{', 'null', '[]', '{"v":2}', JSON.stringify({ ...REC, sha: 'x' }), JSON.stringify({ ...REC, fails: -1 }), JSON.stringify({ ...REC, text: 3 }), JSON.stringify({ ...REC, server: {} }), JSON.stringify({ ...REC, user: 3 }), JSON.stringify({ ...REC, user: undefined })]) {
     const s = holding(v);
     expect((await decide(v, deps({ store: s }, fake))).view, v).toEqual({ kind: 'notice', gone: 'damaged', name: '' });
     expect(stored(s).gone).toBe('damaged');
@@ -762,7 +762,7 @@ test('api_013 a kept table spares the check while the build and the fingerprint 
   // A record as Use writes it: the check's table for this build and this file.
   const fresh = await decide(v, deps());
   const table = fresh.choice?.table ?? {};
-  const kept = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: REC.sha, tag: 'de', dir: 'ltr', text: REC.text, table }, NOW - 60_000);
+  const kept = newRecord({ ui: UI_A, commit: 'c0ffee1', user: 'admin', name: 'de.json', sha: REC.sha, tag: 'de', dir: 'ltr', text: REC.text, table }, NOW - 60_000);
   expect(kept.checked).toEqual({ ui: UI_A, sha: REC.sha, table });
   // Kept: no template, no checking code, the same table, the same language.
   const loads = { n: 0 };
@@ -812,7 +812,7 @@ test("api_013 a kept record's size for a typical and for the largest pack", () =
     const text = JSON.stringify(pack, null, 2);
     const r = checkPack(text, false, tpl, de);
     if (r.refused) throw new Error(JSON.stringify(r.refused));
-    const rec = JSON.stringify(newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text, table: r.checked.table }, NOW));
+    const rec = JSON.stringify(newRecord({ ui: UI_A, commit: 'c0ffee1', user: 'admin', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text, table: r.checked.table }, NOW));
     return { text: new TextEncoder().encode(text).length, chars: rec.length, translated: r.checked.translated };
   };
   const all = (pad: string) =>
@@ -850,6 +850,12 @@ test('api_013 a page load pauses the pack where someone else may be next', async
   expect(await paused({ takeOnce: () => '1', hash: '#/display?token=x' })).toEqual(['active', 'the pack']);
   // A server that can't be reached: the usual language, and the pack stays.
   expect(await paused({}, { status: null, calls: [] })).toEqual(['unchecked', 'usual language']);
+  // Someone other than the user who loaded it: paused, and "Show the test pack on this page" for one load (review
+  // part A of T29.3, finding 3); that user gets the pack.
+  const bob = { status: { user: { username: 'bob', display: null }, setupRequired: false }, calls: [] };
+  expect(await paused({}, bob)).toEqual(['user', 'usual language']);
+  expect(await paused({ takeOnce: () => '1' }, { ...bob, calls: [] })).toEqual(['active', 'the pack']);
+  expect(await paused({})).toEqual(['active', 'the pack']);
   // The load after the pack left a page because someone went away is paused, whoever the status says is signed
   // in (review part A of T29.3, finding 1: a status that disagrees with the app never makes a reload loop).
   expect(await paused({ takeOnce: () => 'away' })).toEqual(['signed-out', 'usual language']);
@@ -911,7 +917,7 @@ test('api_013 a tab writes over or removes only what it read', async () => {
   // Another tab may have loaded a newer pack since this one read the key: neither a page load's notice or new
   // table nor a removal touches it (review part A of T29.3, finding 4).
   const older = REC;
-  const newer = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de-2.json', sha: 'b2'.repeat(32), tag: 'de', dir: 'ltr', text: REC.text }, NOW - 1000);
+  const newer = newRecord({ ui: UI_A, commit: 'c0ffee1', user: 'admin', name: 'de-2.json', sha: 'b2'.repeat(32), tag: 'de', dir: 'ltr', text: REC.text }, NOW - 1000);
   const s = holding(JSON.stringify(newer));
   expect([holds(s, older), holds(s, newer), holds(s, { ...newer, fails: 1, checked: { ui: UI_A, sha: newer.sha, table: {} } })]).toEqual([false, true, true]);
   expect(rewrite(s, older, { ...older, fails: 1 })).toBe(false);

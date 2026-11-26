@@ -52,6 +52,8 @@
           Test language pack: <bdi>{name}</bdi> ({language}, fingerprint <span class="mono">{finger}</span>). Labels come from that file, not from TelltaleDNS.
         {:else if view.kind === 'paused' && view.why === 'param'}
           The test language pack <bdi>{name}</bdi> is paused for this page load: the address asks for a language.
+        {:else if view.kind === 'paused' && view.why === 'user'}
+          The test language pack <bdi>{name}</bdi> is paused: another user of this browser loaded it.
         {:else if view.kind === 'paused'}
           The test language pack <bdi>{name}</bdi> is paused on this page.
         {:else if view.kind === 'unchecked'}

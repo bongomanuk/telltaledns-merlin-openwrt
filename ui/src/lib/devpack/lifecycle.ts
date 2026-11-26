@@ -4,7 +4,8 @@
 //   b. another web UI build, 7 days gone (by a clock that runs either way), or a value that is not a record
 //      removes the pack, with a notice;
 //   c. `?lang=` pauses it for this load; so does a page where nobody is signed in (sign-in, two-factor,
-//      setup, a server that cannot be reached), a display link and a display session, unless "Show the
+//      setup, a server that cannot be reached), a display link and a display session, and a user other
+//      than the one who loaded it, unless "Show the
 //      test pack on this page" asked for this one load (that flag is taken first, whatever the load
 //      decides), and the load after the pack left a page because someone went away;
 //   d. the table the check gave is installed as it was kept, while the web UI build and the file's
@@ -24,7 +25,8 @@ import type { checkPack, tagInfo } from '../i18n/pack';
 import type { readTemplate } from '../i18n/template';
 import { keptTable, lifetime, notice, readValue, retire, rewrite, stale, type Gone, type Held, type Notice, type PackRecord, type Store } from './store';
 
-export type Paused = 'signed-out' | 'display' | 'param';
+/** Why a pack is paused: nobody signed in, a display, `?lang=`, or someone other than who loaded it. */
+export type Paused = 'signed-out' | 'display' | 'param' | 'user';
 type Named = { readonly name: string; readonly sha: string; readonly tag: string };
 /** What the banner shows. */
 export type View =
@@ -132,7 +134,7 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   const display = d.hash.startsWith('#/display') || !!status.user?.display;
   // After the pack left a page because someone went away, this load is paused whatever the status says (a
   // status that disagrees with the app's own requests never makes the page reload again and again).
-  const why: Paused | null = display ? 'display' : !status.user || status.setupRequired || flag === 'away' ? 'signed-out' : null;
+  const why: Paused | null = display ? 'display' : !status.user || status.setupRequired || flag === 'away' ? 'signed-out' : user !== r.user ? 'user' : null;
   if (why && !once) return paused(why, user);
   shown = !!why;
   // d: the table kept for this build and this file.

@@ -111,11 +111,11 @@ const done = async (s: { context: BrowserContext; problems: string[] }) => {
 
 /** Keeps a pack in this browser as the card's Use does (the record and the text in one key). From an address
  * of its own, so the page the test opens next is a new page load (a change of the hash alone is not). */
-async function storePack(page: Page, text: string, o: { tag?: string; name?: string; ui?: string; commit?: string; loadedAt?: number; fails?: number } = {}) {
+async function storePack(page: Page, text: string, o: { tag?: string; name?: string; ui?: string; commit?: string; user?: string; loadedAt?: number; fails?: number } = {}) {
   await page.goto('/?devpack-test=store');
   const loadedAt = o.loadedAt ?? Date.now();
   const rec = {
-    v: 1, ui: o.ui ?? ENTRY, server: { commit: o.commit ?? COMMIT }, loadedAt, expires: loadedAt + 7 * DAY, name: o.name ?? 'fr.json',
+    v: 1, ui: o.ui ?? ENTRY, server: { commit: o.commit ?? COMMIT }, user: o.user ?? ADMIN.user, loadedAt, expires: loadedAt + 7 * DAY, name: o.name ?? 'fr.json',
     sha: createHash('sha256').update(text).digest('hex'), tag: o.tag ?? 'fr', dir: 'ltr', fails: o.fails ?? 0, text,
   };
   await page.evaluate(([k, v]) => localStorage.setItem(k, v), [KEY, JSON.stringify(rec)]);
@@ -424,6 +424,55 @@ test('api_013 show the test pack on this page keeps its load on the sign-in page
   await s.page.waitForTimeout(2000);
   expect(await s.page.evaluate(() => (window as unknown as { __dvpNoReload?: boolean }).__dvpNoReload)).toBe(true);
   await expect(s.page.getByRole('heading', { name: valueOf(SIGN_IN.ctx) })).toBeVisible();
+  await done(s);
+});
+
+test('api_013 a pack is paused for anyone but the user who loaded it', async ({ browser }) => {
+  // A pack belongs to the user who loaded it: another user who signs in at that browser gets the usual language,
+  // a banner that says so, and "Show the test pack on this page" for one load (review part A of T29.3, finding 3).
+  const s = await fresh(browser);
+  await storePack(s.page, FR_TEXT, { user: 'someone-else' });
+  await s.page.goto('/#/settings?tab=account');
+  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText('Settings');
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('The test language pack fr.json is paused: another user of this browser loaded it.');
+  await expect(banner(s.page)).not.toContainText('someone-else');
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-once').click()]);
+  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText(valueOf(SETTINGS.ctx));
+  await s.page.reload();
+  await expect(banner(s.page)).toContainText('another user of this browser loaded it');
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await done(s);
+});
+
+const VIEWER = { user: 'dvp-viewer', pass: 'a viewer password for packs' };
+test('api_013 the user who loaded a pack gets it back after signing in again and another user does not', async ({ browser }) => {
+  // A viewer of this file's own (created once; this file may run alone).
+  const a = await fresh(browser);
+  const csrf = (await (await a.page.request.get('/api/v1/auth/status')).json()).csrfToken as string;
+  const made = await a.page.request.post('/api/v1/users', { headers: { 'x-csrf-token': csrf }, data: { username: VIEWER.user, password: VIEWER.pass, role: 'viewer' } });
+  expect([200, 201, 409], await made.text()).toContain(made.status());
+  await a.context.close();
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  // The user who loaded it: the pack; out, and back in: the pack again.
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByRole('button', { name: 'Sign out' }).click()]);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByRole('button', { name: 'Sign out' }).click()]);
+  // Another user, on the same page: paused for them; signed out and the first user in again: the pack.
+  await signInHere(s.page, VIEWER);
+  await expect(banner(s.page)).toContainText('another user of this browser loaded it', { timeout: 30_000 });
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await s.page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  await expect(banner(s.page)).toContainText('Test language pack: fr.json');
   await done(s);
 });
 
