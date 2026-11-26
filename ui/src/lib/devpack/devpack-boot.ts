@@ -6,30 +6,33 @@
 // compares the server's build commit, from the app's own build poll, with the one the pack was loaded
 // on: the first answer of a load that differs removes the pack and reloads; a later one removes it and
 // says so, without a reload, so nothing typed is lost. A pack paused only because nobody was signed in
-// loads at the first answer after sign-in.
+// loads at the first answer after sign-in. A tab removes or writes over only what it read, and reloads only
+// once the key no longer holds the pack, so a value it cannot change never makes it reload again.
 import { mount } from 'svelte';
 import type { Choice } from '../i18n';
 import { devpack } from '../i18n/devpack';
 import DevPackBanner from './DevPackBanner.svelte';
 import { decide, type Paused, type View } from './lifecycle';
-import { ONCE_KEY, forget, notice, write, type PackRecord, type Store } from './store';
+import { ONCE_KEY, notice, retire, type Held, type PackRecord, type Store } from './store';
 
 performance.mark('telltale.devpack.start');
 
 let store: Store | null = null;
 let session: Store | null = null;
 let record: PackRecord | null = null;
+/** What this load read and the banner's Remove or Dismiss takes away: the record, or the notice. */
+let held: Held | null = null;
 let installed = false;
 let banner: { set(v: View): void } | undefined;
 
 const reload = () => location.reload();
 const actions = {
   remove() {
-    forget(store);
+    if (held) retire(store, held);
     reload();
   },
   dismiss() {
-    forget(store);
+    if (held) retire(store, held);
     devpack.active = false;
     banner?.set({ kind: 'none' });
   },
@@ -74,6 +77,7 @@ export async function boot(value: string): Promise<Choice | null> {
     timeoutMs: 4000,
   });
   record = out.record;
+  held = out.record ?? out.notice ?? null;
   installed = out.choice !== null;
   devpack.failed = failed;
   if (out.view.kind !== 'none') {
@@ -97,10 +101,11 @@ function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
     if (!record) return;
     const named = { name: r.name, sha: r.sha, tag: r.tag };
     if (commit !== r.server.commit) {
-      // Another server build: an upgrade, a rollback or a downgrade.
+      // Another server build (an upgrade, a rollback or a downgrade): the pack goes, with a notice. The first
+      // answer of a load reloads, once the key no longer holds the pack (a reload never finds it again).
       record = null;
-      write(store, notice('upgrade', r.name, Date.now()));
-      if (wasFirst) reload();
+      const gone = retire(store, r, notice('upgrade', r.name, Date.now()));
+      if (wasFirst && gone) reload();
       else banner?.set({ kind: 'updated', ...named });
       return;
     }
@@ -111,13 +116,12 @@ function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
   };
 }
 
-/** The page failed to draw with the pack: it is removed, and the page reloads once without it. */
+/** The page failed to draw with the pack: it is removed, and the page reloads once without it (when the key
+ * still held it and no longer does; otherwise the page is drawn in English as it is). */
 function failed(): boolean {
   if (!installed || !record) return false;
-  const name = record.name;
+  if (!retire(store, record, notice('failed', record.name, Date.now()))) return false;
   record = null;
-  forget(store);
-  write(store, notice('failed', name, Date.now()));
   reload();
   return true;
 }

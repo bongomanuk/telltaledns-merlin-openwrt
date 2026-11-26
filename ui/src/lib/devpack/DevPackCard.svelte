@@ -20,7 +20,7 @@
   import { notesText } from './notes';
   import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from './packWords';
   import { sha256 } from './sha256';
-  import { forget, newRecord, readValue, write, type Notice, type PackRecord, type Store } from './store';
+  import { newRecord, readValue, retire, write, type Notice, type PackRecord, type Store } from './store';
   const { t, tn } = tr('devPackCard');
 
   // The developer page for translators (the project site, as the menu's link to the site).
@@ -169,12 +169,13 @@
     }
     location.reload();
   }
+  // What this card read is removed only while the key still holds it (another tab may have loaded a newer pack).
   function removePack() {
-    forget(store);
+    if (kept.record) retire(store, kept.record);
     location.reload();
   }
   function dismiss() {
-    forget(store);
+    if (kept.notice) retire(store, kept.notice);
     kept = {};
     devpack.active = false;
   }

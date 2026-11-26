@@ -415,6 +415,69 @@ test('api_013 a pack is cleared when the server build changes', async ({ browser
   await done(b);
 });
 
+test('api_013 a tab left open neither removes nor replaces a newer pack', async ({ browser }) => {
+  // Tab B shows a pack, and tab A loads another one since: B's Remove and Dismiss leave A's pack (review part A of
+  // T29.3, finding 4).
+  const s = await fresh(browser);
+  await storePack(s.page, FR_TEXT, { name: 'older.json' });
+  const b = await s.context.newPage();
+  await b.goto('/#/');
+  await expect(banner(b)).toContainText('Test language pack: older.json');
+  const newer = await storePack(s.page, ALL_TEXT, { name: 'newer.json' });
+  await Promise.all([b.waitForEvent('load'), b.getByTestId('devpack-remove').click()]);
+  await expect(banner(b)).toContainText('Test language pack: newer.json');
+  expect(JSON.parse((await kept(b)) ?? '{}')).toMatchObject({ name: 'newer.json', sha: newer.sha });
+  // A notice in B, and a pack loaded in A since: B's Dismiss leaves the pack.
+  await s.page.evaluate(([k, v]) => localStorage.setItem(k, v), [KEY, JSON.stringify({ v: 1, gone: 'expired', name: 'gone.json', at: Date.now() })]);
+  await b.reload();
+  await expect(banner(b)).toContainText('The test language pack gone.json was removed');
+  const third = await storePack(s.page, FR_TEXT, { name: 'third.json' });
+  await b.getByRole('button', { name: 'Dismiss this notice' }).first().click();
+  await expect(banner(b)).toHaveCount(0);
+  expect(JSON.parse((await kept(b)) ?? '{}')).toMatchObject({ name: 'third.json', sha: third.sha });
+  await b.close();
+  await done(s);
+});
+
+test('api_013 a notice that cannot be kept never makes a page reload again', async ({ browser }) => {
+  // Another server build takes the pack away with a notice. With storage that takes no write, the pack is still
+  // removed first, so the one reload finds nothing; with storage that takes neither a write nor a removal, the page
+  // does not reload at all, and says what happened (review part A of T29.3, finding 5).
+  for (const removable of [true, false]) {
+    const s = await fresh(browser);
+    await storePack(s.page, FR_TEXT, { commit: 'an-older-build' });
+    await s.context.addInitScript((canRemove: boolean) => {
+      const set = Storage.prototype.setItem;
+      const del = Storage.prototype.removeItem;
+      Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+        if (k === 'telltale.devpack') throw new DOMException('read-only', 'QuotaExceededError');
+        return set.call(this, k, v);
+      };
+      if (!canRemove)
+        Storage.prototype.removeItem = function (this: Storage, k: string) {
+          if (k === 'telltale.devpack') throw new DOMException('read-only', 'SecurityError');
+          return del.call(this, k);
+        };
+    }, removable);
+    let loads = 0;
+    s.page.on('load', () => loads++);
+    await s.page.goto('/#/settings?tab=account');
+    if (removable) {
+      await expect.poll(() => loads, { timeout: 30_000 }).toBe(2);
+      await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+      await expect(banner(s.page)).toHaveCount(0);
+      expect(await kept(s.page)).toBeNull();
+    } else {
+      await expect(banner(s.page)).toContainText('TelltaleDNS was updated: the test pack goes away when you reload.', { timeout: 30_000 });
+      expect(JSON.parse((await kept(s.page)) ?? '{}').server?.commit).toBe('an-older-build');
+    }
+    // No further load: the next one finds nothing to remove, or this one does not reload.
+    await s.page.waitForTimeout(3000);
+    expect(loads, removable ? 'takes a removal' : 'takes nothing').toBe(removable ? 2 : 1);
+    await done(s);
+  }
+});
+
 test('api_013 a pack expires after seven days', async ({ browser }) => {
   const s = await fresh(browser);
   await storePack(s.page, FR_TEXT);

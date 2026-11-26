@@ -4,7 +4,9 @@
 // carries two stamps, the web UI build and the server's build commit, and lasts 7 days. With them it
 // keeps what the check of the text gave (the table a page installs), stamped with the build and the
 // fingerprint it was made for: a page load uses it only while both are unchanged, and checks the text
-// again otherwise (or when the kept table is not well formed). Same record, same write.
+// again otherwise (or when the kept table is not well formed). Same record, same write. A tab writes over
+// or removes only what it read, while the key still holds it, so a tab left open never replaces or deletes
+// a pack another tab loaded since.
 import { DEVPACK_KEY } from '../i18n/devpack';
 
 /** The one-load flag of "Show the test pack on this page" (session storage, removed when read). */
@@ -102,6 +104,40 @@ export function forget(store: Store | null): void {
   } catch {
     // Storage blocked: there is nothing to remove.
   }
+}
+
+/** What a tab read from the key: a record (known by its fingerprint and load time), a notice, or the value as
+ * read (one that was damaged). */
+export type Held = PackRecord | Notice | string;
+
+/** Whether the key still holds what this tab read: another tab may have put a newer pack there meanwhile. */
+export function holds(store: Store | null, ref: Held): boolean {
+  let v: string | null = null;
+  try {
+    v = store?.getItem(DEVPACK_KEY) ?? null;
+  } catch {
+    return false;
+  }
+  if (v === null) return false;
+  if (typeof ref === 'string') return v === ref;
+  const got = readValue(v);
+  if ('record' in got) return 'sha' in ref && got.record.sha === ref.sha && got.record.loadedAt === ref.loadedAt;
+  if ('notice' in got) return 'gone' in ref && got.notice.gone === ref.gone && got.notice.at === ref.at && got.notice.name === ref.name;
+  return false;
+}
+
+/** Writes `next` over what this tab read, only while the key still holds it. */
+export const rewrite = (store: Store | null, ref: Held, next: PackRecord | Notice) => holds(store, ref) && write(store, next);
+
+/** Removes what this tab read, only while the key still holds it, and leaves `next` (a notice) instead. The key
+ * is emptied first, so a write that fails never leaves the old value behind. True when the key no longer holds
+ * `ref` (removed now, or replaced by another tab before). */
+export function retire(store: Store | null, ref: Held, next?: Notice): boolean {
+  if (holds(store, ref)) {
+    forget(store);
+    if (next) write(store, next);
+  }
+  return !holds(store, ref);
 }
 
 /** The record of a pack loaded now from a checked file (with the check's table, when given). */

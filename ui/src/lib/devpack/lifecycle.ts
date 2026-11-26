@@ -14,13 +14,14 @@
 //      retires it), and the record keeps the new table, in the same one write;
 //   f. the table is installed as the page's language (the runtime re-checks each translation against its
 //      English the first time it shows it, as for a catalog the build did not ship).
-// Pure: storage, network, time and the checking code (loaded only for e) come in `Deps`, so the tests
-// hold every path.
+// It writes over or removes only what it read, while the key still holds it (another tab may have loaded a
+// newer pack). Pure: storage, network, time and the checking code (loaded only for e) come in `Deps`, so
+// the tests hold every path.
 import type { Choice } from '../i18n';
 import { formatLocale } from '../i18n/match';
 import type { checkPack, tagInfo } from '../i18n/pack';
 import type { readTemplate } from '../i18n/template';
-import { forget, keptTable, lifetime, notice, readValue, stale, write, type Gone, type PackRecord, type Store } from './store';
+import { keptTable, lifetime, notice, readValue, retire, rewrite, stale, type Gone, type Held, type Notice, type PackRecord, type Store } from './store';
 
 export type Paused = 'signed-out' | 'display' | 'param';
 type Named = { readonly name: string; readonly sha: string; readonly tag: string };
@@ -53,8 +54,16 @@ export type Deps = {
 };
 
 /** The page's language from the pack (null: the usual language), what the banner shows, the record that
- * still applies (null when there is none, or it was just removed), and whether the file was checked. */
-export type Decision = { readonly choice: Choice | null; readonly view: View; readonly record: PackRecord | null; readonly paused?: Paused; readonly checked?: boolean };
+ * still applies (null when there is none, or it was just removed), the notice shown, and whether the file was
+ * checked. */
+export type Decision = {
+  readonly choice: Choice | null;
+  readonly view: View;
+  readonly record: PackRecord | null;
+  readonly notice?: Notice;
+  readonly paused?: Paused;
+  readonly checked?: boolean;
+};
 
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
 
@@ -63,22 +72,24 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   const once = d.takeOnce();
   const now = d.now();
   const got = readValue(value);
-  const removed = (gone: Gone, name: string): Decision => {
-    write(d.store, notice(gone, name, now));
-    return { choice: null, view: { kind: 'notice', gone, name }, record: null };
+  // What this load read is removed (or written over) only while the key still holds it.
+  const removed = (gone: Gone, name: string, ref: Held): Decision => {
+    const n = notice(gone, name, now);
+    retire(d.store, ref, n);
+    return { choice: null, view: { kind: 'notice', gone, name }, record: null, notice: n };
   };
   // a, b: a notice, a value that is not a record, another build, 7 days (by a clock that runs either way).
-  if ('damaged' in got) return removed('damaged', '');
+  if ('damaged' in got) return removed('damaged', '', value);
   if ('notice' in got) {
     if (stale(got.notice.at, now)) {
-      forget(d.store);
+      retire(d.store, got.notice);
       return NONE;
     }
-    return { choice: null, view: { kind: 'notice', gone: got.notice.gone, name: got.notice.name }, record: null };
+    return { choice: null, view: { kind: 'notice', gone: got.notice.gone, name: got.notice.name }, record: null, notice: got.notice };
   }
   const r = got.record;
   const gone = lifetime(r, d.ui, now);
-  if (gone) return removed(gone, r.name);
+  if (gone) return removed(gone, r.name, r);
   const named: Named = { name: r.name, sha: r.sha, tag: r.tag };
   const paused = (why: Paused): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why });
   const unchecked: Decision = { choice: null, view: { kind: 'unchecked', ...named }, record: r };
@@ -137,12 +148,12 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
     result = code.checkPack(r.text, false, tpl, tag.value, { full: false });
   } catch {
     const fails = r.fails + 1;
-    if (fails >= 2) return removed('failed', r.name);
-    write(d.store, { ...r, fails, checked: undefined });
+    if (fails >= 2) return removed('failed', r.name, r);
+    rewrite(d.store, r, { ...r, fails, checked: undefined });
     return unchecked;
   }
-  if (result.refused || !tag.ok) return removed('damaged', r.name);
+  if (result.refused || !tag.ok) return removed('damaged', r.name, r);
   // The record keeps the new table, in its one write (a store that is full keeps the record as it was).
-  write(d.store, { ...r, fails: 0, checked: { ui: d.ui, sha: r.sha, table: result.checked.table } });
+  rewrite(d.store, r, { ...r, fails: 0, checked: { ui: d.ui, sha: r.sha, table: result.checked.table } });
   return use(result.checked.table, true);
 }

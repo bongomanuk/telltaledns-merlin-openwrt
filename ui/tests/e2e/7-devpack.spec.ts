@@ -19,7 +19,7 @@ import { identity, ship } from '../../src/lib/i18n/shipping';
 import { forPullRequest, materialize, readTemplate, writeTemplate, type Template } from '../../src/lib/i18n/template';
 import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from '../../src/lib/devpack/packWords';
 import { decide, type Checker, type Deps } from '../../src/lib/devpack/lifecycle';
-import { LIFETIME_MS, keptTable, newRecord, notice, readValue, type Store } from '../../src/lib/devpack/store';
+import { LIFETIME_MS, holds, keptTable, newRecord, notice, readValue, retire, rewrite, type Store } from '../../src/lib/devpack/store';
 import { DEVPACK_KEY } from '../../src/lib/i18n/devpack';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { agree as agreeBefore } from './rule-934a9fb7/agree';
@@ -684,6 +684,12 @@ function checking(check = checkPack, loads = { n: 0 }): () => Promise<Checker> {
   };
 }
 const stored = (s: MemStore) => JSON.parse(s.getItem(DEVPACK_KEY) ?? 'null');
+/** A store that holds `v` under the key, as the one a page load read it from. */
+const holding = (v: string) => {
+  const s = new MemStore();
+  s.setItem(DEVPACK_KEY, v);
+  return s;
+};
 
 test('api_013 a stored pack is cleared on another build after seven days and when damaged', async () => {
   const ok = await decide(JSON.stringify(REC), deps());
@@ -691,24 +697,24 @@ test('api_013 a stored pack is cleared on another build after seven days and whe
   expect(ok.choice).toMatchObject({ tag: 'de', dir: 'ltr', formatLocale: 'de-DE' });
   expect(Object.values(ok.choice?.table ?? {})).toEqual(['Hält']);
   // Another web UI build: removed, and the one key holds the notice.
-  const up = new MemStore();
+  const up = holding(JSON.stringify(REC));
   const fake: Fake = { calls: [] };
-  expect(await decide(JSON.stringify(REC), deps({ store: up, ui: '/assets/index-B2.js' }, fake))).toEqual({ choice: null, view: { kind: 'notice', gone: 'upgrade', name: 'de.json' }, record: null });
+  expect(await decide(JSON.stringify(REC), deps({ store: up, ui: '/assets/index-B2.js' }, fake))).toEqual({ choice: null, view: { kind: 'notice', gone: 'upgrade', name: 'de.json' }, record: null, notice: { v: 1, gone: 'upgrade', name: 'de.json', at: NOW } });
   expect(stored(up)).toEqual({ v: 1, gone: 'upgrade', name: 'de.json', at: NOW });
   // Seven days after loading; a moment before, it still applies.
-  const exp = new MemStore();
+  const exp = holding(JSON.stringify(REC));
   expect((await decide(JSON.stringify(REC), deps({ store: exp, now: () => REC.expires }))).view).toEqual({ kind: 'notice', gone: 'expired', name: 'de.json' });
   expect(stored(exp).gone).toBe('expired');
   expect((await decide(JSON.stringify(REC), deps({ now: () => REC.expires - 1 }))).view.kind).toBe('active');
   // A value that is not a record: damaged.
   for (const v of ['{', 'null', '[]', '{"v":2}', JSON.stringify({ ...REC, sha: 'x' }), JSON.stringify({ ...REC, fails: -1 }), JSON.stringify({ ...REC, text: 3 }), JSON.stringify({ ...REC, server: {} })]) {
-    const s = new MemStore();
+    const s = holding(v);
     expect((await decide(v, deps({ store: s }, fake))).view, v).toEqual({ kind: 'notice', gone: 'damaged', name: '' });
     expect(stored(s).gone).toBe('damaged');
   }
   // A text that is no longer a pack (refused whole) is damaged too.
-  const bad = new MemStore();
-  expect((await decide(JSON.stringify({ ...REC, text: '{"cache": [["Holds"]]}' }), deps({ store: bad }))).view).toEqual({ kind: 'notice', gone: 'damaged', name: 'de.json' });
+  const badText = JSON.stringify({ ...REC, text: '{"cache": [["Holds"]]}' });
+  expect((await decide(badText, deps({ store: holding(badText) }))).view).toEqual({ kind: 'notice', gone: 'damaged', name: 'de.json' });
   // A notice stays until dismissed, 7 days at most, then goes by itself; nothing is fetched for one.
   const n = new MemStore();
   n.setItem(DEVPACK_KEY, JSON.stringify(notice('expired', 'de.json', NOW - 1000)));
@@ -779,7 +785,7 @@ test('api_013 a kept table spares the check while the build and the fingerprint 
     ['something else', { ...kept, checked: 'yes' }],
   ];
   for (const [what, rec] of odd) {
-    const st = new MemStore();
+    const st = holding(JSON.stringify(rec));
     const l = { n: 0 };
     const f: Fake = { calls: [] };
     // The record itself still applies (a damaged kept table is not a damaged record).
@@ -888,6 +894,57 @@ test('api_013 the clock is checked both ways', async () => {
     expect((await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s }))).view.kind, String(at)).toBe(kind);
     expect(s.getItem(DEVPACK_KEY) === null, String(at)).toBe(kind === 'none');
   }
+});
+
+test('api_013 a tab writes over or removes only what it read', async () => {
+  // Another tab may have loaded a newer pack since this one read the key: neither a page load's notice or new
+  // table nor a removal touches it (review part A of T29.3, finding 4).
+  const older = REC;
+  const newer = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de-2.json', sha: 'b2'.repeat(32), tag: 'de', dir: 'ltr', text: REC.text }, NOW - 1000);
+  const s = holding(JSON.stringify(newer));
+  expect([holds(s, older), holds(s, newer), holds(s, { ...newer, fails: 1, checked: { ui: UI_A, sha: newer.sha, table: {} } })]).toEqual([false, true, true]);
+  expect(rewrite(s, older, { ...older, fails: 1 })).toBe(false);
+  expect(retire(s, older, notice('upgrade', 'de.json', NOW))).toBe(true);
+  expect(stored(s)).toEqual(newer);
+  // A page load that read the older pack: another build, seven days, a check that throws twice, a new table.
+  for (const [what, o] of [
+    ['another web UI build', { ui: '/assets/index-B2.js' }],
+    ['seven days gone', { now: () => older.expires }],
+    ['a check that throws', { checker: checking((() => { throw new Error('x'); }) as typeof checkPack) }],
+    ['a new table', {}],
+  ] as [string, Partial<Deps>][]) {
+    await decide(JSON.stringify({ ...older, fails: 1 }), deps({ store: s, ...o }));
+    expect(stored(s), what).toEqual(newer);
+  }
+  // A damaged value read before, or a notice: only that value, or that notice, is taken away.
+  const d = holding(JSON.stringify(newer));
+  await decide('{', deps({ store: d }));
+  expect(stored(d)).toEqual(newer);
+  const old = notice('expired', 'de.json', NOW - LIFETIME_MS - 1);
+  await decide(JSON.stringify(old), deps({ store: d }));
+  expect(stored(d)).toEqual(newer);
+  expect(retire(d, notice('expired', 'de.json', NOW))).toBe(true);
+  expect(stored(d)).toEqual(newer);
+  const n = holding(JSON.stringify(notice('expired', 'de.json', NOW)));
+  expect(retire(n, notice('expired', 'de.json', NOW))).toBe(true);
+  expect(n.getItem(DEVPACK_KEY)).toBeNull();
+});
+
+test('api_013 a notice that cannot be kept never leaves the pack behind', () => {
+  // The key is emptied before the notice is written, and the caller reloads only when the key no longer holds the
+  // pack, so storage that takes no write cannot make a page reload into the same pack (finding 5).
+  const m = new Map<string, string>([[DEVPACK_KEY, JSON.stringify(REC)]]);
+  const fails = () => {
+    throw new DOMException('read-only', 'QuotaExceededError');
+  };
+  const readOnly: Store = { getItem: (k) => m.get(k) ?? null, setItem: fails, removeItem: (k) => void m.delete(k) };
+  expect(retire(readOnly, REC, notice('upgrade', 'de.json', NOW))).toBe(true);
+  expect(m.has(DEVPACK_KEY)).toBe(false);
+  // Storage that takes neither a write nor a removal: the key still holds the pack, and retire says so.
+  const stuck: Store = { getItem: () => JSON.stringify(REC), setItem: fails, removeItem: fails };
+  expect(retire(stuck, REC, notice('upgrade', 'de.json', NOW))).toBe(false);
+  // Blocked storage: nothing held, nothing to remove.
+  expect(retire(null, REC, notice('upgrade', 'de.json', NOW))).toBe(true);
 });
 
 test('api_013 a pack lookup never throws', () => {
