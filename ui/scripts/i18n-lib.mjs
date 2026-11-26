@@ -37,7 +37,7 @@ export const TEXT_PROPS = ['label', 'title', 'empty', 'noun', 'summary', 'hint',
 const isComponentNode = (n) => n.type === 'Component' || n.type === 'SvelteComponent' || n.type === 'SvelteSelf';
 // Languages written in more than one script: a catalog names the script (`zh-Hans`, `sr-Latn`). The
 // matcher also takes a catalog only for a request of the same likely script, list or not.
-const MULTI_SCRIPT = ['az', 'bs', 'ha', 'kk', 'ks', 'ku', 'mn', 'pa', 'sd', 'sr', 'uz', 'zh'];
+export const MULTI_SCRIPT = ['az', 'bs', 'ha', 'kk', 'ks', 'ku', 'mn', 'pa', 'sd', 'sr', 'uz', 'zh'];
 const MANIFEST_FIELDS = ['belowSince', 'dir', 'offered', 'owners', 'since'];
 const RESERVED_MANIFEST_FIELDS = ['parent', 'regions'];
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
@@ -594,7 +594,7 @@ export function pluralTable() {
 
 const pairShape = shapeError;
 
-function canonicalTagError(tag) {
+export function canonicalTagError(tag) {
   let c;
   try {
     [c] = Intl.getCanonicalLocales(tag);

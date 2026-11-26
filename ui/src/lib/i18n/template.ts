@@ -46,7 +46,8 @@ export function writeTemplate(
 ): string {
   const by = new Map<string, ShipEntry[]>();
   for (const e of entries) by.set(e.ctx, [...(by.get(e.ctx) ?? []), e]);
-  const contexts: Record<string, unknown[]> = {};
+  // Null prototype: a context is data, whatever its name.
+  const contexts: Record<string, unknown[]> = Object.create(null);
   for (const ctx of [...by.keys()].sort(cmp)) {
     const list = [...(by.get(ctx) ?? [])].sort((a, b) => cmp(order(a), order(b)));
     contexts[ctx] = list.map((e) => {
