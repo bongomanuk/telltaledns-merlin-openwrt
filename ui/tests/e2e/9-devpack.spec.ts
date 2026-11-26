@@ -8,8 +8,9 @@
 // (The parts that need no browser are 7-devpack.spec.ts.)
 import { expect, test, type Browser, type BrowserContext, type Page, type Route } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 
@@ -51,6 +52,17 @@ const ALL_TEXT = JSON.stringify(
   ),
 );
 
+/** This web UI's build as the build wrote it: the src of the built page's one module script, its entry (read from
+ * `dist`, which keeps the page gzipped; the pack's code reads it in the browser, its own way). */
+function builtEntry(): string {
+  const dist = join(UI, 'dist');
+  const html = existsSync(join(dist, 'index.html')) ? readFileSync(join(dist, 'index.html'), 'utf8') : gunzipSync(readFileSync(join(dist, 'index.html.gz'))).toString('utf8');
+  const modules = [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]).filter((s) => /\btype="module"/.test(s));
+  const src = modules.length === 1 ? /\bsrc="([^"]+)"/.exec(modules[0])?.[1] : undefined;
+  if (!src?.startsWith('/assets/')) throw new Error(`the built page's module scripts: ${JSON.stringify(modules)}`);
+  return src;
+}
+
 let signedIn: { cookies: Awaited<ReturnType<BrowserContext['storageState']>>['cookies']; origins: [] };
 let COMMIT = '';
 let ENTRY = '';
@@ -75,7 +87,7 @@ test.beforeAll(async ({ browser }) => {
   }
   await expect(page.getByRole('heading', { name: 'Dashboard' }).first()).toBeVisible({ timeout: 30_000 });
   COMMIT = (await (await page.request.get('/api/v1/system/info')).json()).build.commit;
-  ENTRY = await page.evaluate(() => new URL((document.querySelector('script[type="module"]') as HTMLScriptElement).src).pathname);
+  ENTRY = builtEntry();
   signedIn = { cookies: (await context.storageState()).cookies, origins: [] };
   await context.close();
 });
@@ -606,6 +618,37 @@ test('api_013 a pack is cleared when the web ui build changes', async ({ browser
   await s.page.getByRole('button', { name: 'Dismiss this notice' }).first().click();
   await expect(banner(s.page)).toHaveCount(0);
   expect(await kept(s.page)).toBeNull();
+  await done(s);
+});
+
+test('api_013 the web ui build is the entry module whatever module script comes first', async ({ browser }) => {
+  // Another module script before the entry (a browser extension's; an inline one here, which the page's policy keeps
+  // from running) leaves this web UI's build as the pack's code reads it: a kept pack stays in use, and Use stamps the
+  // entry, as the build wrote it.
+  const s = await fresh(browser, { allow: /Content Security Policy|inline script/ });
+  await s.context.route(
+    (u) => u.pathname === '/',
+    async (r) => {
+      if (r.request().resourceType() !== 'document') return r.fallback();
+      const res = await r.fetch();
+      const headers = { ...res.headers() };
+      delete headers['content-encoding'];
+      delete headers['content-length'];
+      const body = (await res.text()).replace('<script type="module"', '<script type="module">window.dvpInline = 1;</script><script type="module"');
+      await r.fulfill({ status: res.status(), headers, body });
+    },
+  );
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/#/settings?tab=account');
+  expect(await s.page.evaluate(() => [...document.querySelectorAll('script[type="module"]')].map((x) => x.getAttribute('src')))).toEqual([null, ENTRY]);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  await expect(banner(s.page)).toContainText('Test language pack: fr.json');
+  await openCard(s.page);
+  await chooseFile(s.page, FR_TEXT, 'again.json', 'fr');
+  await s.page.getByTestId('devpack-use').click();
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-confirm-use').click()]);
+  await expect(banner(s.page)).toContainText('Test language pack: again.json');
+  expect(JSON.parse((await kept(s.page)) ?? '{}')).toMatchObject({ name: 'again.json', ui: ENTRY, checked: { ui: ENTRY } });
   await done(s);
 });
 
