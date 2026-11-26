@@ -69,12 +69,16 @@ export function readValue(value: string): { record: PackRecord } | { notice: Not
 }
 
 /** Why a record no longer applies on this web UI build at `now`, or null: another build of the web UI,
- * or 7 days gone. (The server's build is compared after sign-in, with the app's build poll.) */
+ * or 7 days gone, by a clock that runs either way (loaded after now, or meant to last longer than 7 days:
+ * expired too). (The server's build is compared after sign-in, with the app's build poll.) */
 export function lifetime(r: PackRecord, ui: string, now: number): Gone | null {
   if (r.ui !== ui) return 'upgrade';
-  if (now >= r.expires) return 'expired';
+  if (now >= r.expires || now < r.loadedAt || r.expires - r.loadedAt > LIFETIME_MS) return 'expired';
   return null;
 }
+
+/** Whether a notice dated `at` no longer applies at `now`: 7 days gone, or dated after now. */
+export const stale = (at: number, now: number) => now - at > LIFETIME_MS || at > now;
 
 /** One write of the key; false when the browser cannot keep it (storage blocked or full): then
  * nothing was written. */

@@ -1,7 +1,8 @@
 // REQ: API-013 (ADR-190) — what a page load does with the test language pack this browser keeps,
 // before the page is drawn (design: "At start-up"):
 //   a. a notice (the pack was removed) is shown until dismissed, 7 days at most;
-//   b. another web UI build, 7 days gone, or a value that is not a record removes the pack, with a notice;
+//   b. another web UI build, 7 days gone (by a clock that runs either way), or a value that is not a record
+//      removes the pack, with a notice;
 //   c. `?lang=` pauses it for this load; so does a page where nobody is signed in (sign-in, two-factor,
 //      setup, a server that cannot be reached), a display link and a display session, unless "Show the
 //      test pack on this page" asked for this one load (that flag is taken first, whatever the load
@@ -19,7 +20,7 @@ import type { Choice } from '../i18n';
 import { formatLocale } from '../i18n/match';
 import type { checkPack, tagInfo } from '../i18n/pack';
 import type { readTemplate } from '../i18n/template';
-import { LIFETIME_MS, forget, keptTable, lifetime, notice, readValue, write, type Gone, type PackRecord, type Store } from './store';
+import { forget, keptTable, lifetime, notice, readValue, stale, write, type Gone, type PackRecord, type Store } from './store';
 
 export type Paused = 'signed-out' | 'display' | 'param';
 type Named = { readonly name: string; readonly sha: string; readonly tag: string };
@@ -66,10 +67,10 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
     write(d.store, notice(gone, name, now));
     return { choice: null, view: { kind: 'notice', gone, name }, record: null };
   };
-  // a, b: a notice, a value that is not a record, another build, 7 days.
+  // a, b: a notice, a value that is not a record, another build, 7 days (by a clock that runs either way).
   if ('damaged' in got) return removed('damaged', '');
   if ('notice' in got) {
-    if (now - got.notice.at > LIFETIME_MS) {
+    if (stale(got.notice.at, now)) {
       forget(d.store);
       return NONE;
     }

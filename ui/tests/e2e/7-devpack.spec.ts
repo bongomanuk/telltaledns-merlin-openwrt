@@ -869,6 +869,27 @@ test('api_013 the one-load flag is taken whatever the load decides', async () =>
   }
 });
 
+test('api_013 the clock is checked both ways', async () => {
+  // A record loaded after now or meant to last longer than seven days, and a notice dated after now, no longer
+  // apply, whatever the clock said when they were written (review part A of T29.3, finding 9).
+  const view = async (v: object) => (await decide(JSON.stringify(v), deps())).view;
+  const expired = { kind: 'notice', gone: 'expired', name: 'de.json' };
+  expect(await view({ ...REC, loadedAt: NOW + 60_000, expires: NOW + 60_000 + LIFETIME_MS })).toEqual(expired);
+  expect(await view({ ...REC, loadedAt: Date.UTC(2100, 0, 1), expires: Date.UTC(2100, 0, 8) })).toEqual(expired);
+  expect(await view({ ...REC, expires: 1e300 })).toEqual(expired);
+  expect(await view({ ...REC, expires: REC.loadedAt + LIFETIME_MS + 1 })).toEqual(expired);
+  // Loaded a minute ago for seven days, or loaded now: it applies.
+  expect((await view(REC)).kind).toBe('active');
+  expect((await view({ ...REC, loadedAt: NOW })).kind).toBe('active');
+  // A notice dated after now goes by itself, like one 7 days old; one dated now is shown.
+  for (const [at, kind] of [[NOW + 60_000, 'none'], [Date.UTC(2100, 0, 1), 'none'], [NOW, 'notice']] as const) {
+    const s = new MemStore();
+    s.setItem(DEVPACK_KEY, JSON.stringify(notice('expired', 'de.json', at)));
+    expect((await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s }))).view.kind, String(at)).toBe(kind);
+    expect(s.getItem(DEVPACK_KEY) === null, String(at)).toBe(kind === 'none');
+  }
+});
+
 test('api_013 a pack lookup never throws', () => {
   // A table of every kind of value, under the hashes of messages and plurals, and keys named like members.
   const odd: unknown[] = [1, null, true, [], {}, { one: 'x' }, { other: 3 }, { other: '{n}', one: {} }, { other: null }, 'x'.repeat(100_000), '\uD800', '{n} {n}', '<b>', '%s $1', ''];
