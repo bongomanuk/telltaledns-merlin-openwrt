@@ -153,7 +153,7 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr>{#each result.columns as c (c)}<th class:num={statCols.has(c)} translate="no">{c}</th>{/each}</tr>
+              <tr>{#each result.columns as c, j (j)}<th class:num={statCols.has(c)} translate="no">{c}</th>{/each}</tr>
             </thead>
             <tbody>
               {#each result.rows as row, i (i)}

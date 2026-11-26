@@ -380,7 +380,7 @@
                   <tr class="detail">
                     <td colspan="7">
                       <ul class="per-node">
-                        {#each m.nodes as d (d.node)}
+                        {#each m.nodes as d, i (i)}
                           <li><strong translate="no">{d.node}</strong> · {ttl(d.entry.ttlLeftSeconds)} · {hitsOf(d.entry.hits)}</li>
                         {/each}
                       </ul>

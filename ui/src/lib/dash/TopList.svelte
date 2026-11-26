@@ -137,7 +137,7 @@
           <span class="who">
             {#if kind === 'clients'}
               <span class="dev"><ClientChip ip={it.key} name={it.name} display={it.name ? workloadName(it.name) : undefined} {onchanged} /></span>
-              {#each it.groups ?? [] as g (g)}<i class="gdot" style:--gc={groupColor(g)} title={g} translate="no"></i>{/each}
+              {#each it.groups ?? [] as g, i (i)}<i class="gdot" style:--gc={groupColor(g)} title={g} translate="no"></i>{/each}
             {:else}
               <!-- REQ: OBS-039 (ADR-167) — the name's mark; nothing when icons are off. -->
               <DomainIcon name={target} quiet={kind === 'blocked'} />

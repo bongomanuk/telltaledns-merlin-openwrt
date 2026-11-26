@@ -182,7 +182,7 @@
         {/if}
         {#if g.schedules.length}
           <div class="small" data-testid="group-schedules">
-            {card.schedules} {#each g.schedules as s, i (s)}{i ? ', ' : ''}<span translate="no">{s}</span>{#if g.schedulesOn.includes(s)}
+            {card.schedules} {#each g.schedules as s, i (i)}{i ? ', ' : ''}<span translate="no">{s}</span>{#if g.schedulesOn.includes(s)}
                 <span class="badge warn">{onNow}</span>{/if}{/each}<HelpButton id="schedules" />
           </div>
         {/if}

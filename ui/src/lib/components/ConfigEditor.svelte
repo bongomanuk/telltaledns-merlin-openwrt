@@ -360,7 +360,7 @@
                 >{#snippet b(text: string)}<b>{text}</b>{/snippet}</T
               >
             </p>
-            {#each preview.warnings as w (w)}<p class="small warn-text">{w}</p>{/each}
+            {#each preview.warnings as w, i (i)}<p class="small warn-text">{w}</p>{/each}
             {#if replayable}<SimulationCard run={simulateDraft} />{/if}
           </div>
           <div class="row">

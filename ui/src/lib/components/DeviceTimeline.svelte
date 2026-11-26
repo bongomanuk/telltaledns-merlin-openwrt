@@ -162,7 +162,7 @@
         <div class="inner" style:grid-template-columns="{LABEL_W}px {g.width}px">
           <div class="label sticky small muted">{day(data.bins[0])}</div>
           <div class="rail" data-testid="timeline-rail">
-            {#each data.markers as m (m.tUnixMs + m.kind + (m.node ?? ''))}
+            {#each data.markers as m, i (i)}
               <span class="marker" style:left="{xOf(data, g, m.tUnixMs / 1000)}px" title="{hm(m.tUnixMs / 1000)} · {m.summary}" data-testid="timeline-marker"></span>
             {/each}
             {#each data.events as e, i (i)}

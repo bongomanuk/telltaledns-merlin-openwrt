@@ -221,7 +221,7 @@
         {#if (m.config_fields_unclassified ?? []).length > 0}
           <p class="small"><span class="badge warn">{t('Please report')}</span> {t('These settings had no rule and were removed: {fields}.', { fields: (m.config_fields_unclassified ?? []).join(', ') })}</p>
         {/if}
-        {#each m.notes as n (n)}<p class="small muted">{n}</p>{/each}
+        {#each m.notes as n, i (i)}<p class="small muted">{n}</p>{/each}
       </div>
     {/if}
   {/if}

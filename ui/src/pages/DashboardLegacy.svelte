@@ -498,7 +498,7 @@
                   {#if l.id === 'clients'}
                     <span class="name"><ClientChip ip={i.key} name={i.name} onchanged={() => void load()} /></span>
                     <!-- ADR-050 — the groups whose settings apply to the device. -->
-                    {#each i.groups ?? [] as g (g)}<span class="group-chip small" style:--gc={groupColor(g)} translate="no">{g}</span>{/each}
+                    {#each i.groups ?? [] as g, gi (gi)}<span class="group-chip small" style:--gc={groupColor(g)} translate="no">{g}</span>{/each}
                   {:else}
                     <a class="name" href={l.link(i.key)}>{i.key}</a>
                   {/if}

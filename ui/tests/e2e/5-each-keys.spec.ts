@@ -107,3 +107,164 @@ test('api_005 the previous dashboard draws a donut of two statuses', async ({ pa
   await expect(donut.locator('.breakdown li .name')).toHaveText(['blocked', 'forwarded']);
   await expect(donut.locator('circle.seg')).toHaveCount(2);
 });
+
+// ---- Lists keyed by place: the data can repeat a value (the server allows it, or passes it through).
+
+const ITEMS = (items: unknown[]) => ({ items, missingNodes: [] });
+const topItem = (key: string, count: number, o: Record<string, unknown> = {}) => ({ key, count, errorBound: 0, ...o });
+
+test('api_005 names on my network: one zone for two sets of groups', async ({ page }) => {
+  // The configuration check refuses the same zone twice for the same groups only.
+  const zone = (groups: string[]) => ({ name: 'home.arpa', records: 2, groups, file: null, negativeTtlSeconds: 60 });
+  await page.route('**/api/v1/zones', (r) => r.fulfill({ json: ITEMS([zone(['kids']), zone(['adults'])]) }));
+  await signIn(page);
+  await page.goto('/#/local-dns');
+  const zones = page.getByTestId('zones').locator('tbody tr');
+  await expect(zones.locator('td:nth-child(1)')).toHaveText(['home.arpa', 'home.arpa']);
+  await expect(zones.locator('td:nth-child(3)')).toHaveText(['kids', 'adults']);
+});
+
+test('api_005 names on my network: a domain routed twice', async ({ page }) => {
+  // The configuration check reads only a suffix's form: two routes (or one, twice) may send it.
+  const forward = (servers: string[]) => ({ domain: 'corp.example', servers, source: 'file', stub: false });
+  await page.route('**/api/v1/forwards', (r) => r.fulfill({ json: ITEMS([forward(['10.0.0.53']), forward(['10.0.0.54'])]) }));
+  await signIn(page);
+  await page.goto('/#/local-dns');
+  const forwards = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Domains sent to other servers' }) }).locator('tbody tr');
+  await expect(forwards.locator('td:nth-child(1)')).toHaveText(['corp.example', 'corp.example']);
+  await expect(forwards.locator('td:nth-child(2)')).toHaveText(['10.0.0.53', '10.0.0.54']);
+});
+
+test('api_005 groups: a schedule listed twice', async ({ page }) => {
+  const group = {
+    blockAnswerIps: [], blockMode: 'null_ip', blockTtlSeconds: 60, blocked24h: 0, blockedServices: [], color: '#4c9ffe', devicesThisHour: 0, dns64: false, dns64Prefix: null, filterAaaa: false, lists: null, name: 'kids', networks: ['10.9.0.0/16'],
+    pausedUntilUnixSeconds: null, priority: 0, queries24h: 0, rebindingProtection: false, rewrites: [], safeSearch: false, schedules: ['night', 'night'], schedulesOn: [], upstreams: null, youtubeRestrict: null,
+  };
+  await page.route('**/api/v1/groups', (r) => r.fulfill({ json: ITEMS([group]) }));
+  await signIn(page);
+  await page.goto('/#/groups');
+  await expect(page.getByTestId('group-schedules').locator('span[translate="no"]')).toHaveText(['night', 'night']);
+});
+
+// The groups of a device: a configured device's list is passed through as written (`groups = ["lab", "lab"]` is valid), and a
+// top client's groups are sorted by priority with only neighbours made one, so two groups of one priority can leave a repeat.
+const twiceLab = (page: Page) =>
+  page.route('**/api/v1/stats/top?**', (r) => {
+    const kind = new URL(r.request().url()).searchParams.get('kind');
+    return r.fulfill({ json: ITEMS(kind === 'clients' ? [topItem('192.168.1.20', 12, { name: 'lab-pc', groups: ['lab', 'lab'] })] : []) });
+  });
+
+test('api_005 clients: the last hour, a client whose groups list one group twice', async ({ page }) => {
+  await twiceLab(page);
+  await signIn(page);
+  await page.goto('/#/clients');
+  await expect(page.locator('main table tbody tr').first().locator('.group-chip')).toHaveText(['lab', 'lab']);
+});
+
+test('api_005 clients: the devices, a device whose groups list one group twice', async ({ page }) => {
+  await page.route('**/api/v1/clients', (r) =>
+    r.fulfill({ json: ITEMS([{ name: 'lab-pc', match: ['192.168.1.20'], groups: ['lab', 'lab'], effectiveGroups: ['lab', 'lab'], groupsFrom: 'client', source: 'file', identity: null, kind: null }]) }),
+  );
+  await signIn(page);
+  await page.goto('/#/clients?tab=devices');
+  await expect(page.locator('main table tbody tr').first().locator('.group-chip')).toHaveText(['lab', 'lab']);
+});
+
+test('api_005 the dashboard: a top client whose groups list one group twice', async ({ page }) => {
+  await twiceLab(page);
+  await signIn(page);
+  await page.goto('/#/');
+  await page.reload();
+  await expect(page.locator('ol.tl .gdot')).toHaveCount(2);
+});
+
+test('api_005 the previous dashboard: a top client whose groups list one group twice', async ({ page }) => {
+  await twiceLab(page);
+  await signIn(page);
+  await page.goto('/#/?view=legacy');
+  await expect(page.locator('ol.bars .group-chip')).toHaveText(['lab', 'lab']);
+});
+
+test('api_005 cache: one node lists a name and type twice', async ({ page }) => {
+  // The cache keeps an answer per routing view and per CD bit (and per client subnet), and its top list does not say which:
+  // one node can list a name and type twice. Two nodes answer, so the names are merged and a row opens per node.
+  const makeup = { nodata: 0, nxdomain: 0, positive: 3, servfail: 0, stale: 0, validated: 0 };
+  const entry = (hits: number) => ({ ageSeconds: 5, answers: 1, authentic: false, bytes: 90, dnssecOk: false, hits, name: 'twice.example', qtype: 'A', rcode: 'NOERROR', ttlLeftSeconds: 120 });
+  await page.route('**/api/v1/cache/entries?**', (r) => r.fulfill({ json: ITEMS([{ node: 'pi', makeup, entries: [entry(4), entry(2)] }, { node: 'homelab', makeup, entries: [entry(1)] }]) }));
+  await signIn(page);
+  await page.goto('/#/cache');
+  const row = page.getByTestId('cache-top').locator('tbody tr').filter({ hasText: 'twice.example' });
+  await row.locator('button[aria-expanded]').click();
+  await expect(page.locator('ul.per-node li strong')).toHaveText(['pi', 'pi', 'homelab']);
+});
+
+test("api_005 a device's day: two markers of one kind in the same millisecond", async ({ page }) => {
+  // Two notes saved with the same time (the note form sends whole minutes).
+  const t0 = Math.floor(NOW / 3600) * 3600 - 23 * 3600;
+  const bins = Array.from({ length: 24 }, (_, i) => t0 + i * 3600);
+  const iso = (u: number) => new Date(u * 1000).toISOString();
+  const lane = { domain: 'example.com', other: false, counts: bins.map(() => 2), blocked: bins.map(() => 0), slow: bins.map(() => 0), total: 48, blockedTotal: 0, firstSeenTime: null };
+  const marker = (summary: string) => ({ tUnixMs: (t0 + 5 * 3600) * 1000, kind: 'note', summary, node: null, nodes: [], actor: 'admin', href: null, seq: null });
+  const day = {
+    client: '127.0.0.1', from: iso(t0), to: iso(t0 + 24 * 3600), binSeconds: 3600, bins, source: 'querylog', truncated: false, truncatedReason: null, coverageFrom: null,
+    lanes: [lane], queries: bins.map(() => 2), p99Ms: bins.map(() => 3), events: [], markers: [marker('first note'), marker('second note')],
+  };
+  await page.route('**/api/v1/clients/*/timeline*', (r) => r.fulfill({ json: day }));
+  await signIn(page);
+  await page.goto('/#/clients?device=127.0.0.1&view=timeline');
+  await expect(page.getByTestId('timeline-marker')).toHaveCount(2);
+  await expect(page.getByTestId('timeline-marker').last()).toHaveAttribute('title', /second note$/);
+});
+
+test('api_005 analyze: a statistic asked twice', async ({ page }) => {
+  // The server's answer for the query: it repeats the column (one per statistic asked).
+  const q = 'from -1h | stats count, count';
+  await signIn(page);
+  const res = await page.request.get(`/api/v1/analytics/vqlog?q=${encodeURIComponent(q)}`);
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  console.log(`EACHKEYS_VQLOG ${res.status()} columns=${JSON.stringify(body.columns)} rows=${JSON.stringify(body.rows)}`);
+  expect(body.columns).toEqual(['count', 'count']);
+  await page.goto(`/#/analyze?q=${encodeURIComponent(q)}`);
+  await expect(page.getByTestId('vqlog-result').locator('thead th')).toHaveText(['count', 'count']);
+});
+
+// Server text: the page shows the warnings and notes as the server sends them, and nothing promises that they differ.
+const twice = (s: string) => [s, s];
+const dry = (warnings: string[]) => ({ applied: false, configVersion: 7, impact: 'Adds one entry.', keepInGit: null, warnings, recentQueries: 0 });
+
+test("api_005 an editor's dry run: a warning the server repeats", async ({ page }) => {
+  await page.route('**/api/v1/groups/eachkeys-group*', (r) => r.fulfill({ json: dry(twice('A warning the server gave twice.')) }));
+  await signIn(page);
+  await page.goto('/#/groups');
+  await page.locator('[data-testid="editor-group"] .head > button').click();
+  await page.locator('form.form input.mono').first().fill('eachkeys-group');
+  await page.locator('form.form button.primary').click();
+  await expect(page.getByTestId('entry-preview').locator('.warn-text')).toHaveText(twice('A warning the server gave twice.'));
+});
+
+test("api_005 a mute's dry run: a warning the server repeats", async ({ page }) => {
+  await page.route('**/api/v1/anomaly-mutes/*', (r) => r.fulfill({ json: dry(twice('A mute warning the server gave twice.')) }));
+  const finding = { acknowledged: null, baseline: 40, client: '127.0.1.11', clientName: null, detail: 'Many more queries than usual in this hour.', domain: null, id: 'f-1', informational: false, kind: 'rate_spike', mutedBy: null, nodes: [], observed: 900, rhythm: null, spread: 12, stormMute: null, threshold: 200, windowSeconds: 3600, windowStart: new Date(NOW * 1000).toISOString() };
+  await page.route('**/api/v1/analytics/anomalies?**', (r) => r.fulfill({ json: { items: [finding] } }));
+  await signIn(page);
+  await page.goto('/#/anomalies');
+  await page.getByTestId('mute').first().click();
+  await expect(page.getByTestId('mute-form').locator('.notice.warn')).toHaveText(twice('A mute warning the server gave twice.'));
+});
+
+test("api_005 an agent's plan: a warning the server repeats", async ({ page }) => {
+  const plan = { id: 'p-1', state: 'pending', summary: 'Block game.example.com', tool: 'rules', method: 'PUT', path: '/api/v1/rules/p-1', reason: 'a test', requestedBy: 'agent', needsApproval: true, configVersion: 3, createdUnixSeconds: NOW - 60, expiresUnixSeconds: NOW + 400, preview: { impact: 'Blocks game.example.com.', warnings: twice('A plan warning the server gave twice.') } };
+  await page.route('**/api/v1/plans', (r) => r.fulfill({ json: { items: [plan] } }));
+  await signIn(page);
+  await page.goto('/#/agent-changes');
+  await expect(page.getByTestId('plan').locator('.warn-text')).toHaveText(twice('A plan warning the server gave twice.'));
+});
+
+test('api_005 a support package: a note the server repeats', async ({ page }) => {
+  await page.route('**/api/v1/system/support-package?**', (r) => r.fulfill({ json: { created: new Date(NOW * 1000).toISOString(), level: 'strict', files: [], redactions: {}, notes: twice('A note the server gave twice.') } }));
+  await signIn(page);
+  await page.goto('/#/settings?tab=system');
+  await page.getByTestId('support-preview').click();
+  await expect(page.getByTestId('support-manifest').getByText('A note the server gave twice.', { exact: true })).toHaveCount(2);
+});

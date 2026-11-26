@@ -97,7 +97,7 @@
         <dt>{words.change}</dt><dd class="mono" translate="no">{p.method} {p.path}</dd>
       </dl>
       {#if pv.impact}<p class="small"><b>{words.whatItDoes}</b> <span translate="no">{pv.impact}</span></p>{/if}
-      {#each pv.warnings ?? [] as w (w)}<p class="small warn-text" translate="no">{w}</p>{/each}
+      {#each pv.warnings ?? [] as w, i (i)}<p class="small warn-text" translate="no">{w}</p>{/each}
       <!-- REQ: OBS-024 — what the plan would have done to the logged queries, when the agent asked. -->
       {#if pv.simulation}<SimulationCard result={pv.simulation} />{/if}
       <details class="small">

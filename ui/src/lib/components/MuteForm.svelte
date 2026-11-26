@@ -160,7 +160,7 @@
         >{#snippet b(text: string)}<b>{text}</b>{/snippet}</T
       >
     </div>
-    {#each preview.warnings as w (w)}<div class="notice warn small">{w}</div>{/each}
+    {#each preview.warnings as w, i (i)}<div class="notice warn small">{w}</div>{/each}
   {/if}
   <ErrorNote error={previewError} />
   <ErrorNote {error} />
