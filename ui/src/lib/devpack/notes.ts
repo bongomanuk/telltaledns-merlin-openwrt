@@ -23,7 +23,7 @@ export function notesText(tpl: Template, tag: Tag, names: { english?: string; ow
     '- A third item, ["English", "", "note"], is the English\'s own note, which tells two uses of the same English apart: keep it exactly as it is.',
     '- Keep each {name} exactly as written: it is replaced by a value. Keep tags such as <b>...</b> around the same words, and translate the words inside.',
     '- Keep web addresses, numbers, commands and setting names as they are written, and the words listed below for an entry.',
-    `- A plural is [["one form", "other form"], { ${tag.categories.map((c) => `"${c}": ""`).join(', ')} }]: write a form for each category of the language.`,
+    `- A plural is [["one form", "other form"], { ${tag.categories.map((c) => `"${c}": ""`).join(', ')} }]: write a form for each category of the language. A form other than "other" may leave out a {name} (as in "one file"), but where the number never changes, as in the limits of a file ({max}), keep it in every form.`,
     '- Check the file in TelltaleDNS (Settings, Account, Advanced view: "Test a language pack"). Its check is the one the project runs.',
     '',
     'Sending it',
