@@ -87,12 +87,18 @@ const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
  *   - `leave`: the same, but the page is leaving for the provider's sign-out, and a reload would cancel that;
  *   - `in`: a sign-in on a page paused for nobody or for another user; the page reloads into the pack;
  *   - `none`: nothing (a load "Show the test pack on this page" asked for keeps its load as it is).
- * A load that follows a reload of the first three does not reload for the first user the app reports (`first`):
- * the two reads of who is signed in disagreed, and would again, in either direction. */
-export function whenSeen(out: Decision, who: string | null, o: { readonly installed: boolean; readonly first: boolean; readonly leaving: boolean }): 'none' | 'away' | 'leave' | 'in' {
+ * The app reports on every change of page; only a change of who is signed in counts (`last`: the load's previous
+ * report, undefined before the first). A load that follows a reload of the first three does not reload for the first
+ * user the app reports: the two reads of who is signed in disagreed, and would again, in either direction. */
+export function whenSeen(
+  out: Decision,
+  who: string | null,
+  o: { readonly installed: boolean; readonly last: string | null | undefined; readonly leaving: boolean },
+): 'none' | 'away' | 'leave' | 'in' {
+  if (who === o.last) return 'none';
   if (who === out.user || out.user === undefined || out.shown) return 'none';
   if (o.installed) return who === null && o.leaving ? 'leave' : 'away';
-  if (who !== null && !(o.first && out.reloaded) && (out.paused === 'signed-out' || out.paused === 'user')) return 'in';
+  if (who !== null && !(o.last === undefined && out.reloaded) && (out.paused === 'signed-out' || out.paused === 'user')) return 'in';
   return 'none';
 }
 

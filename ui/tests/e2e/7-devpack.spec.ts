@@ -1098,21 +1098,32 @@ test('api_013 the one-load flag is taken whatever the load decides', async () =>
 });
 
 test('api_013 reads of who is signed in that disagree reload a page twice at most in a row', async () => {
-  // The boot's rules (`decide`, then `whenSeen` for the app's first report) replayed over every run of four page
-  // loads, each with what the pack's read of the status says and what the app reports first: nobody, the user who
-  // loaded the pack, or another user. A reload carries its flag to the load it lands on; a load that does nothing
-  // ends the run. Reads that disagree in one direction, in turn, or in any mix reload a page twice at most in a row.
+  // The boot's rules (`decide`, then `whenSeen` for each report of the app) replayed over every run of four page
+  // loads, each with what the pack's read of the status says and what the app reports: nobody, the user who loaded
+  // the pack, or another user, on each of three changes of page (the app reports on every one, the same user again).
+  // A reload carries its flag to the load it lands on; a load that does nothing ends the run. Reads that disagree in
+  // one direction, in turn, or in any mix reload a page twice at most in a row.
   const kept = { ...REC, checked: { ui: UI_A, sha: REC.sha, table: { deadbeef: 'Hält' } } };
   const WHO = [null, 'admin', 'bob'];
   const reads = WHO.flatMap((pack) => WHO.map((app) => ({ pack, app })));
   const status = (u: string | null) => ({ user: u === null ? null : { username: u, display: null }, setupRequired: false });
+  /** The reports of one load, as the hook gets them: what each does, up to the first that reloads. */
+  const reports = (out: Awaited<ReturnType<typeof decide>>, seq: (string | null)[]) => {
+    let last: string | null | undefined;
+    for (const who of seq) {
+      const act = whenSeen(out, who, { installed: out.choice !== null, last, leaving: false });
+      last = who;
+      if (act !== 'none') return act;
+    }
+    return 'none';
+  };
   const run = async (seq: { pack: string | null; app: string | null }[]) => {
     let flag: string | null = null;
     const acts: string[] = [];
     for (const load of seq) {
       const was = flag;
       const out = await decide(JSON.stringify(kept), deps({ takeOnce: () => was }, { status: status(load.pack), calls: [] }));
-      const act = whenSeen(out, load.app, { installed: out.choice !== null, first: true, leaving: false });
+      const act = reports(out, [load.app, load.app, load.app]);
       acts.push(act);
       if (act !== 'away' && act !== 'in') break;
       flag = act;
@@ -1129,15 +1140,20 @@ test('api_013 reads of who is signed in that disagree reload a page twice at mos
   // going-away reload, and then nothing.
   const turn = [{ pack: null, app: 'admin' }, { pack: 'admin', app: null }];
   expect(await run([...turn, ...turn])).toEqual(['in', 'away', 'none']);
-  // A real sign-out and sign-in still bring the pack back: on the load after the sign-out, the app's first report is
-  // nobody, and a sign-in after it reloads into the pack.
+  // A load after a sign-in reload where the two reads keep disagreeing: changes of page report the same user again,
+  // and nothing reloads.
+  const held = await decide(JSON.stringify(kept), deps({ takeOnce: () => 'in' }, { status: status(null), calls: [] }));
+  expect(reports(held, ['admin', 'admin', 'admin'])).toBe('none');
+  // A real sign-out and sign-in still bring the pack back: on the load after the sign-out, the app reports nobody
+  // (again on each change of page), and a sign-in after it reloads into the pack.
   const after = await decide(JSON.stringify(kept), deps({ takeOnce: () => 'away' }, { status: status(null), calls: [] }));
-  expect(whenSeen(after, null, { installed: false, first: true, leaving: false })).toBe('none');
-  expect(whenSeen(after, 'admin', { installed: false, first: false, leaving: false })).toBe('in');
-  // While the page leaves for the provider's sign-out it is not reloaded.
+  expect(reports(after, [null, null, 'admin'])).toBe('in');
+  expect(reports(after, [null, 'bob', null, 'admin'])).toBe('in');
+  // While the page leaves for the provider's sign-out it is not reloaded, and a repeat of nobody changes nothing.
   const shown = await decide(JSON.stringify(kept), deps({}, { status: status('admin'), calls: [] }));
-  expect(whenSeen(shown, null, { installed: true, first: false, leaving: true })).toBe('leave');
-  expect(whenSeen(shown, null, { installed: true, first: false, leaving: false })).toBe('away');
+  expect(whenSeen(shown, null, { installed: true, last: 'admin', leaving: true })).toBe('leave');
+  expect(whenSeen(shown, null, { installed: true, last: 'admin', leaving: false })).toBe('away');
+  expect(whenSeen(shown, null, { installed: true, last: null, leaving: false })).toBe('none');
 });
 
 test('api_013 the clock is checked both ways', async () => {
