@@ -707,11 +707,15 @@ test('api_013 a page that fails to draw with the pack loads once more without it
   await expect.poll(() => loads, { timeout: 30_000 }).toBe(2);
   await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(s.page.getByRole('heading', { name: 'Dashboard' }).first()).toBeVisible();
-  await expect(banner(s.page)).toContainText('The test language pack fr.json was removed');
-  expect(JSON.parse((await kept(s.page)) ?? '{}')).toMatchObject({ v: 1, gone: 'failed', name: 'fr.json' });
+  // The notice says what happened, in the banner and in the card (not that the file could not be checked).
+  await expect(banner(s.page)).toContainText('The test language pack fr.json was removed: a page could not be drawn with it.');
+  expect(JSON.parse((await kept(s.page)) ?? '{}')).toMatchObject({ v: 1, gone: 'draw', name: 'fr.json' });
   // Once: the next load draws in English, and nothing reloads it again.
   await s.page.waitForTimeout(2000);
   expect(loads).toBe(2);
+  await s.page.goto('/#/settings?tab=account');
+  await expect(s.page.getByTestId('devpack-card-notice')).toContainText('The test language pack fr.json was removed: a page could not be drawn with it.');
+  await expect(s.page.getByTestId('devpack-card-notice')).not.toContainText('checked');
   await done(s);
 });
 

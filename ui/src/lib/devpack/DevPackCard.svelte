@@ -263,7 +263,8 @@
         {#if n.gone === 'upgrade'}TelltaleDNS was updated. Download the template again and check your file: translations whose English didn't change still apply.
         {:else if n.gone === 'expired'}it was loaded 7 days ago.
         {:else if n.gone === 'damaged'}the copy kept in this browser couldn't be read.
-        {:else}it could not be checked twice in a row. Check the file again under Settings.{/if}
+        {:else if n.gone === 'failed'}it could not be checked twice in a row. Check the file again under Settings.
+        {:else}a page could not be drawn with it.{/if}
       </p>
       <button onclick={dismiss} aria-label="Dismiss this notice">Dismiss</button>
     </div>

@@ -157,11 +157,11 @@ function watchUser(r: PackRecord, out: Decision) {
   };
 }
 
-/** The page failed to draw with the pack: it is removed, and the page reloads once without it (when the key
- * still held it and no longer does; otherwise the page is drawn in English as it is). */
+/** The page failed to draw with the pack: it is removed, with a notice that says so, and the page reloads once
+ * without it (when the key still held it and no longer does; otherwise the page is drawn in English as it is). */
 function failed(): boolean {
   if (!installed || !record) return false;
-  if (!retire(store, record, notice('failed', record.name, Date.now()))) return false;
+  if (!retire(store, record, notice('draw', record.name, Date.now()))) return false;
   record = null;
   reload();
   return true;

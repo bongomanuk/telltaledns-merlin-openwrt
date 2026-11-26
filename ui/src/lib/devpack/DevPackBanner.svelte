@@ -47,7 +47,8 @@
           {#if view.gone === 'upgrade'}TelltaleDNS was updated. Download the template again and check your file: translations whose English didn't change still apply.
           {:else if view.gone === 'expired'}it was loaded 7 days ago.
           {:else if view.gone === 'damaged'}the copy kept in this browser couldn't be read.
-          {:else}it could not be checked twice in a row. Check the file again under Settings.{/if}
+          {:else if view.gone === 'failed'}it could not be checked twice in a row. Check the file again under Settings.
+          {:else}a page could not be drawn with it.{/if}
         {:else if view.kind === 'active'}
           Test language pack: <bdi>{name}</bdi> ({language}, fingerprint <span class="mono">{finger}</span>). Labels come from that file, not from TelltaleDNS.
         {:else if view.kind === 'paused' && view.why === 'param'}

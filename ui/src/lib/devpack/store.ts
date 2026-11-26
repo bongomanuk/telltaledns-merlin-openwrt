@@ -25,7 +25,9 @@ export function entryPath(): string {
 /** How long a pack (and the notice after one) lasts. */
 export const LIFETIME_MS = 7 * 24 * 3600 * 1000;
 
-export type Gone = 'upgrade' | 'expired' | 'damaged' | 'failed';
+/** Why a pack was removed: another build, 7 days, an unreadable copy, a check that threw twice in a row, or a page
+ * that failed to draw with it. */
+export type Gone = 'upgrade' | 'expired' | 'damaged' | 'failed' | 'draw';
 export type PackRecord = {
   readonly v: 1;
   /** The web UI build it was loaded on (the entry module's path). */
@@ -66,7 +68,7 @@ const isRecord = (x: Record<string, unknown>): boolean =>
   Number.isInteger(x.fails) &&
   (x.fails as number) >= 0 &&
   typeof x.text === 'string';
-const GONE = ['upgrade', 'expired', 'damaged', 'failed'];
+const GONE = ['upgrade', 'expired', 'damaged', 'failed', 'draw'];
 const isNotice = (x: Record<string, unknown>): boolean => typeof x.gone === 'string' && GONE.includes(x.gone) && typeof x.name === 'string' && Number.isFinite(x.at);
 
 /** What a stored value is: a record, a notice, or damaged (anything else). */
