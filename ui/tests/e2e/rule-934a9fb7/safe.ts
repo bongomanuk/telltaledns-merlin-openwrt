@@ -1,4 +1,4 @@
-// The agreement rule's safe.ts as at 934a9fb7 (before round 3 of T29.3), byte for byte below this line: the reference of the differential test in 7-devpack.spec.ts. Do not edit.
+// The agreement rule's safe.ts as at 934a9fb7 (before round 3 of T29.3), byte for byte below this line: the reference of the differential test in 7-devpack.spec.ts. Delete this folder and its test at the next deliberate change of the rule (the lone surrogates forbidden since lie outside its draw).
 // REQ: API-012 (ADR-189) — a translation must agree with its English: the same placeholders, tags
 // and web addresses; every structural token, number and `verbatim` word of the English, and no
 // address, port, path or setting the English does not have; no direction overrides, invisible

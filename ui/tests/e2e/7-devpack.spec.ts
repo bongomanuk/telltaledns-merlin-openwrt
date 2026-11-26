@@ -648,6 +648,14 @@ test('api_012 the agreement rule gives what it gave before it was made linear', 
   const cases = Array.from({ length: 3000 }, () => draw(rand));
   for (const shape of Object.values(SHAPES)) for (const n of [40, 300, 1000]) cases.push({ english: shape(n)[0], translation: shape(n)[1], o: {} });
   for (const n of [40, 300, 1000]) cases.push({ english: fill((i) => `a_${i} `, n), translation: fill((i) => `x＝${i} `, n), o: {} }, { english: fill((i) => `a.b${i} `, n), translation: fill((i) => `x.b${i}＝${i} `, n), o: {} });
+  // Two behaviours the draw reaches only once each (review part B of T29.3, nit 7). The English's own tokens are
+  // taken out longest first: the shorter one first would leave `.c:5` added. A verbatim word is read in the
+  // prepared text: fullwidth letters are the word.
+  const order = { english: 'a_b a_b.c:5', translation: 'a_b a_b.c:5 z．a_b．c：5', o: {} };
+  const verbatim = { english: 'Send email', translation: 'Ｓｅｎｄ ｅｍａｉｌ', o: { verbatim: ['email'] } };
+  cases.push(order, verbatim);
+  expect(agree(order.english, order.translation).fails.filter((f) => f.rule === 'structural')).toEqual([]);
+  expect(agree(verbatim.english, verbatim.translation, verbatim.o).fails.filter((f) => f.rule === 'verbatim')).toEqual([]);
   const noAt = (v: { fails: object[]; reports: object[] }) => JSON.stringify({ fails: v.fails.map((f) => ({ ...f, at: 0 })), reports: v.reports.map((f) => ({ ...f, at: 0 })) });
   let findings = 0;
   for (const { english, translation, o } of cases) {

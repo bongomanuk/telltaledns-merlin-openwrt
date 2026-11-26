@@ -1,4 +1,4 @@
-// The agreement rule's agree.ts as at 934a9fb7 (before round 3 of T29.3), byte for byte below this line: the reference of the differential test in 7-devpack.spec.ts. Do not edit.
+// The agreement rule's agree.ts as at 934a9fb7 (before round 3 of T29.3), byte for byte below this line: the reference of the differential test in 7-devpack.spec.ts. Delete this folder and its test at the next deliberate change of the rule (the lone surrogates forbidden since lie outside its draw).
 // REQ: API-012 (ADR-189) — the whole agreement rule, as the check script applies it: every finding,
 // FAIL and REPORT, with the token and where it is in the translation. A module of its own, apart
 // from the runtime's first-use check (`agreesAtRuntime` in `safe.ts`), so code loaded later can run
