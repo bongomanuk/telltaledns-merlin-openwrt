@@ -453,6 +453,50 @@ test('api_013 signing out at the provider leaves for it with a pack in use', asy
   }
 });
 
+/** Notes in session storage when the browser shows a page again from its back-forward cache (an init script). */
+const NOTE_RESTORED = () =>
+  addEventListener('pageshow', (e) => {
+    if (e.persisted) sessionStorage.setItem('dvp-restored', String((Number(sessionStorage.getItem('dvp-restored')) || 0) + 1));
+  });
+/** What the page says about how it was shown: restored from the back-forward cache (how often), and why not. */
+const howShown = (page: Page) =>
+  page.evaluate(() => {
+    const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
+    return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type, notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
+  });
+
+test('api_013 back after signing out at the provider never shows the pack', async ({ browserType, launchOptions }) => {
+  // REQ: API-004 — the page that leaves for the provider's sign-out is not reloaded on its way out. Back from the
+  // provider's page returns to it, and the browser may show it again as it was, from its back-forward cache: it must
+  // show the usual language with the pack paused. This test's browser keeps that cache, which the suite's browser
+  // turns off. (3-oidc.spec.ts does it with a real provider.)
+  const own = await browserType.launch({ ...launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+  try {
+    const s = await fresh(own, { signedOut: true, init: NOTE_RESTORED });
+    await storePack(s.page, FR_TEXT);
+    await s.page.goto('/');
+    await signInHere(s.page);
+    await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+    await s.page.route('**/api/v1/auth/logout', async (r) => {
+      const res = await r.fetch();
+      await r.fulfill({ response: res, status: 200, json: { logoutUrl: '/?devpack-test=provider-logout' } });
+    });
+    await s.page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(s.page).toHaveURL(/\?devpack-test=provider-logout(#|$)/, { timeout: 15_000 });
+    await expect(banner(s.page)).toContainText('is paused on this page');
+    await s.page.goBack({ waitUntil: 'commit' });
+    await expect(s.page).not.toHaveURL(/devpack-test=provider-logout/);
+    console.log(`DVP_BFCACHE marker ${JSON.stringify(await howShown(s.page))}`);
+    await expect(s.page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
+    await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.');
+    console.log(`DVP_BFCACHE marker after ${JSON.stringify(await howShown(s.page))}`);
+    await done(s);
+  } finally {
+    await own.close();
+  }
+});
+
 test('api_013 a session that ends takes the pack off the page', async ({ browser }) => {
   // A request that finds the session gone draws the sign-in page: after one reload, in the usual language, and
   // the pack paused. Here the status still says signed in (as two nodes that disagree could): that load stays

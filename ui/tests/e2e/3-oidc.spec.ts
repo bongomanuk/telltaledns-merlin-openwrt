@@ -134,4 +134,55 @@ for (const id of providers) {
     await expect(id === 'keycloak' ? page.locator('#username') : page.locator('input[name="uidField"]')).toBeVisible({ timeout: 20_000 });
     await page.close();
   });
+
+  test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async ({ browserType, launchOptions }) => {
+    // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
+    // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
+    // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off.
+    const own = await browserType.launch({ ...launchOptions, ignoreDefaultArgs: ['--disable-back-forward-cache'] });
+    try {
+      const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
+      // Notes in session storage when a page is shown again from the back-forward cache.
+      await context.addInitScript(() =>
+        addEventListener('pageshow', (e) => {
+          if (e.persisted) sessionStorage.setItem('dvp-restored', String((Number(sessionStorage.getItem('dvp-restored')) || 0) + 1));
+        }),
+      );
+      const page = await context.newPage();
+      await signIn(page, id, name, 'alice');
+      await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
+      const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
+      const commit = (await (await page.request.get('/api/v1/system/info')).json()).build.commit as string;
+      await page.evaluate(([k, v]) => localStorage.setItem(k, v), ['telltale.devpack', JSON.stringify(devpack(who, commit))]);
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 20_000 });
+      // The page that will leave: its history entry is marked, so Back is known to have reached it.
+      await page.evaluate(() => history.replaceState({ ...history.state, dvpLeft: true }, ''));
+      const here = new URL(page.url()).origin;
+      await page.getByRole('button', { name: 'Sign out' }).click();
+      await page.waitForURL((u) => u.origin !== here, { timeout: 20_000 });
+      const confirm = page.getByRole('button', { name: /^(Logout|Log out)$/i });
+      if (await confirm.waitFor({ state: 'visible', timeout: 8000 }).then(() => true, () => false)) await confirm.click();
+      await expect(
+        page.getByRole('heading', { name: 'Sign in' }).or(page.getByRole('heading', { name: /logged out of TelltaleDNS/ })),
+      ).toBeVisible({ timeout: 20_000 });
+      // Back, through the provider's pages, to the page that left.
+      const atLeft = () => page.evaluate(() => !!(history.state as { dvpLeft?: boolean } | null)?.dvpLeft).catch(() => false);
+      for (let i = 0; i < 4 && !(await atLeft()); i++) {
+        await page.goBack({ waitUntil: 'commit' });
+        await page.waitForTimeout(500);
+      }
+      expect(await atLeft(), 'Back reached the page that left for the provider').toBe(true);
+      const shown = await page.evaluate(() => {
+        const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming & { notRestoredReasons?: unknown };
+        return { restored: Number(sessionStorage.getItem('dvp-restored')) || 0, type: nav?.type, notRestored: JSON.stringify(nav?.notRestoredReasons ?? null).slice(0, 400) };
+      });
+      console.log(`DVP_BFCACHE ${id} ${JSON.stringify(shown)}`);
+      await expect(page.locator('html')).toHaveAttribute('lang', 'en', { timeout: 15_000 });
+      await expect(page.getByTestId('devpack-banner')).toContainText('is paused on this page');
+      await context.close();
+    } finally {
+      await own.close();
+    }
+  });
 }
