@@ -11,6 +11,8 @@
   import Tip from '../lib/components/Tip.svelte';
   import Donut from '../lib/components/Donut.svelte';
   import { partsOf } from '../lib/donut';
+  // REQ: API-005 — a top list's rows are keyed by the name and its occurrence: two names can read alike.
+  import { keyed } from '../lib/keys';
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import BreakerBadge from '../lib/components/BreakerBadge.svelte';
   import ClientChip from '../lib/components/ClientChip.svelte';
@@ -492,7 +494,7 @@
           <p class="empty">{t('Nothing yet.')}</p>
         {:else}
           <ol class="bars">
-            {#each l.items as i (i.key)}
+            {#each keyed(l.items, (x) => x.key) as { item: i, key } (key)}
               <li>
                 <div class="row">
                   {#if l.id === 'clients'}

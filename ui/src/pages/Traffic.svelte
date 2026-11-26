@@ -10,6 +10,8 @@
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import HelpButton from '../lib/components/HelpButton.svelte';
   import { tr } from '../lib/i18n';
+  // REQ: API-005 — a tile's names are keyed by their text and its occurrence: two names can read alike.
+  import { keyed } from '../lib/keys';
   const { t } = tr('traffic');
 
   type Mode = 'service' | 'site' | 'name';
@@ -286,7 +288,7 @@
       </p>
       {#if mode !== 'name'}
         <ul class="members">
-          {#each tile.members.slice(0, 8) as m (m.name)}
+          {#each keyed(tile.members.slice(0, 8), (x) => x.name) as { item: m, key } (key)}
             <li><a href={href('/queries', { name: m.name, match: 'exact' })}>{m.name}</a><span><a class="when" href={href('/heatmap', { kind: 'name', key: m.name })} aria-label={t('When {name} is asked for', { name: m.name })}>{t('when')}</a> {num(m.count)}</span></li>
           {/each}
           {#if tile.members.length > 8}<li class="muted">{t('and {n} more', { n: tile.members.length - 8 })}</li>{/if}

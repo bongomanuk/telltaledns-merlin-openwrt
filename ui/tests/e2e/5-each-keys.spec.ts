@@ -5,7 +5,7 @@
 // (the admin, some queries), as 8-i18n-pages.spec.ts does.
 import { expect, test, type Page } from '@playwright/test';
 import { partKey, partsOf } from '../../src/lib/donut';
-import { occurrenceKeys } from '../../src/lib/keys';
+import { keyed, occurrenceKeys } from '../../src/lib/keys';
 import { fold } from '../../src/lib/sankey';
 import { failOnPageErrors } from './page-errors';
 
@@ -409,4 +409,88 @@ test('api_005 alerts: two firing alerts whose rule and subject join to the same 
   await signIn(page);
   await page.goto('/#/alerts');
   await expect(page.getByTestId('alerts-now').locator('tbody tr td:nth-child(3)')).toHaveText(['One.', 'Two.']);
+});
+
+// ---- Top lists whose names read alike: two different names the server sends as the same text (a dot inside a label,
+// bytes that are not UTF-8). Each list keys its rows by the name with its occurrence.
+
+test('api_005 a list keyed by text and occurrence keeps its items and their order', () => {
+  const items = [{ key: 'a.b.example' }, { key: 'c.example' }, { key: 'a.b.example' }];
+  const rows = keyed(items, (x) => x.key);
+  expect(rows.map((r) => r.item)).toEqual(items);
+  expect(rows[0].item).toBe(items[0]);
+  expect(rows.map((r) => r.key)).toEqual(occurrenceKeys(items.map((x) => x.key)));
+  expect(new Set(rows.map((r) => r.key)).size).toBe(3);
+});
+
+/** The hour's top lists: two names that read alike, for domains and for blocked names. */
+const alike = (page: Page) =>
+  page.route('**/api/v1/stats/top?**', (r) => {
+    const kind = new URL(r.request().url()).searchParams.get('kind');
+    const items = kind === 'domains' ? [topItem('a.b.example', 9), topItem('a.b.example', 8)] : kind === 'blocked' ? [topItem('ads.b.example', 3), topItem('ads.b.example', 2)] : [];
+    return r.fulfill({ json: ITEMS(items) });
+  });
+
+test('api_005 obs_026 the traffic map: a tile of two names that read alike', async ({ page }) => {
+  await page.route('**/api/v1/services', (r) => r.fulfill({ json: ITEMS([]) }));
+  await alike(page);
+  await page.addInitScript(() => localStorage.setItem('traffic.mode', 'site'));
+  await signIn(page);
+  await page.goto('/#/traffic');
+  await page.locator('a.tile').first().hover({ position: { x: 5, y: 5 } });
+  await expect(page.locator('.details .members li a:not(.when)')).toHaveText(['a.b.example', 'a.b.example']);
+});
+
+test('api_005 the dashboard: top names that read alike, each row with its own details', async ({ page }) => {
+  // And a pod's search-suffix expansions of one name, merged into one row: its variants read alike too.
+  const asked = 'api.example.com.default.svc.cluster.local';
+  await page.route('**/api/v1/stats/top?**', (r) => {
+    const kind = new URL(r.request().url()).searchParams.get('kind');
+    return r.fulfill({ json: ITEMS(kind === 'domains' ? [topItem('a.b.example', 9), topItem('a.b.example', 8), topItem(asked, 4), topItem(asked, 3)] : []) });
+  });
+  await signIn(page);
+  await page.goto('/#/');
+  await page.reload();
+  const rows = page.locator('ol.tl > li');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.locator('a.dom').first()).toHaveText('a.b.example');
+  await expect(rows.nth(1).locator('a.dom')).toHaveText('a.b.example');
+  // One row opened: its own details only.
+  await rows.nth(1).locator('button.n').click();
+  await expect(rows.nth(1)).toHaveClass(/open/);
+  await expect(rows.nth(0)).not.toHaveClass(/open/);
+  await rows.nth(2).locator('button.n').click();
+  await expect(rows.nth(2).locator('ul.vars code')).toHaveText([asked, asked]);
+});
+
+test('api_005 the previous dashboard: top names that read alike', async ({ page }) => {
+  await alike(page);
+  await signIn(page);
+  await page.goto('/#/?view=legacy');
+  await expect(page.locator('ol.bars').first().locator('a.name')).toHaveText(['a.b.example', 'a.b.example']);
+  await expect(page.locator('ol.bars').nth(1).locator('a.name')).toHaveText(['ads.b.example', 'ads.b.example']);
+});
+
+test("api_005 groups: a group's top names that read alike", async ({ page }) => {
+  const group = {
+    blockAnswerIps: [], blockMode: 'null_ip', blockTtlSeconds: 60, blocked24h: 5, blockedServices: [], color: '#4c9ffe', devicesThisHour: 1, dns64: false, dns64Prefix: null, filterAaaa: false, lists: null, name: 'kids', networks: ['10.9.0.0/16'],
+    pausedUntilUnixSeconds: null, priority: 0, queries24h: 20, rebindingProtection: false, rewrites: [], safeSearch: false, schedules: [], schedulesOn: [], upstreams: null, youtubeRestrict: null,
+  };
+  await page.route('**/api/v1/groups', (r) => r.fulfill({ json: ITEMS([group]) }));
+  await alike(page);
+  await signIn(page);
+  await page.goto('/#/groups');
+  const lists = page.locator('.tops ol');
+  await expect(lists.nth(0).locator('li')).toHaveText(['a.b.example 9', 'a.b.example 8']);
+  await expect(lists.nth(1).locator('li')).toHaveText(['ads.b.example 3', 'ads.b.example 2']);
+});
+
+test('api_005 obs_035 the wall map: two tiles whose names read alike, each in its own place', async ({ page }) => {
+  await page.route('**/api/v1/stats/top?**', (r) => r.fulfill({ json: ITEMS([topItem('a.b.example', 900), topItem('a.b.example', 800), topItem('c.example', 700)]) }));
+  await signIn(page);
+  await page.goto('/#/wall?layout=single&panels=map&motion=off');
+  const tiles = page.getByTestId('wall-map').locator('.tile');
+  await expect(tiles.locator('.name')).toHaveText(['a.b.example', 'a.b.example', 'c.example']);
+  const places = await tiles.evaluateAll((els) => els.map((e) => `${(e as HTMLElement).style.left},${(e as HTMLElement).style.top}`));
+  expect(new Set(places).size).toBe(3);
 });
