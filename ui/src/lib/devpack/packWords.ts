@@ -4,11 +4,11 @@
 // in the template); a token or a key from the file is a parameter, shown as text.
 import { tr } from '../i18n';
 import { num } from '../format';
-import { markers, type Broken, type Leftover, type Refusal, type TagRefusal, type Worth } from '../i18n/pack';
+import { MAX_CHARS, MAX_CONTEXTS, MAX_PAIRS, markers, type Broken, type Leftover, type Refusal, type TagRefusal, type Worth } from '../i18n/pack';
 
 /** Why a whole file is refused. */
 export function refusalWords(r: Refusal): string {
-  const { t } = tr('packWords');
+  const { t, tn } = tr('packWords');
   switch (r.code) {
     case 'size':
       return t("This file can't be used: it is larger than 1 MiB.");
@@ -23,15 +23,20 @@ export function refusalWords(r: Refusal): string {
     case 'shape':
       return t("This file can't be used: it isn't a language file (each context holds a list of pairs).");
     case 'contexts':
-      // The limits are written in the English (`pack.ts`'s MAX_CONTEXTS, MAX_PAIRS and MAX_CHARS; a test holds
-      // them equal), so a translator writes the noun in the form its number takes.
-      return t("This file can't be used: it has more than 600 contexts.");
+      // A limit of the check is its message's count, so a translator writes the noun in the form its number takes,
+      // and {max}, the number as the language writes it.
+      return tn("This file can't be used: it has more than {max} context.", "This file can't be used: it has more than {max} contexts.", MAX_CONTEXTS, { max: num(MAX_CONTEXTS) });
     case 'pairs':
-      return t("This file can't be used: it has more than 10,000 pairs.");
+      return tn("This file can't be used: it has more than {max} pair.", "This file can't be used: it has more than {max} pairs.", MAX_PAIRS, { max: num(MAX_PAIRS) });
     case 'context':
       return t('This file can\'t be used: "{ctx}" is not a context name.', { ctx: markers(r.ctx) });
     case 'long':
-      return t('This file can\'t be used: pair {n} of "{ctx}" has a text longer than 4,000 characters.', { n: num(r.n), ctx: markers(r.ctx) });
+      return tn(
+        'This file can\'t be used: pair {n} of "{ctx}" has a text longer than {max} character.',
+        'This file can\'t be used: pair {n} of "{ctx}" has a text longer than {max} characters.',
+        MAX_CHARS,
+        { n: num(r.n), ctx: markers(r.ctx), max: num(MAX_CHARS) },
+      );
     case 'pair':
       return t('This file can\'t be used: pair {n} of "{ctx}" is not in the form of the template.', { n: num(r.n), ctx: markers(r.ctx) });
   }

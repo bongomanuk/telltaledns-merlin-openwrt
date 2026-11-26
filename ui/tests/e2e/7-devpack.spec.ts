@@ -361,7 +361,7 @@ test('api_013 a pack is refused whole for its structure', () => {
   }
   expect(refusalWords({ code: 'duplicate', key: 'cache', line: 1, column: 29 })).toBe('This file can\'t be used: the key "cache" appears twice (line 1, column 29); the second would hide the first.');
   expect(refusalWords({ code: 'json', line: 41, column: 7 })).toBe("This file can't be used: it isn't valid JSON (line 41, column 7).");
-  // The limits are written in the English, so a translator picks the noun's form: they are the check's own.
+  // The limits are the check's own: each one is its message's count and {max}, the number written as English does.
   expect(refusalWords({ code: 'contexts' })).toContain(`more than ${MAX_CONTEXTS.toLocaleString('en-US')} contexts`);
   expect(refusalWords({ code: 'pairs' })).toContain(`more than ${MAX_PAIRS.toLocaleString('en-US')} pairs`);
   expect(refusalWords({ code: 'long', ctx: 'cache', n: 1 })).toContain(`longer than ${MAX_CHARS.toLocaleString('en-US')} characters`);
@@ -371,6 +371,40 @@ test('api_013 a pack is refused whole for its structure', () => {
   expect(decodeFile(new TextEncoder().encode('\uFEFF{}'))).toEqual({ text: '{}', bom: true });
   const bom = checkPack(JSON.stringify({ cache: [['Holds', 'Hält']] }), true, fixture(), DE);
   expect(bom.checked?.canonical).toBe(false);
+});
+
+test('api_013 a limit of the check reads as the language writes numbers', () => {
+  // The limits of a file are each message's count and {max}, the number formatted for the language: a translator
+  // writes the noun in the form that number takes and copies no digit. A German file that keeps {max} passes the
+  // check and the runtime, and reads 4.000 Zeichen and 10.000 Paare. With the numbers written in the English, a
+  // German 4000 Zeichen or 10000 Paare failed the digit rule (which reads 4,000 as 4 and 000).
+  const limits = [...(lib.check(UI, { ratchets: false }).entries as Map<string, { ctx: string; english: string | [string, string]; note?: string }>).values()].filter(
+    (e) => e.ctx === 'packWords' && Array.isArray(e.english) && e.english[1].includes('{max}'),
+  );
+  expect(limits.map((e) => e.english[1])).toEqual([
+    "This file can't be used: it has more than {max} contexts.",
+    "This file can't be used: it has more than {max} pairs.",
+    'This file can\'t be used: pair {n} of "{ctx}" has a text longer than {max} characters.',
+  ]);
+  const de = [
+    { one: 'Diese Datei ist nicht verwendbar: Sie hat mehr als {max} Kontext.', other: 'Diese Datei ist nicht verwendbar: Sie hat mehr als {max} Kontexte.' },
+    { one: 'Diese Datei ist nicht verwendbar: Sie hat mehr als {max} Paar.', other: 'Diese Datei ist nicht verwendbar: Sie hat mehr als {max} Paare.' },
+    {
+      one: 'Diese Datei ist nicht verwendbar: Paar {n} von "{ctx}" hat einen Text, der länger als {max} Zeichen ist.',
+      other: 'Diese Datei ist nicht verwendbar: Paar {n} von "{ctx}" hat einen Text, der länger als {max} Zeichen ist.',
+    },
+  ];
+  const c = checked({ packWords: limits.map((e, i) => [e.english, de[i]]) }, tplOf(limits));
+  expect(c.broken).toEqual([]);
+  expect(Object.keys(c.table)).toHaveLength(3);
+  under({ tag: 'de', table: c.table as never, formatLocale: 'de-DE' }, () => {
+    expect(refusalWords({ code: 'contexts' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 600 Kontexte.');
+    expect(refusalWords({ code: 'pairs' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 10.000 Paare.');
+    expect(refusalWords({ code: 'long', ctx: 'cache', n: 2 })).toBe('Diese Datei ist nicht verwendbar: Paar 2 von "cache" hat einen Text, der länger als 4.000 Zeichen ist.');
+  });
+  // A translator who types the number in place of {max} is told to keep it, whatever way the number is written.
+  const typed = checked({ packWords: [[limits[1].english, { one: de[1].one, other: 'Diese Datei ist nicht verwendbar: Sie hat mehr als 10000 Paare.' }]] }, tplOf(limits));
+  expect(typed.broken.some((b) => b.rule === 'placeholders' && b.token === '{max}'), JSON.stringify(typed.broken)).toBe(true);
 });
 
 test('api_012 a surrogate that is not half of a pair is a forbidden code point', () => {
