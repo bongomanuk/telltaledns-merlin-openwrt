@@ -148,6 +148,23 @@ After an English edit that keeps the meaning, a maintainer runs `node scripts/i1
 <context> --from "<old>" --to "<new>"`; otherwise the old pair is reported as left over and English
 is shown until the language's owner confirms the new text.
 
+**Without a checkout: test a pack in the browser** (API-013, ADR-190). For a translator without Node:
+Settings → Account (Advanced view) → **Test a language pack**. The template for a tag is byte for byte
+what `node scripts/i18n.mjs sync <tag>` writes for a new language at that build (`prebuild` writes it as
+`assets/locales/template-<sha8>.json`, with a budget line of its own, 64 KiB), with notes for translators
+(`<tag>-notes.txt`). The card checks a translated file with the build's own rules (`src/lib/i18n/pack.ts`:
+the parser of `pairs.ts`, the shipping function of `shipping.ts`, the whole agreement rule of `agree.ts`)
+and lists what breaks a rule (shown in English), what is missing and what is left over; **Use this
+pack…** shows the UI in that file's language in that browser only, under an English banner, until
+another build of the web UI or the server, 7 days, or **Remove**; **Download for a pull request** writes
+the file in the repository's exact form. Only CI judges the manifest entry and owner, back-translations of
+sensitive messages, English changed since that build, and the file as committed. The banner, the
+confirmation, the notices and the card's Use, Download for a pull request and Remove are English on
+purpose: they hold no message, under `translate="no"` and `lang="en"`. The pack's code
+(`src/lib/devpack/`) loads only when the card is opened or a pack is in use, and a page load whose pack
+keeps the table checked for that build and file fetches neither the template nor the checking code.
+Developers with a checkout keep `sync`, a manifest entry with `offered: false` and `?lang=<tag>`.
+
 **Exemptions.** A translation that adds a time, a ratio, a date pattern, a list joined by slashes,
 a grouped number or a price (`24:00`, `16:9`, `TT/MM/JJJJ`, `1.000.000.000`, `$5`) fails as an added
 structural token, naming it. A maintainer may then allow that token for that message in
