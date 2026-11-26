@@ -133,7 +133,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p telltale
         working-directory: .
-      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v7
         if: failure()
@@ -163,7 +163,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p telltale
         working-directory: .
-      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npx playwright install --with-deps chromium
       - name: Wait for Authentik to apply its blueprint
         run: |
           # Authentik's startup blueprint run can die on a Postgres deadlock and isn't retried
