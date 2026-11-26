@@ -189,13 +189,18 @@ export function skeleton(entries: Iterable<Entry>, categories: readonly string[]
 }
 
 /** `sync`: the skeleton, with each translation of `existing` whose identity (`key`) is still there
- * carried over; every other pair of `existing` moved to `~leftover` (or dropped with `prune`). */
+ * carried over (the first pair of an identity, as the build ships it; a later one is set aside); every
+ * other pair of `existing` moved to `~leftover` (or dropped with `prune`). */
 export function merge(existing: Catalog, skel: Catalog, key: (ctx: string, english: Pair[0], note?: string) => string, { prune = false } = {}): Catalog {
   const have = new Map<string, Pair>();
   const left: Pair[] = [...(Object.hasOwn(existing, LEFTOVER) ? existing[LEFTOVER] : [])];
   for (const [ctx, pairs] of Object.entries(existing)) {
     if (ctx === LEFTOVER) continue;
-    for (const p of pairs) have.set(key(ctx, p[0], noteOf(p) || undefined), p);
+    for (const p of pairs) {
+      const k = key(ctx, p[0], noteOf(p) || undefined);
+      if (have.has(k)) left.push(p);
+      else have.set(k, p);
+    }
   }
   const used = new Set<string>();
   const out: Catalog = Object.create(null);

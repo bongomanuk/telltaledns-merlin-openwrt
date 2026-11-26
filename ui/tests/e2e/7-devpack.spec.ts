@@ -269,6 +269,26 @@ test('api_013 download for a pull request is what sync writes for that file', ()
   expect(Object.values(pr).flat().length).toBe(tpl.entries.size + 2);
 });
 
+test('api_013 download for a pull request keeps the first of two pairs with one identity', () => {
+  // As the build ships it and the card says ("only the first is used"): the first pair of an identity is kept, and a
+  // later one is set aside under ~leftover, never dropped. `sync` does the same (review part B of T29.3, finding 1).
+  const { dir, tpl } = uiTemplate();
+  const fr: Tag = { tag: 'fr', language: 'fr', dir: 'ltr', categories: tpl.plurals.get('fr') ?? [] };
+  // A translator pasted the template's empty pair under their own line.
+  const text = JSON.stringify({ settings: [['Settings', 'Réglages'], ['Settings', '']] }, null, 2);
+  put(dir, 'src/locales/fr.json', text);
+  const fromScript = synced(dir, 'fr');
+  expect(forPullRequest(parse(text) as Catalog, tpl, fr.categories)).toBe(fromScript);
+  const pr = parse(fromScript) as Catalog;
+  expect(pr.settings).toContainEqual(['Settings', 'Réglages']);
+  expect(pr.settings).not.toContainEqual(['Settings', '']);
+  expect(pr['~leftover']).toEqual([['Settings', '']]);
+  // The check ships the same first pair, and names the second.
+  const c = checkPack(text, false, tpl, fr);
+  expect(c.checked?.table[hash('settings', 'Settings')]).toBe('Réglages');
+  expect(c.checked?.broken).toContainEqual(expect.objectContaining({ ctx: 'settings', english: 'Settings', rule: 'twice' }));
+});
+
 // ---------------------------------------------------------------------------------------------
 // API-013: checking a pack
 
