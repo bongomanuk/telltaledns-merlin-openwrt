@@ -52,6 +52,7 @@
     <li><b>Pack:</b> that file while you test it in a browser.</li>
     <li><b>Fingerprint:</b> the first 12 characters of the file's SHA-256 hash, which the banner shows to tell one file from another.</li>
     <li><b>Pull request:</b> GitHub's way of proposing a change to the project.</li>
+    <li><b>Manifest:</b> <code>ui/src/locales/manifest.json</code>, the list of languages with their owners and whether each is offered.</li>
   </ul>
   <div class="callout"><p><b>Where this stands.</b> No language ships with TelltaleDNS yet, and Settings has no language setting yet (ADR-189 puts it under Settings, Account, shown only once a language is offered). What exists today: the card <b class="ui">Test a language pack</b>, the repository tool, and <code>?lang=en-XA</code>, a pseudo-language for finding text that cannot be translated yet. A pack you try is yours alone, in your browser.</p></div>
 </section>
@@ -140,13 +141,13 @@ node scripts/i18n.mjs sync de</code></pre>
     <li class="step"><b>A note and a sensitive message.</b> In the notes above, <code>Holds</code> has a note and is sensitive. Translate it from the note, not from the English alone. If you change its translation, the pull request needs a back-translation. When the check can compare your file with the one before it, it reminds you:
 <pre><code>REPORT sensitive src/locales/qaa.json: context "cache": a sensitive message changed: its pull request carries a back-translation
     "Holds"</code></pre></li>
-    <li class="step"><b>An empty translation.</b> <code>["Holds",""]</code> is not an error. The card lists it under <b class="ui">Not translated (1)</b> and the English shows. Leave a pair empty rather than guess.</li>
+    <li class="step"><b>An empty translation.</b> <code>["Holds",""]</code> is not an error. The card lists it under <b class="ui">Not translated</b> and the English shows. Leave a pair empty rather than guess.</li>
   </ol>
 </section>
 
 <section id="check">
   <h2>Check it</h2>
-  <p>There are two checks and they apply the same rule. The card runs it in your browser. In the repository, <code>npm run check:i18n</code> (in <code>ui/</code>) runs it for every language file, and so does the project's CI on your pull request. <b>FAIL</b> means the author of the file can fix it. <b>REPORT</b> means a person reads it. A missing translation is a report, never a failure.</p>
+  <p>There are two checks and they apply the same rule. The card runs it in your browser. In the repository, <code>npm run check:i18n</code> (in <code>ui/</code>) runs it for every language file, and so does CI, the project's automatic check of every pull request. <b>FAIL</b> means the author of the file can fix it. <b>REPORT</b> means a person reads it. A missing translation is a report, never a failure.</p>
   <h3>On the card</h3>
   <ol class="steps">
     <li class="step">Under <b class="ui">2. Check your file</b>, choose <b class="ui">Choose your file (or drop it on the button)</b>.</li>
@@ -264,7 +265,7 @@ i18n: 2 failure(s)</code></pre>
   <h3>How a language is offered, and taken off</h3>
   <ul>
     <li><b>A new language starts with <code>"offered": false</code></b>. A maintainer sets it to <code>true</code> at release time. Only then does the web UI use it for people whose browser asks for it. The setting that lets a person choose a language is not built yet.</li>
-    <li><b>The 80% rule</b> (ADR-189): if a language covers under 80% of the text of the previous release at two releases in a row, it stops being offered until it catches up. It stays reachable with <code>?lang=</code>. No release step applies this yet, and there is no language to judge.</li>
+    <li><b>The 80% rule</b> (ADR-189): if a language covers under 80% of the previous release's text at two releases in a row, it stops being offered until it catches up. It stays reachable with <code>?lang=</code>. No release step applies this yet, and there is no language to judge.</li>
     <li><b>Right to left</b> is not offered before the layout is ready: the check fails <code>offered: true</code> for such a language.</li>
   </ul>
 </section>
@@ -349,7 +350,7 @@ i18n: 2 failure(s)</code></pre>
   </ul>
 
   <h3>The check refuses a time, a price or a number in words</h3>
-  <p>A translation that adds a time, a ratio, a date pattern, a list joined by slashes, a grouped number or a price (<code>24:00</code>, <code>16:9</code>, <code>1.000.000.000</code>, <code>$5</code>) fails as an added address, port, path or setting. A number written in words fails the number rule. If your language needs either, say so in the pull request. A maintainer may allow that message in <code>ui/src/locales/notes.json</code>, with a reason.</p>
+  <p>These fail as an added address, port, path or setting: a time, a ratio, a date pattern, a list joined by slashes, a grouped number or a price (<code>24:00</code>, <code>16:9</code>, <code>1.000.000.000</code>, <code>$5</code>). A number written in words fails the number rule. If your language needs either, say so in the pull request. A maintainer may allow that message in <code>ui/src/locales/notes.json</code>, with a reason.</p>
 
   <div class="guide-nav">
     <a class="btn" href="dev-svelte.html">← Svelte pitfalls</a>
