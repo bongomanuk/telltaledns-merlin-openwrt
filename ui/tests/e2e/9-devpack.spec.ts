@@ -392,7 +392,9 @@ test('api_013 a session that ends takes the pack off the page', async ({ browser
     (u) => u.pathname.startsWith('/api/v1/') && !u.pathname.startsWith('/api/v1/auth/'),
     (r) => r.fulfill({ status: 401, json: { type: 'about:blank', title: 'Unauthorized', status: 401, code: 'unauthorized', detail: 'the session is gone' } }),
   );
-  await s.page.evaluate(() => (location.hash = '#/queries'));
+  // The next request the page makes finds the session gone (one already running may: then the page reloads
+  // before this navigation is done).
+  await Promise.all([s.page.waitForEvent('load'), s.page.evaluate(() => (location.hash = '#/queries')).catch(() => undefined)]);
   await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible({ timeout: 30_000 });
   await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(banner(s.page)).toContainText('is paused on this page');
