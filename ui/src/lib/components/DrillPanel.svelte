@@ -207,7 +207,7 @@
         </div>
       {/if}
       <p class="small muted">
-        {#each report.nodes as n, i (n.node)}{i ? ' · ' : ''}{t('{node}: {queries} queries from {devices} devices', { node: n.node, queries: num(n.queries), devices: num(n.devices) })}{/each}
+        {#each report.nodes as n, i (i)}{i ? ' · ' : ''}{t('{node}: {queries} queries from {devices} devices', { node: n.node, queries: num(n.queries), devices: num(n.devices) })}{/each}
       </p>
     </div>
   </Drawer>

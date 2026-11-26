@@ -493,3 +493,108 @@ test('api_005 obs_035 the wall map: two tiles whose names read alike, each in it
   const places = await tiles.evaluateAll((els) => els.map((e) => `${(e as HTMLElement).style.left},${(e as HTMLElement).style.top}`));
   expect(new Set(places).size).toBe(3);
 });
+
+// ---- The upstreams' second opinions (REQ: OBS-019): with every answer checked, a dual-stack device's A and AAAA questions for
+// one name can disagree in the same millisecond, and one question asked twice can disagree twice.
+
+const disagreement = (name: string, qtype: string, o: Record<string, unknown> = {}) => ({
+  at: '2026-11-24T12:00:00.123Z', name, qtype, result: 'filtered', upstream: 'family-dns', answer: 'NXDOMAIN', reference: 'quad9', referenceAnswer: 'NOERROR 192.0.2.7', ...o,
+});
+const quality = (upstream: string) => ({
+  upstream, same: 40, differentAddresses: 0, differentRcode: 0, filtered: 2, unanswered: 0, dnssecSecure: 0, dnssecInsecure: 0, dnssecBogus: 0, dnssecIndeterminate: 0, ede: [],
+});
+const checksOf = (node: string | null, recent: unknown[]) => ({ node, enabled: true, sampleEvery: 1, reference: 'quad9', upstreams: [quality('family-dns')], recent });
+
+test('api_005 obs_019 the upstreams: disagreements at the same time about one name', async ({ page }) => {
+  const recent = [disagreement('dual.example', 'A'), disagreement('dual.example', 'AAAA'), disagreement('twice.example', 'A'), disagreement('twice.example', 'A')];
+  await page.route('**/api/v1/analytics/upstream-checks', (r) => r.fulfill({ json: { items: [checksOf(null, recent)] } }));
+  await signIn(page);
+  await page.goto('/#/upstreams');
+  await expect(page.locator('ul.disagreements li span.mono')).toHaveText(['dual.example', 'dual.example', 'twice.example', 'twice.example']);
+  await expect(page.locator('ul.disagreements li')).toHaveText([/dual\.example A ·/, /dual\.example AAAA ·/, /twice\.example A ·/, /twice\.example A ·/]);
+});
+
+// ---- Nodes by the name the server shows for them: a pod's name, else its site, else its ID. Two machines of one site (no pods)
+// show the same name.
+
+test('api_005 obs_019 the upstreams: two nodes that show one name', async ({ page }) => {
+  await page.route('**/api/v1/analytics/upstream-checks', (r) =>
+    r.fulfill({ json: { items: [checksOf('home', [disagreement('one.example', 'A')]), checksOf('home', [disagreement('two.example', 'A')])] } }),
+  );
+  await signIn(page);
+  await page.goto('/#/upstreams');
+  await expect(page.getByTestId('upstream-quality').locator('tbody tr td:first-child')).toHaveText(['home', 'home']);
+  await expect(page.locator('ul.disagreements li span.mono')).toHaveText(['one.example', 'two.example']);
+});
+
+test('api_005 dns_006 the cache: two nodes that show one name, each card with its own settings', async ({ page }) => {
+  const settings = {
+    maxBytes: 64e6, maxEntries: null, maxTtlSeconds: 86_400, minTtlSeconds: 30, negativeTtlMaxSeconds: 3600, persist: false, prefetch: false, prefetchMinHits: 3, prefetchThresholdPercent: 10, serveStale: false,
+    servfailTtlSeconds: 60, staleAnswerWaitMs: null, staleMaxAgeSeconds: 86_400,
+  };
+  const stat = (entries: number) => ({ answeredPercent: 80, bytes: 1e6, entries, evictions: 0, hitPercent: 70, hits: 900, inserts: 500, misses: 100, node: 'home', prefetches: 0, staleServed: 0, uncacheable: 0, settings, sizing: null, warmStart: null, history: [] });
+  const makeup = (positive: number) => ({ nodata: 0, nxdomain: 0, positive, servfail: 0, stale: 0, validated: 0 });
+  await page.route('**/api/v1/cache/stats', (r) => r.fulfill({ json: { items: [stat(100), stat(200)] } }));
+  await page.route('**/api/v1/cache/entries?**', (r) => r.fulfill({ json: ITEMS([{ node: 'home', makeup: makeup(3), entries: [] }, { node: 'home', makeup: makeup(5), entries: [] }]) }));
+  await signIn(page);
+  await page.goto('/#/cache');
+  const cards = page.getByTestId('cache-node');
+  await expect(cards.locator('h2')).toHaveText(['home', 'home']);
+  await expect(cards.nth(1)).toContainText('200 answers');
+  await expect(page.getByTestId('cache-makeup').locator('tbody tr td:nth-child(2)')).toHaveText(['3 answers', '5 answers']);
+  await expect(page.locator('.head-row select[aria-label="Node"] option')).toHaveText(['every node', 'home', 'home']);
+  await expect(page.getByTestId('cache-card').locator('select[aria-label="Node"] option')).toHaveText(['every node', 'home', 'home']);
+  // The second card's settings opened: that card's only.
+  await cards.nth(1).locator('details summary').click();
+  await expect(cards.nth(1).locator('details')).toHaveAttribute('open', '');
+  await expect(cards.nth(0).locator('details')).not.toHaveAttribute('open', '');
+});
+
+test('api_005 ops_010 alerts: two nodes in maintenance that show one name', async ({ page }) => {
+  const maintenance = (reason: string) => ({ by: 'admin', node: 'home', reason, secondsLeft: 600, since: new Date(NOW * 1000).toISOString(), until: new Date((NOW + 600) * 1000).toISOString() });
+  await page.route(/\/api\/v1\/alerts$/, (r) => r.fulfill({ json: { evaluating: true, firing: [], maintenance: [maintenance('SD card swap'), maintenance('new power supply')], deliveries: [] } }));
+  await signIn(page);
+  await page.goto('/#/alerts');
+  await expect(page.getByTestId('alerts-maintenance')).toHaveCount(2);
+  await expect(page.getByTestId('alerts-maintenance').first()).toContainText('SD card swap');
+  await expect(page.getByTestId('alerts-maintenance').last()).toContainText('new power supply');
+});
+
+test("api_005 clu_014 a drill's report: two nodes that show one name", async ({ page }) => {
+  const at = new Date(NOW * 1000).toISOString();
+  const member = (nodeId: string, o: Record<string, unknown>) => ({
+    behindSeconds: null, cacheEntries: 1200, cacheHitPercent: 61.5, certExpiresAt: null, configLag: 0, configSeq: 42, configSource: 'file', connected: true, eligible: true, ephemeral: false, host: null,
+    kubeNode: null, lastSeenSecondsAgo: 1, link: 'direct', maintenance: null, nodeId, pod: null, protocol: 3, qps: 4.2, querySharePercent: 50, ready: true, restarts: 0, rttMs: 1.4, servfailPercent: 0.2,
+    site: 'home', sourceCommit: null, startedAt: at, thisNode: false, up: true, upstreamP90Ms: 21, uptimeSeconds: 86_400, version: '0.9.0', witness: false, ...o,
+  });
+  const cluster = {
+    authority: null, checks: [], clusterId: 'c-home', conflicts: [], enabled: true, events: [], healthy: true, host: null, name: 'home', newestConfigSeq: 42, rollout: null, source: null, thisNode: 'n-aaaa1111',
+    failover: { active: true, leaseHeld: true, leaseSecondsLeft: 8, mode: 'automatic', reachableVoters: 2, votedEpoch: 4, votedFor: 'n-aaaa1111', voters: 2 },
+    nodes: [member('n-aaaa1111', { role: 'primary', thisNode: true, rttMs: null }), member('n-bbbb2222', { role: 'secondary' })],
+  };
+  const drill = { by: 'admin', coveragePercent: 80, elsewhere: 0, ended: at, followed: 1, id: 'd-1', medianFailoverMs: 2300, missingNodes: [], node: 'home', p90FailoverMs: 4100, quiet: 0, reason: 'monthly', since: at, status: 'complete', stuck: 0, targets: 'everyone', until: at, viaBalancer: false };
+  const report = { ...drill, baseline: 6, overflow: 0, nodes: [{ node: 'home', queries: 3, devices: 1 }, { node: 'home', queries: 5, devices: 2 }], devices: [] };
+  await page.route('**/api/v1/cluster', (r) => r.fulfill({ json: cluster }));
+  await page.route('**/api/v1/drills?**', (r) => r.fulfill({ json: { items: [drill], missingNodes: [] } }));
+  await page.route('**/api/v1/drills/d-1', (r) => r.fulfill({ json: report }));
+  await signIn(page);
+  await page.goto('/#/cluster?tab=drills');
+  await page.getByTestId('drill-open').click();
+  const counts = page.getByTestId('drill-report').locator('p.small.muted').last();
+  await expect(counts).toContainText('home: 3 queries from 1 devices');
+  await expect(counts).toContainText('home: 5 queries from 2 devices');
+});
+
+test('api_005 ops_011 a cluster support package: two nodes that show one name', async ({ page }) => {
+  const nodes = [
+    { node: 'home', status: 'ok', files: 12, bytes: 4096, note: null },
+    { node: 'home', status: 'missing', files: 0, bytes: 0, note: 'not connected' },
+  ];
+  await page.route('**/api/v1/system/support-package?**', (r) => r.fulfill({ json: { created: new Date(NOW * 1000).toISOString(), level: 'strict', redactions: {}, notes: [], nodes } }));
+  await signIn(page);
+  await page.goto('/#/settings?tab=system');
+  await page.getByTestId('support-preview').click();
+  const rows = page.getByTestId('support-node');
+  await expect(rows.locator('td:first-child')).toHaveText(['home', 'home']);
+  await expect(rows.last()).toContainText('not connected');
+});

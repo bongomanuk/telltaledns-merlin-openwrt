@@ -94,7 +94,7 @@
         </table>
       </div>
     {/if}
-    {#each status?.maintenance ?? [] as m (m.node)}
+    {#each status?.maintenance ?? [] as m, i (i)}
       <!-- REQ: OPS-010 — alerts about a node in maintenance are paused. -->
       <p class="small muted" data-testid="alerts-maintenance">
         <T ctx="alerts" msg={'Alerts for <strong>{node}</strong> are paused during maintenance until {until} ({reason}).'} params={{ node: m.node, until: dateTime(Date.parse(m.until) / 1000), reason: m.reason }} {strong} />

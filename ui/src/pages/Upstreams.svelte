@@ -179,7 +179,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each checks as c (c.node ?? '')}
+            {#each checks as c, i (i)}
               {#each c.upstreams as q (q.upstream)}
                 <tr>
                   {#if multiNode}<td translate="no">{c.node ?? ''}</td>{/if}
@@ -210,10 +210,10 @@
         <T ctx="upstreams" msg={'Second opinions are off. With <samplekey/>, one forwarded question in 1,000 is asked again of another upstream and the answers compared (that upstream sees those names).'} {samplekey} />
       </p>
     {/if}
-    {#each checks.filter((c) => c.recent.length) as c (c.node ?? '')}
+    {#each checks.filter((c) => c.recent.length) as c, i (i)}
       <h3 class="small">{t('Latest disagreements')}{#if multiNode}{t('on {node}', { node: c.node })}{/if}</h3>
       <ul class="disagreements small">
-        {#each c.recent.slice(0, 10) as d (`${d.at}|${d.name}`)}
+        {#each c.recent.slice(0, 10) as d, j (j)}
           <li>
             <span translate="no"><span class="mono">{d.name}</span> {d.qtype} · <strong>{d.upstream}</strong>: {d.answer} · <strong>{d.reference}</strong>: {d.referenceAnswer}</span>
             <span class="chip" class:bad={d.result === 'filtered'}>{own(resultLabel, d.result) ?? d.result}</span>
