@@ -63,7 +63,8 @@ export function brokenWords(b: Broken): string {
     case 'twice':
       return t('The same English and note are in this context twice: only the first is used.');
     case 'categories':
-      return t('This language uses {want}; this entry has {got}.', { want: (b.want ?? []).join(', '), got: (b.got ?? []).join(', ') });
+      // The file's own keys, with their forbidden code points shown as markers (as every token of the file).
+      return t('This language uses {want}; this entry has {got}.', { want: (b.want ?? []).join(', '), got: markers((b.got ?? []).join(', ')) });
     default:
       return t('It breaks the rule "{rule}" of the check.', { rule: b.rule });
   }

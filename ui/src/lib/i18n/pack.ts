@@ -130,8 +130,14 @@ export type Checked = {
 
 const code = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const noteOf = (p: Pair) => (typeof p[2] === 'string' && p[2] !== '' ? p[2] : undefined);
+// A string over the limit anywhere in a pair: its English, its translation, its note, a plural form or a
+// plural form's key.
 const longer = (x: unknown): boolean =>
-  typeof x === 'string' ? x.length > MAX_CHARS : Array.isArray(x) ? x.some(longer) : !!x && typeof x === 'object' && Object.values(x).some(longer);
+  typeof x === 'string'
+    ? x.length > MAX_CHARS
+    : Array.isArray(x)
+      ? x.some(longer)
+      : !!x && typeof x === 'object' && (Object.keys(x).some(longer) || Object.values(x).some(longer));
 function where(text: string, at: number) {
   let line = 1;
   let start = 0;

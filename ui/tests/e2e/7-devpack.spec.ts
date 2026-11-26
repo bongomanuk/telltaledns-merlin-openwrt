@@ -324,6 +324,17 @@ test('api_013 a pack is refused whole for its structure', () => {
   expect(bom.checked?.canonical).toBe(false);
 });
 
+test('api_013 pack text in a reason line is marked and limited', () => {
+  // A plural form's key is the file's text too (review part A of T29.3, nit 10): longer than a string may be, the
+  // file is refused whole, as for a value; a direction override in it shows as a marker in the reason line.
+  const plural = ['{n} answer', '{n} answers'];
+  expect(refusal(JSON.stringify({ cache: [[plural, { one: 'a', ['o'.repeat(4001)]: 'b', other: 'c' }]] }))).toMatchObject({ code: 'long', ctx: 'cache', n: 1 });
+  expect(refusal(JSON.stringify({ cache: [[plural, { one: 'a', ['o'.repeat(4000)]: 'b', other: 'c' }]] }))).toBeUndefined();
+  const words = brokenWords({ ctx: 'cache', english: plural as [string, string], rule: 'categories', got: ['one', '‮other'], want: ['one', 'other'] });
+  expect(words).toContain('one, ⟨U+202E⟩other');
+  expect(words).not.toContain('‮');
+});
+
 test('api_013 a pack entry that breaks the agreement rule is dropped and named in plain words', () => {
   const c = checked({
     cache: [
