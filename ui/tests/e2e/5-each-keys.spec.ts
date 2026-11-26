@@ -24,18 +24,24 @@ async function signIn(page: Page) {
 const NOW = Math.floor(Date.now() / 1000);
 
 // ---- Change markers (REQ: OBS-033). Past 40 in a chart's window they share a button per 8-px column, drawn at the pixel of
-// its first marker, so two neighbouring columns can be drawn at one pixel; the charts key their buttons by the column.
+// its first marker; two neighbouring columns drawn at one pixel are one button. The charts key their buttons by the column.
 
 const change = (t: number, seq: number) => ({ tUnixMs: Math.round(t * 1000), kind: 'config.applied', summary: `change ${seq}`, seq, node: null, nodes: [], actor: null, href: null });
 /** The left edge (px) of every marker button, chart by chart. */
 const lefts = (page: Page) =>
   page.getByTestId('chart-markers').evaluateAll((layers) => layers.map((l) => [...l.querySelectorAll<HTMLElement>('button.mk')].map((b) => parseFloat(b.style.left))));
+/** How many markers every chart's buttons stand for (a button's count badge, or one). */
+const held = (page: Page) =>
+  page.getByTestId('chart-markers').evaluateAll((layers) =>
+    layers.map((l) => [...l.querySelectorAll<HTMLElement>('button.mk')].reduce((n, b) => n + Number(b.querySelector('.mk-count')?.textContent?.replace('×', '') || 1), 0)),
+  );
 
 /**
  * Two markers at `a` and `b` (Unix seconds) show where the page's charts draw a time. The page is then loaded with markers in
  * pairs half a pixel apart, every 16.3 px across: the pairs' place against the 8-px columns moves by 0.3 px from one pair to
  * the next, so some pair has one marker in [8k + 3.5, 8k + 4) and the other in [8k + 4, 8k + 4.5), two columns drawn at one
- * pixel. Every chart (`charts` of them) must draw its buttons, some at one pixel, with no page error.
+ * pixel. Every chart (`charts` of them) must draw its buttons at different pixels, standing for every marker, with no page
+ * error.
  */
 async function straddle(page: Page, path: string, charts: number, a: number, b: number) {
   // Two loads of a page with charts after the sign-in, each waited for.
@@ -55,8 +61,9 @@ async function straddle(page: Page, path: string, charts: number, a: number, b: 
   await page.reload();
   const shared = (l: number[]) => l.length - new Set(l).size;
   await expect
-    .poll(async () => (await lefts(page)).map((l) => (l.length > 2 && shared(l) > 0 ? 'drawn, two at one pixel' : `${l.length} buttons, ${shared(l)} at a shared pixel`)), { timeout: 20_000 })
-    .toEqual(Array(charts).fill('drawn, two at one pixel'));
+    .poll(async () => (await lefts(page)).map((l) => (l.length > 2 && shared(l) === 0 ? 'drawn, one button a pixel' : `${l.length} buttons, ${shared(l)} at a shared pixel`)), { timeout: 20_000 })
+    .toEqual(Array(charts).fill('drawn, one button a pixel'));
+  expect(await held(page), 'every marker on a button').toEqual(Array(charts).fill(times.length));
 }
 
 test('api_005 obs_033 markers that share a pixel in two columns: the cache page and its two charts', async ({ page }) => {

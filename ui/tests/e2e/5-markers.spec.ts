@@ -55,33 +55,43 @@ test('obs_033 it keeps the order and the objects it was given', () => {
 });
 
 // REQ: OBS-033, API-005 — the buttons a chart draws for its markers (`markerColumns`): past 40 in view, one per 8-px column,
-// drawn at the pixel of the column's first marker. A chart keys its buttons by the column (`k`), which is unique; two
-// neighbouring columns can be drawn at one pixel.
+// drawn at the pixel of the column's first marker; two neighbouring columns that would be drawn at one pixel are one button,
+// with both columns' markers. A chart keys its buttons by `k`, which is unique.
 const id = (x: number) => x;
 /** Markers far apart, one column each, to pass `MAX_SINGLE`. */
 const apart = (n: number) => Array.from({ length: n }, (_, i) => 100 + 8 * i);
 
-test('api_005 obs_033 two neighbouring columns drawn at one pixel keep two keys', () => {
+test('api_005 obs_033 two neighbouring columns drawn at one pixel are one button', () => {
   const cols = markerColumns([11.6, 12.1, ...apart(MAX_SINGLE - 1)], id);
-  const [a, b] = cols;
-  expect([a.marks, b.marks]).toEqual([[11.6], [12.1]]);
-  expect([a.x, b.x]).toEqual([12, 12]);
-  expect([a.k, b.k]).toEqual([1, 2]);
+  // 11.6 is column 1 and 12.1 column 2, both drawn at 12: one button, the left column's, with both markers.
+  expect(cols[0]).toEqual({ k: 1, x: 12, marks: [11.6, 12.1] });
+  expect(cols).toHaveLength(MAX_SINGLE);
+  expect(new Set(cols.map((c) => c.x)).size).toBe(cols.length);
   expect(new Set(cols.map((c) => c.k)).size).toBe(cols.length);
   // Up to 40, a column is one pixel: 11.6 and 12.1 are drawn as one button.
   expect(markerColumns([11.6, 12.1], id)).toEqual([{ k: 12, x: 12, marks: [11.6, 12.1] }]);
 });
 
-/** The buttons as the charts' placement draws them, written out on its own: where each is and what it holds. */
-function drawn(xs: number[]): { x: number; marks: number[] }[] {
+/** Each column its own button: the placement the merge of `drawn` starts from (markers by their index). */
+function base(xs: number[]): { x: number; marks: number[] }[] {
   const col = xs.length > 40 ? 8 : 1;
   const cols = new Map<number, { x: number; marks: number[] }>();
-  for (const x of xs) {
+  xs.forEach((x, i) => {
     const c = cols.get(Math.round(x / col));
-    if (c) c.marks.push(x);
-    else cols.set(Math.round(x / col), { x: Math.round(x), marks: [x] });
-  }
+    if (c) c.marks.push(i);
+    else cols.set(Math.round(x / col), { x: Math.round(x), marks: [i] });
+  });
   return [...cols.values()].sort((a, b) => a.x - b.x);
+}
+/** The buttons the charts draw, written out on its own: `base`, with buttons drawn at one pixel made one, markers in order. */
+function drawn(xs: number[]): { x: number; marks: number[] }[] {
+  const out: { x: number; marks: number[] }[] = [];
+  for (const b of base(xs)) {
+    const last = out[out.length - 1];
+    if (last && last.x === b.x) last.marks = [...last.marks, ...b.marks].sort((p, q) => p - q);
+    else out.push({ x: b.x, marks: [...b.marks] });
+  }
+  return out;
 }
 /** A small seeded generator (mulberry32): the same sets on every run. */
 function random(seed: number) {
@@ -95,21 +105,33 @@ function random(seed: number) {
   };
 }
 
-test('api_005 obs_033 marker columns over a thousand random sets: unique keys, the same buttons and markers', () => {
+test('api_005 obs_033 marker columns over three thousand random sets: unique keys, one button a pixel, the same buttons where none met', () => {
   const rnd = random(0x0e4c);
-  let atOnePixel = 0;
-  for (let run = 0; run < 1000; run++) {
-    const n = 1 + Math.floor(rnd() * 120);
-    // Every other set crowds its markers round the 8-px edges (8j + 3.5 to 8j + 4.5), where two columns meet.
-    const xs = Array.from({ length: n }, () => (run % 2 ? rnd() * 1200 : 8 * Math.floor(rnd() * 150) + 3.5 + rnd()));
+  let met = 0;
+  for (let run = 0; run < 3000; run++) {
+    const n = 1 + Math.floor(rnd() * 160);
+    // Three kinds of set: spread over the plot; crowded round the 8-px edges (8j + 3.5 to 8j + 4.5), where two columns
+    // meet; and partly past the plot's end, held at its last pixel as the charts hold them (Chart, SmoothChart).
+    const width = 300 + Math.floor(rnd() * 1300);
+    const kind = run % 3;
+    const raw = Array.from({ length: n }, () => (kind === 0 ? rnd() * width : kind === 1 ? 8 * Math.floor(rnd() * (width / 8)) + 3.5 + rnd() : rnd() * width * 1.3));
     // Newest first, as the charts pass them: the right-most first.
-    xs.sort((a, b) => b - a);
-    const cols = markerColumns(xs, id);
+    raw.sort((a, b) => b - a);
+    const xs = raw.map((x) => Math.min(x, width - 1));
+    const cols = markerColumns(
+      xs.map((_, i) => i),
+      (i) => xs[i],
+    );
     expect(new Set(cols.map((c) => c.k)).size, `set ${run}: one key per button`).toBe(cols.length);
-    expect(cols.map(({ x, marks }) => ({ x, marks })), `set ${run}: the same buttons`).toEqual(drawn(xs));
-    expect(cols.flatMap((c) => c.marks).sort((a, b) => a - b), `set ${run}: every marker once`).toEqual([...xs].sort((a, b) => a - b));
-    if (new Set(cols.map((c) => c.x)).size < cols.length) atOnePixel++;
+    expect(new Set(cols.map((c) => c.x)).size, `set ${run}: one button per pixel`).toBe(cols.length);
+    expect(cols.flatMap((c) => c.marks).sort((a, b) => a - b), `set ${run}: every marker once`).toEqual(xs.map((_, i) => i));
+    expect(cols.map(({ x, marks }) => ({ x, marks })), `set ${run}: the buttons`).toEqual(drawn(xs));
+    // Where no two columns met at one pixel, the buttons are the columns, one each, exactly.
+    const columns = base(xs);
+    if (new Set(columns.map((c) => c.x)).size === columns.length) expect(cols.map(({ x, marks }) => ({ x, marks })), `set ${run}: the columns`).toEqual(columns);
+    else met++;
   }
-  // The case the keys are for came up, often: two buttons drawn at one pixel.
-  expect(atOnePixel).toBeGreaterThan(100);
+  // The case came up, often.
+  console.log(`EACHKEYS_MARKERS sets=3000 columns-met=${met} identical-to-the-columns=${3000 - met}`);
+  expect(met).toBeGreaterThan(300);
 });

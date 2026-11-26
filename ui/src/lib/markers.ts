@@ -38,19 +38,29 @@ export interface MarkerColumn<T> {
 
 /**
  * REQ: OBS-033 — a chart's markers as buttons: one per pixel column, or past `MAX_SINGLE` one per 8 px; `xOf` is a marker's
- * position across the plot in CSS pixels. Sorted by position. A button is drawn at its first marker (the caller passes them
- * newest first), so two neighbouring 8-px columns can be drawn at the same pixel (11.6 and 12.1 are columns 1 and 2, both
- * drawn at 12): the column, not the pixel, tells two buttons apart.
+ * position across the plot in CSS pixels, 0 or more (a chart draws markers from its start). Sorted by position. A button is
+ * drawn at its first marker (the caller passes them newest first), so two neighbouring 8-px columns can come to the same pixel
+ * (11.6 and 12.1 are columns 1 and 2, both at 12): they are one button, the left column's, with the markers of both in the
+ * order given, and its count says how many.
  */
 export function markerColumns<T>(marks: T[], xOf: (m: T) => number): MarkerColumn<T>[] {
   const col = marks.length > MAX_SINGLE ? 8 : 1;
-  const cols = new Map<number, MarkerColumn<T>>();
-  for (const m of marks) {
+  // Each column with the places of its markers in `marks`.
+  const cols = new Map<number, { c: number; x: number; at: number[] }>();
+  marks.forEach((m, i) => {
     const x = xOf(m);
-    const k = Math.round(x / col);
-    const c = cols.get(k);
-    if (c) c.marks.push(m);
-    else cols.set(k, { k, x: Math.round(x), marks: [m] });
+    const c = Math.round(x / col);
+    const e = cols.get(c);
+    if (e) e.at.push(i);
+    else cols.set(c, { c, x: Math.round(x), at: [i] });
+  });
+  const out: { c: number; x: number; at: number[] }[] = [];
+  for (const b of [...cols.values()].sort((p, q) => p.x - q.x)) {
+    const last = out[out.length - 1];
+    if (last?.x === b.x) {
+      last.c = Math.min(last.c, b.c);
+      last.at = [...last.at, ...b.at].sort((p, q) => p - q);
+    } else out.push(b);
   }
-  return [...cols.values()].sort((a, b) => a.x - b.x);
+  return out.map((b) => ({ k: b.c, x: b.x, marks: b.at.map((i) => marks[i]) }));
 }
