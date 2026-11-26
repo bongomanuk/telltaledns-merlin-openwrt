@@ -192,13 +192,19 @@ export function checkPack(text: string, bom: boolean, tpl: Template, tag: Tag, {
     }
     kept[ctx] = list;
   }
-  const s = ship(kept, tpl.entries, { verbatim: tpl.verbatim, notes: tpl.notes, glossary: tpl.glossary, dir: tag.dir });
+  // Only current pairs are held to the agreement rule (what it finds in the others is never shown), so every
+  // English it reads is the build's own; nothing here shows where a finding is.
+  const s = ship(kept, tpl.entries, { verbatim: tpl.verbatim, notes: tpl.notes, glossary: tpl.glossary, dir: tag.dir, currentOnly: true, positions: false });
   const table = Object.assign(Object.create(null), s.table) as Checked['table'];
   const base = { table, total: tpl.entries.size, translated: s.translated.size };
   if (!full) return { checked: { ...base, broken: [], worth: [], missing: [], leftovers: [], coverage: [], canonical: true, pr: '' } };
   const worth: Worth[] = [];
+  // A pair's findings come together: its identity is read once.
+  let last: (typeof s.findings)[number] | undefined;
+  let id = '';
   for (const f of s.findings) {
-    const id = identity(f.ctx, f.pair, f.note);
+    if (!last || f.ctx !== last.ctx || f.pair !== last.pair || f.note !== last.note) id = identity(f.ctx, f.pair, f.note);
+    last = f;
     const current = tpl.entries.has(id);
     if (f.level === 'fail' && f.rule === 'malformed') broken.push({ ctx: f.ctx, english: f.pair, note: f.note, rule: 'twice' });
     else if (f.level === 'fail' && current) {

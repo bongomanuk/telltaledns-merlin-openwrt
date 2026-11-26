@@ -26,6 +26,9 @@ export type AgreeOptions = {
   readonly exemptAdded?: readonly string[];
   /** A plural form other than `other`: it may leave out some of the English placeholders. */
   readonly placeholderSubset?: boolean;
+  /** `false`: no finding says where it is in the translation (`at` is -1), for a caller that never shows
+   * it (the check of a pack in the browser). */
+  readonly positions?: boolean;
 };
 
 // CJK and fullwidth punctuation become spaces BEFORE NFKC, so `：` cannot glue two tokens.
@@ -132,16 +135,20 @@ export const whole = (w: string, flags?: string) => new RegExp(`(?<![A-Za-z0-9_]
  * stay in (`ｅｖｉｌ．ｈｅｌｐ：８５３` when the English says "help"), and so do its numbers and
  * an address inside a longer one (`２１．１．１．１５` when it says `1.1.1.1`). */
 export function addedStructural(english: string, translation: string): string[] {
-  // Sets, so a long translation is read in linear time.
+  // Sets, so a long translation is read in linear time; each of the English's own patterns is built once
+  // and applied only to a token that holds it.
   const te = new Set(tokens(english));
   const tt = tokens(translation);
   const ts = new Set(tt);
   const fe = new Set(tokens(english, true));
   const own = unique([...te, ...fe])
     .filter((e) => structural(e))
-    .sort((a, b) => b.length - a.length);
-  const rest = (t: string) => own.reduce((s, e) => s.replace(whole(e, 'g'), ' '), t);
-  return unique([...tt.filter((t) => !te.has(t) && isAdded(t)), ...tokens(translation, true).filter((t) => !fe.has(t) && !ts.has(t) && isAdded(rest(t), DOTTED_HOST_PORT))]);
+    .sort((a, b) => b.length - a.length)
+    .map((e) => [e, whole(e, 'g')] as const);
+  const rest = (t: string) => own.reduce((s, [e, re]) => (s.includes(e) ? s.replace(re, ' ') : s), t);
+  // Taking the English's own out (each as a whole word, for a space) never makes a token added: it is read
+  // only for a token that is added as it stands.
+  return unique([...tt.filter((t) => !te.has(t) && isAdded(t)), ...tokens(translation, true).filter((t) => !fe.has(t) && !ts.has(t) && isAdded(t, DOTTED_HOST_PORT) && isAdded(rest(t), DOTTED_HOST_PORT))]);
 }
 
 export const digits = (s: string): string[] => prepare(s).replace(PLACEHOLDER, ' ').match(/\d+/g) ?? [];

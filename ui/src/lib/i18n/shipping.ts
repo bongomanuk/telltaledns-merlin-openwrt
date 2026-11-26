@@ -39,6 +39,11 @@ export type ShipOptions = {
   readonly notes?: ReadonlyMap<string, unknown>;
   readonly glossary?: readonly string[];
   readonly dir?: 'ltr' | 'rtl';
+  /** Only pairs whose identity is in the source now are held to the agreement rule; the others are left
+   * over without it, and without findings (a pair file checked in the browser, which shows neither). */
+  readonly currentOnly?: boolean;
+  /** `false`: findings say nowhere where they are (`at`: -1), for a caller that never shows it. */
+  readonly positions?: boolean;
 };
 
 type NoteValue = { exemptDigits?: unknown; exemptAdded?: unknown };
@@ -50,7 +55,7 @@ type NoteValue = { exemptDigits?: unknown; exemptAdded?: unknown };
  * the hash of that source entry. Returns the table (hash -> translation), the identities translated,
  * the pairs left over, and the findings.
  */
-export function ship(cat: Catalog, entries: ReadonlyMap<string, ShipEntry>, { verbatim = new Map(), notes = new Map(), glossary = [], dir = 'ltr' }: ShipOptions = {}) {
+export function ship(cat: Catalog, entries: ReadonlyMap<string, ShipEntry>, { verbatim = new Map(), notes = new Map(), glossary = [], dir = 'ltr', currentOnly = false, positions }: ShipOptions = {}) {
   const findings: ShipFinding[] = [];
   const table: Record<string, unknown> = {};
   const translated = new Set<string>();
@@ -68,11 +73,16 @@ export function ship(cat: Catalog, entries: ReadonlyMap<string, ShipEntry>, { ve
       seen.add(id);
       const empty = typeof p[1] === 'string' ? p[1] === '' : Object.values(p[1] as object).every((x) => x === '');
       if (empty) continue;
+      const e = entries.get(id);
+      if (!e && currentOnly) {
+        leftovers.push({ ctx, english: p[0], note });
+        continue;
+      }
       // A maintainer's exemptions (notes.json, reviewed): the digit rule, and the tokens the
       // added-token rule allows (then reported instead).
       const n = notes.get(id) as NoteValue | undefined;
       const ea = n?.exemptAdded;
-      const opts = { verbatim: (verbatim.get(id) ?? []) as string[], glossary, dir, exemptDigits: !!n?.exemptDigits, exemptAdded: Array.isArray(ea) ? (ea as string[]) : undefined };
+      const opts = { verbatim: (verbatim.get(id) ?? []) as string[], glossary, dir, exemptDigits: !!n?.exemptDigits, exemptAdded: Array.isArray(ea) ? (ea as string[]) : undefined, positions };
       // A plural form against the English form of its category (`one`), else English `other`; a
       // form other than `other` may leave out placeholders (a dual, or a "one" that names no number).
       const forms: [string, string, boolean][] =
@@ -88,7 +98,6 @@ export function ship(cat: Catalog, entries: ReadonlyMap<string, ShipEntry>, { ve
         for (const x of v.reports) findings.push({ level: 'report', rule: `agreement-${x.rule}`, ctx, english: en, pair: p[0], note, check: x.rule, token: x.token, at: x.at, detail: x.detail });
         if (v.fails.length) ok = false;
       }
-      const e = entries.get(id);
       if (!e) {
         leftovers.push({ ctx, english: p[0], note });
         continue;

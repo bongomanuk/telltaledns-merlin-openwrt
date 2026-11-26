@@ -22,6 +22,8 @@ import { decide, type Checker, type Deps } from '../../src/lib/devpack/lifecycle
 import { LIFETIME_MS, keptTable, newRecord, notice, readValue, type Store } from '../../src/lib/devpack/store';
 import { DEVPACK_KEY } from '../../src/lib/i18n/devpack';
 import * as lib from '../../scripts/i18n-lib.mjs';
+import { agree as agreeBefore } from './rule-934a9fb7/agree';
+import * as safeBefore from './rule-934a9fb7/safe';
 
 const UI = resolve(import.meta.dirname, '../..');
 const I18N = join(UI, 'src/lib/i18n');
@@ -459,24 +461,164 @@ test('api_013 the language tag is canonical and known', () => {
   expect(MULTI_SCRIPT).toEqual(lib.MULTI_SCRIPT);
 });
 
-test('api_013 the agreement rule stays linear on hostile input', () => {
-  const hostile = ['a'.repeat(4000), `https://${':'.repeat(3990)}`, '{'.repeat(4000), '<a'.repeat(2000), `${'a.'.repeat(1999)}a`, `${'1.'.repeat(1999)}1`, '‮'.repeat(4000), `${'ab-'.repeat(1333)}a`, `[${'x'.repeat(3998)}`, 'ｈｔｔｐｓ：／／'.repeat(400), `${'{n} '.repeat(1000)}`];
-  const time = (s: string) => {
+/** Text of at most `n` units: `unit(i)` for i = 0, 1, 2, … (a shape against the rule). */
+const fill = (unit: (i: number) => string, n: number) => {
+  let s = '';
+  for (let i = 0; s.length + unit(i).length <= n; i++) s += unit(i);
+  return s;
+};
+const letters = (i: number) => [i % 26, ((i / 26) | 0) % 26, ((i / 676) | 0) % 26].map((c) => String.fromCharCode(97 + c)).join('');
+/** Shapes against the agreement rule (review part A of T29.3, finding 2): English and translation of `n` units. */
+const SHAPES: Record<string, (n: number) => [string, string]> = {
+  'distinct tokens a fullwidth colon joins': (n) => [fill((i) => `a_${i} `, n), fill((i) => `x：${i} `, n)],
+  'distinct placeholders': (n) => [fill((i) => `{a${i}} `, n), fill((i) => `{b${i}} `, n)],
+  'distinct tags': (n) => [fill((i) => `<a${i}>`, n), fill((i) => `<b${i}>`, n)],
+  'distinct hyphenated words': (n) => [fill((i) => `ab-${letters(i)} `, n), fill((i) => `w${i} `, n)],
+  'a translation alone against a current English': (n) => ['Settings', fill((i) => `w${i} `, n)],
+  'the same, its words joined by a fullwidth colon': (n) => ['Settings', fill((i) => `w：${i} `, n)],
+};
+/** A whole file's check, at most (ms): Node on the test VM took 0.65 s at most for these files (round 3 of
+ * T29.3), and 44 s for the first before the rule was made linear. */
+const BOUND_MS = 5000;
+/** The least time of `k` samples of `reps` calls (ms). */
+function cost(f: () => unknown, reps = 10, k = 7) {
+  let least = Infinity;
+  for (let s = 0; s < k; s++) {
     const t0 = performance.now();
-    agree(s, [...s].reverse().join(''));
-    agree('Keep {n} at https://a.example:53/x', s);
-    return performance.now() - t0;
-  };
-  for (const s of hostile) {
-    const quarter = time(s.slice(0, s.length / 4));
-    const full = time(s);
-    expect(full, JSON.stringify(s.slice(0, 24))).toBeLessThan(500);
-    expect(full, JSON.stringify(s.slice(0, 24))).toBeLessThan(Math.max(50, quarter * 16));
+    for (let r = 0; r < reps; r++) f();
+    least = Math.min(least, performance.now() - t0);
   }
-  // A whole file of them is checked within the same kind of bound.
-  const t0 = performance.now();
-  checkPack(JSON.stringify({ cache: hostile.map((s, i) => [i ? `Gone ${i}` : 'Holds', s]) }), false, fixture(), DE);
-  expect(performance.now() - t0).toBeLessThan(3000);
+  return least;
+}
+
+test('api_013 the agreement rule stays linear on hostile input', () => {
+  // Four times the input costs at most about six times as much, against the same shape at a quarter of the size
+  // in the same run: as the browser runs the rule for a pack (no positions) and as the check script does.
+  for (const [name, shape] of Object.entries(SHAPES)) {
+    const [e1, t1] = shape(1000);
+    const [e4, t4] = shape(4000);
+    for (const o of [{ positions: false }, {}]) {
+      agree(e1, t1, o);
+      const ratio = cost(() => agree(e4, t4, o)) / cost(() => agree(e1, t1, o));
+      console.log(`DVP_LINEAR ${name}${o.positions === false ? '' : ' (with positions)'}: x${ratio.toFixed(1)} for x4`);
+      // The check script places each finding by a search from the start: a term that grows faster on these shapes.
+      expect(ratio, `${name}${o.positions === false ? '' : ' (with positions)'}`).toBeLessThan(o.positions === false ? 6 : 10);
+    }
+  }
+});
+
+test('api_013 a whole pack of hostile pairs is checked in a few seconds', () => {
+  // A template of 300 messages, and files of about 1 MiB: pairs of a shape whose English is the file's own (left
+  // over: never held to the rule), and pairs of the template's own English with the longest translations.
+  const entries = Array.from({ length: 300 }, (_, i) => ({ ctx: 'settings', english: `Settings ${i}` }));
+  const tpl = readTemplate(writeTemplate(entries, { notes: new Map(), verbatim: new Map(), glossary: [], plurals: { de: ['one', 'other'] } }));
+  const file = (english: (i: number) => string, translation: string) => {
+    const pairs: [string, string][] = [];
+    let size = 20;
+    for (let i = 0; ; i++) {
+      const p: [string, string] = [english(i), translation];
+      size += JSON.stringify(p).length + 2;
+      if (size > MAX_BYTES - 64 || i >= 300) break;
+      pairs.push(p);
+    }
+    return JSON.stringify({ settings: pairs });
+  };
+  const [colonE, colonT] = SHAPES['distinct tokens a fullwidth colon joins'](4000);
+  const [placeE, placeT] = SHAPES['distinct placeholders'](4000);
+  const files: [string, string][] = [
+    ['left over: distinct tokens a fullwidth colon joins', file((i) => `${colonE.slice(0, 3990)} ${i}`, colonT)],
+    ['left over: distinct placeholders', file((i) => `${placeE.slice(0, 3990)} ${i}`, placeT)],
+    ['current: a translation alone', file((i) => `Settings ${i}`, SHAPES['a translation alone against a current English'](4000)[1])],
+    ['current: its words joined by a fullwidth colon', file((i) => `Settings ${i}`, SHAPES['the same, its words joined by a fullwidth colon'](4000)[1])],
+    ['current: distinct tokens a fullwidth colon joins', file((i) => `Settings ${i}`, colonT)],
+  ];
+  for (const [name, text] of files) {
+    expect(text.length, name).toBeGreaterThan(1_000_000);
+    const t0 = performance.now();
+    const r = checkPack(text, false, tpl, DE);
+    const card = performance.now() - t0;
+    const t1 = performance.now();
+    checkPack(text, false, tpl, DE, { full: false });
+    const load = performance.now() - t1;
+    expect(r.refused, name).toBeUndefined();
+    console.log(`DVP_LINEAR file ${name}: ${text.length} characters; the card's check ${(card / 1000).toFixed(2)} s, a page load's ${(load / 1000).toFixed(2)} s`);
+    expect(card, name).toBeLessThan(BOUND_MS);
+    expect(load, name).toBeLessThan(BOUND_MS);
+  }
+});
+
+/** A seeded generator (mulberry32): the differential test draws the same pairs on every run. */
+function seeded(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// What a message and its translation are made of, for the differential test: words, placeholders, tags, addresses
+// (some written fullwidth), structural tokens, numbers in other digits, the punctuation that joins tokens, code
+// spans, and forbidden or joining code points.
+const PIECES = [
+  'Keep', 'open', 'Einstellungen', 'help', 'email', 'ntfy', 'NXDOMAIN', 'DNSSEC', 'API', 'ab-cd', 'Wi-Fi', 'Сапсеl', 'Dеlеtе', 'Ωmega', 'կօd', '例子.公司', 'x',
+  '{n}', '{name}', '{ n }', '{a1}', '{b2}', '<b>', '</b>', '<a>', '</a>', '<br/>',
+  'https://a.example/x', 'http://b.lan:8080/p?q=1', 'https://', 'ｈｔｔｐｓ：／／evil', 'https://例子', 'evil.example/login', 'evil.example/a/b',
+  'a_b', '[x]', '[[router]]', '/etc/telltale/', 'key=value', '$HOME', 'a|b', '1.1.1.1', '２１．１．１．１５', 'a.example:53', 'DNS：53', 'ｅｖｉｌ．ｈｅｌｐ：８５３',
+  '53', '٥٣', '８．８．８．８', '8。8。8。8', '24:00', '5353', '0',
+  '：', '。', '．', '＝', ',', '.', ':', '-', '(', ')', '`code`', '`x`', "'ya",
+  '‮', '​', '‍', 'ب‍ب', '‎', '️', '­', 'ㅤ', ' ',
+];
+function draw(rand: () => number): { english: string; translation: string; o: object } {
+  const pick = () => PIECES[Math.floor(rand() * PIECES.length)];
+  const join = () => (rand() < 0.7 ? ' ' : '');
+  const words = Array.from({ length: 1 + Math.floor(rand() * 12) }, pick);
+  const english = words.reduce((s, w) => s + join() + w, '');
+  let tw = [...words];
+  const r = rand();
+  if (r < 0.25) tw = tw.filter(() => rand() < 0.8);
+  else if (r < 0.5) tw = tw.map((w) => (rand() < 0.2 ? pick() : w));
+  else if (r < 0.65) tw.splice(Math.floor(rand() * (tw.length + 1)), 0, pick(), pick());
+  else if (r < 0.8) tw.sort(() => rand() - 0.5);
+  else if (r < 0.9) tw = Array.from({ length: 1 + Math.floor(rand() * 12) }, pick);
+  const translation = tw.reduce((s, w) => s + join() + w, '');
+  const o = {
+    ...(rand() < 0.3 ? { verbatim: ['email', 'ntfy'].filter(() => rand() < 0.5) } : {}),
+    ...(rand() < 0.5 ? { glossary: ['NXDOMAIN', 'DNSSEC', 'API'] } : {}),
+    ...(rand() < 0.2 ? { dir: 'rtl' as const } : {}),
+    ...(rand() < 0.1 ? { exemptDigits: true } : {}),
+    ...(rand() < 0.1 ? { exemptAdded: ['24:00', '5353'] } : {}),
+    ...(rand() < 0.2 ? { placeholderSubset: true } : {}),
+  };
+  return { english, translation, o };
+}
+
+test('api_012 the agreement rule gives what it gave before it was made linear', () => {
+  // The rule as at 934a9fb7 (a copy, byte for byte), against the rule now: every finding the same, in the same
+  // order, on a few thousand drawn pairs and on the shapes of finding 2 at several sizes.
+  const before = { agree: agreeBefore };
+  const beforeSafe = safeBefore;
+  const rand = seeded(20261126);
+  const cases = Array.from({ length: 3000 }, () => draw(rand));
+  for (const shape of Object.values(SHAPES)) for (const n of [40, 300, 1000]) cases.push({ english: shape(n)[0], translation: shape(n)[1], o: {} });
+  for (const n of [40, 300, 1000]) cases.push({ english: fill((i) => `a_${i} `, n), translation: fill((i) => `x＝${i} `, n), o: {} }, { english: fill((i) => `a.b${i} `, n), translation: fill((i) => `x.b${i}＝${i} `, n), o: {} });
+  const noAt = (v: { fails: object[]; reports: object[] }) => JSON.stringify({ fails: v.fails.map((f) => ({ ...f, at: 0 })), reports: v.reports.map((f) => ({ ...f, at: 0 })) });
+  let findings = 0;
+  for (const { english, translation, o } of cases) {
+    const what = JSON.stringify([english.slice(0, 80), translation.slice(0, 80), o]);
+    const now = agree(english, translation, o);
+    const then = before.agree(english, translation, o);
+    expect(JSON.stringify(now), what).toBe(JSON.stringify(then));
+    // Without positions: the same findings, only placed nowhere.
+    expect(noAt(agree(english, translation, { ...o, positions: false })), what).toBe(noAt(then));
+    expect(safe.addedStructural(english, translation), what).toEqual(beforeSafe.addedStructural(english, translation));
+    const subset = 'placeholderSubset' in o;
+    for (const built of [false, true]) expect(safe.agreesAtRuntime(english, translation, 'ltr', { built, subset }), what).toBe(beforeSafe.agreesAtRuntime(english, translation, 'ltr', { built, subset }));
+    findings += then.fails.length + then.reports.length;
+  }
+  // The drawn pairs reach the rule's findings, not only agreement.
+  expect(findings).toBeGreaterThan(10_000);
 });
 
 test('api_013 a displayed file name loses forbidden code points and is cut to 48', () => {

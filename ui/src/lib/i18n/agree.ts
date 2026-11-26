@@ -29,14 +29,21 @@ import {
 
 export type { AgreeOptions, Finding, Verdict } from './safe.ts';
 
+/** Where a finding's token first is in the translation (a search from the start, so it is skipped for a
+ * caller that never shows it). */
+const where = (translation: string, token: string, o: AgreeOptions) => (o.positions === false ? -1 : translation.indexOf(token));
+
 /** Everything that fails, one finding per token. */
 function failures(english: string, translation: string, o: AgreeOptions): Finding[] {
   const fails: Finding[] = [];
-  const add = (rule: string, token: string, detail: string, at = translation.indexOf(token)) => fails.push({ rule, token, at, detail });
-  // The same set, both directions (only "added" counts for a plural form that may hold a subset).
+  const add = (rule: string, token: string, detail: string, at = where(translation, token, o)) => fails.push({ rule, token, at, detail });
+  // The same set, both directions (only "added" counts for a plural form that may hold a subset). Sets
+  // throughout, so a long text is read in linear time.
   const both = (rule: string, e: string[], t: string[], subset = false) => {
-    if (!subset) for (const x of unique(e)) if (!t.includes(x)) add(rule, x, 'missing', -1);
-    for (const x of unique(t)) if (!e.includes(x)) add(rule, x, 'added');
+    const es = new Set(e);
+    const ts = new Set(t);
+    if (!subset) for (const x of es) if (!ts.has(x)) add(rule, x, 'missing', -1);
+    for (const x of ts) if (!es.has(x)) add(rule, x, 'added');
   };
   both('placeholders', all(english, PLACEHOLDER), all(translation, PLACEHOLDER), o.placeholderSubset);
   both('tags', all(english, TAG), all(translation, TAG));
@@ -45,8 +52,8 @@ function failures(english: string, translation: string, o: AgreeOptions): Findin
   const st = schemes(translation);
   if (st > se) add('urls', `${st} schemes`, `added: the English has ${se}`, -1);
   const te = tokens(english);
-  const tt = tokens(translation);
-  for (const x of unique(te.filter((t) => structural(t, o.glossary)))) if (!tt.includes(x)) add('structural', x, 'missing', -1);
+  const tt = new Set(tokens(translation));
+  for (const x of unique(te.filter((t) => structural(t, o.glossary)))) if (!tt.has(x)) add('structural', x, 'missing', -1);
   for (const x of addedStructural(english, translation)) if (!o.exemptAdded?.includes(x)) add('structural', x, 'added');
   if (!o.exemptDigits) for (const x of missingFrom(digits(english), digits(translation))) add('digits', x, 'missing', -1);
   const prepared = prepare(translation);
@@ -71,15 +78,17 @@ export function agree(english: string, translation: string, o: AgreeOptions = {}
   const glossary = o.glossary ?? [];
   const te = tokens(english);
   const tt = tokens(translation);
+  const tes = new Set(te);
+  const tts = new Set(tt);
   const report = (rule: string, xs: string[], detail: string) => {
-    for (const x of unique(xs)) reports.push({ rule, token: x, at: translation.indexOf(x), detail });
+    for (const x of unique(xs)) reports.push({ rule, token: x, at: where(translation, x, o), detail });
   };
-  report('hyphenated', te.filter((t) => HYPHENATED.test(t) && !tt.includes(t)), 'translated');
-  report('capitals', te.filter((t) => CAPITALS.test(t) && !glossary.includes(t) && !tt.includes(t)), 'translated');
+  report('hyphenated', te.filter((t) => HYPHENATED.test(t) && !tts.has(t)), 'translated');
+  report('capitals', te.filter((t) => CAPITALS.test(t) && !glossary.includes(t) && !tts.has(t)), 'translated');
   // Added tokens that are not structural (and those a maintainer's exemption allows), and a `.`
   // between letters of another script, which may be an address the rule cannot read.
-  const dots = scriptDots(english);
+  const dots = new Set(scriptDots(english));
   const exempt = o.exemptAdded ? addedStructural(english, translation).filter((x) => o.exemptAdded?.includes(x)) : [];
-  report('added', [...tt.filter((t) => !te.includes(t) && !isAdded(t)), ...exempt, ...scriptDots(translation).filter((w) => !dots.includes(w))], 'added');
+  report('added', [...tt.filter((t) => !tes.has(t) && !isAdded(t)), ...exempt, ...scriptDots(translation).filter((w) => !dots.has(w))], 'added');
   return { fails, reports };
 }
