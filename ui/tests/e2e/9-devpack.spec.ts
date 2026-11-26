@@ -4,7 +4,8 @@
 // or the server, after 7 days and when damaged, and what a pack never reaches. The tests sign in once for real as
 // the suite's admin (as 2-shots.spec.ts does; the admin is created from the setup token when this file runs
 // alone, as 1-ui.spec.ts does), keep the cookies only, and give each test a fresh context: no pack reaches another
-// test. They write nothing to the server. (The parts that need no browser are 7-devpack.spec.ts.)
+// test. On the server they create one viewer of their own and sign in and out; nothing about a pack reaches it.
+// (The parts that need no browser are 7-devpack.spec.ts.)
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -79,6 +80,16 @@ test.beforeAll(async ({ browser }) => {
   await context.close();
 });
 
+/** Two change markers, one and two minutes ago: within the last hour, and within a chart's data (review part B of
+ * T29.3, nit 8). */
+const MARKERS = () => {
+  const now = Date.now();
+  return [
+    { kind: 'note', summary: 'A note of the language pack tests', tUnixMs: now - 60_000, actor: 'admin' },
+    { kind: 'config.applied', summary: 'configuration 1 applied (ui, 1 section changed)', tUnixMs: now - 120_000, seq: 1, source: 'ui', actor: 'admin' },
+  ];
+};
+
 /** A fresh context (signed in unless `signedOut`), its page, and the problems the page reports (page errors and
  * console errors but a 401 or 403, as 1-ui.spec.ts; `allow` names others the test expects). */
 async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number; allow?: RegExp; init?: () => void } = {}) {
@@ -88,12 +99,13 @@ async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number;
     viewport: o.width ? { width: o.width, height: 700 } : undefined,
   });
   if (o.init) await context.addInitScript(o.init);
-  // No change markers on the charts: those that earlier spec files leave are not this file's subject (server text
-  // under translate="no": no pack text), and in a dense last hour a chart can repeat a marker column's key, a page
-  // error unrelated to packs. Requests are still seen: the request event fires for a routed request.
+  // The same two change markers in the last hour on every chart, in place of what earlier spec files changed: so the
+  // charts draw their marker buttons under a pack. Forty or fewer give one column each; above forty a chart can
+  // repeat a column's key, which the `each-keys` branch fixes in Chart.svelte (this fixed list can then go).
+  // Requests are still seen: the request event fires for a routed request.
   await context.route(
     (u) => u.pathname === '/api/v1/annotations',
-    (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: [], truncated: false } }) : q.fallback()),
+    (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: MARKERS(), truncated: false } }) : q.fallback()),
   );
   const page = await context.newPage();
   const problems: string[] = [];
@@ -163,6 +175,19 @@ const removeOnTop = (page: Page) =>
     return top === b || b.contains(top) ? 'on top' : `covered by ${top?.outerHTML.slice(0, 80)}`;
   });
 const templateUrl = () => /TEMPLATE: string \| null = "([^"]+)"/.exec(readFileSync(join(UI, 'src/lib/i18n/locales.gen.ts'), 'utf8'))?.[1] ?? '';
+/** The banner host's stacking order, and the highest of every other element's on the page (with which one). */
+const stacking = (page: Page) =>
+  page.evaluate(() => {
+    const host = document.querySelector('.devpack-host');
+    let most = -Infinity;
+    let who = '';
+    for (const e of document.querySelectorAll('*')) {
+      if (!host || host.contains(e)) continue;
+      const z = Number(getComputedStyle(e).zIndex);
+      if (Number.isFinite(z) && z > most) [most, who] = [z, `${e.tagName.toLowerCase()}.${String(e.className).trim().split(/\s+/)[0]}`];
+    }
+    return { own: host ? Number(getComputedStyle(host).zIndex) : NaN, most, who };
+  });
 
 test('api_013 an english session loads no pack code and makes no pack request', async ({ browser }) => {
   const s = await fresh(browser);
@@ -182,8 +207,8 @@ test('api_013 an english session loads no pack code and makes no pack request', 
   await expect(banner(s.page)).toHaveCount(0);
   // For the size measurement: what an English reader downloads.
   console.log(`DVP_EAGER ${JSON.stringify([...new Set(assets)].sort())}`);
-  expect(assets.filter((p) => p.endsWith('.js') && !/^\/assets\/(index|brands)-[\w-]+\.js$/.test(p))).toEqual([]);
-  expect(assets.filter((p) => p.startsWith('/assets/locales/'))).toEqual([]);
+  // Exactly the entry chunk, its stylesheet and the brand icons: no lazy script or stylesheet, no template.
+  expect([...new Set(assets)].map((p) => p.replace(/-[\w-]+\.(js|css)$/, '-*.$1')).sort()).toEqual(['/assets/brands-*.js', '/assets/index-*.css', '/assets/index-*.js']);
   expect(await kept(s.page)).toBeNull();
   await done(s);
 });
@@ -276,6 +301,10 @@ test('api_013 the banner stays on top of every overlay', async ({ browser }) => 
   await s.page.locator('button[data-help="account"]').click();
   await expect(s.page.locator('.drawer')).toBeVisible();
   expect(await removeOnTop(s.page)).toBe('on top');
+  // Above every layer of the UI, wherever one opens (the tips, the health panel, the pause control): the banner's
+  // stacking order is higher than any other element's on each page here (review part B of T29.3, finding 5).
+  const z1 = await stacking(s.page);
+  expect(z1.own, `above ${z1.who} (${z1.most})`).toBeGreaterThan(z1.most);
   const below = await s.page.evaluate(() => [document.querySelector('[data-testid="devpack-banner"]')?.getBoundingClientRect().bottom ?? 0, document.querySelector('.drawer')?.getBoundingClientRect().top ?? 0]);
   expect(below[1]).toBeGreaterThanOrEqual(below[0] - 1);
   await s.page.keyboard.press('Escape');
@@ -284,6 +313,13 @@ test('api_013 the banner stays on top of every overlay', async ({ browser }) => 
   await s.page.getByRole('button', { name: /^Menu/ }).click();
   await expect(s.page.locator('nav.side')).toBeVisible();
   expect(await removeOnTop(s.page)).toBe('on top');
+  // The health panel, open from the menu (stacking order 40), and the dashboard's own layers.
+  await s.page.getByTestId('health-icon').click();
+  await expect(s.page.getByTestId('health-panel')).toBeVisible();
+  const z2 = await stacking(s.page);
+  expect(z2.most).toBeGreaterThanOrEqual(40);
+  expect(z2.own, `above ${z2.who} (${z2.most})`).toBeGreaterThan(z2.most);
+  await s.page.getByTestId('health-icon').click();
   const footer = s.page.getByTestId('build-footer');
   await footer.scrollIntoViewIfNeeded();
   await expect(footer).toBeInViewport();
@@ -297,6 +333,8 @@ test('api_013 the banner stays on top of every overlay', async ({ browser }) => 
   await s.page.goto('/#/wall');
   await expect(s.page.getByTestId('wall-area')).toBeVisible();
   expect(await removeOnTop(s.page)).toBe('on top');
+  const z3 = await stacking(s.page);
+  expect(z3.own, `above ${z3.who} (${z3.most})`).toBeGreaterThan(z3.most);
   // A long file name does not push Remove off a phone screen.
   expect(await s.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await expect(banner(s.page)).toContainText(`${'x'.repeat(23)}…`);
@@ -537,6 +575,53 @@ test('api_013 a pack is cleared when the server build changes', async ({ browser
   await done(b);
 });
 
+test('api_013 a page that fails to draw with the pack loads once more without it', async ({ browser }) => {
+  // A fault while the app is drawn with the pack: the pack is removed with its notice, and the page loads once
+  // more, in the usual language (review part B of T29.3, finding 6). The fault: anything put into the app's node
+  // throws while the page is French, as a component that throws would.
+  const s = await fresh(browser, { allow: /dvp-test/ });
+  await storePack(s.page, FR_TEXT);
+  await s.context.addInitScript(() => {
+    const guard = (proto: object, name: string) => {
+      const p = proto as Record<string, (...a: unknown[]) => unknown>;
+      const f = p[name];
+      p[name] = function (this: Node, ...a: unknown[]) {
+        if (document.documentElement.lang === 'fr' && document.getElementById('app')?.contains(this)) throw new Error('dvp-test: a fault while drawing');
+        return f.apply(this, a);
+      };
+    };
+    for (const n of ['appendChild', 'insertBefore', 'replaceChild']) guard(Node.prototype, n);
+    for (const n of ['append', 'prepend', 'before', 'after', 'replaceChildren']) guard(Element.prototype, n);
+    for (const n of ['before', 'after']) guard(CharacterData.prototype, n);
+  });
+  let loads = 0;
+  s.page.on('load', () => loads++);
+  await s.page.goto('/#/');
+  await expect.poll(() => loads, { timeout: 30_000 }).toBe(2);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(s.page.getByRole('heading', { name: 'Dashboard' }).first()).toBeVisible();
+  await expect(banner(s.page)).toContainText('The test language pack fr.json was removed');
+  expect(JSON.parse((await kept(s.page)) ?? '{}')).toMatchObject({ v: 1, gone: 'failed', name: 'fr.json' });
+  // Once: the next load draws in English, and nothing reloads it again.
+  await s.page.waitForTimeout(2000);
+  expect(loads).toBe(2);
+  await done(s);
+});
+
+test('api_013 the card says when a language is written right to left', async ({ browser }) => {
+  // The tag line names the direction the file will be shown in (review part B of T29.3, finding 6).
+  const s = await fresh(browser);
+  await openCard(s.page);
+  for (const [tag, name] of [['ar', 'Arabic'], ['he', 'Hebrew']]) {
+    await s.page.getByTestId('devpack-tag').fill(tag);
+    await expect(s.page.getByTestId('devpack-tag-line'), tag).toContainText(name);
+    await expect(s.page.getByTestId('devpack-tag-line'), tag).toContainText(`written right to left; saved as ${tag}.`);
+  }
+  await s.page.getByTestId('devpack-tag').fill('fr');
+  await expect(s.page.getByTestId('devpack-tag-line')).toContainText('written left to right; saved as fr.');
+  await done(s);
+});
+
 test('api_013 a tab left open neither removes nor replaces a newer pack', async ({ browser }) => {
   // Tab B shows a pack, and tab A loads another one since: B's Remove and Dismiss leave A's pack (review part A of
   // T29.3, finding 4).
@@ -711,7 +796,7 @@ test('api_013 a quota error on use writes nothing', async ({ browser }) => {
   await chooseFile(s.page, JSON.stringify({ [SETTINGS.ctx]: [[SETTINGS.english, 'Paramètres']] }), 'fr.json');
   await s.page.getByTestId('devpack-use').click();
   await s.page.getByTestId('devpack-confirm-use').click();
-  await expect(s.page.getByTestId('devpack-use-error')).toBeVisible();
+  await expect(s.page.getByTestId('devpack-use-error')).toHaveText("This browser can't keep the pack: its storage is full or blocked.");
   // The pack kept before is the one still kept, as it was.
   expect(await kept(s.page)).toBe(before);
   // How much this browser keeps for one address (for the report: a record holds the file's text and its table).
@@ -820,6 +905,10 @@ test('api_013 pack text never reaches a request or storage', async ({ browser })
     if (testid) await expect(s.page.getByTestId(testid).first()).toBeVisible();
     await expect(s.page.locator('main').first()).toContainText(MARK);
   }
+  // The Cache page's charts draw their change markers under the pack (those within the chart's own data).
+  const mk = s.page.getByTestId('chart-markers').first().locator('button.mk');
+  await expect(mk.first()).toBeAttached();
+  expect(await mk.first().getAttribute('aria-label')).toMatch(/A note of the language pack tests|configuration 1 applied/);
   // A search and a filter, typed and chosen through the translated page.
   await s.page.locator('form[role="search"] input').fill('nas.e2e.test');
   await s.page.locator('form[role="search"] input').press('Enter');
