@@ -107,6 +107,12 @@ chmod 644 "$dest/telltale.asp"
 
 cat > "$dest/telltale" <<'LAUNCH'
 #!/bin/sh
+# Prefer the copy on the data volume. Unpacking a 35 MB binary into /tmp costs
+# 35 MB of RAM, which on a 512 MB router is memory the filter compile needs.
+BIN=/tmp/mnt/telltale/telltale.bin
+if [ -x "$BIN" ]; then
+    exec "$BIN" "$@"
+fi
 BIN=/tmp/telltale.bin
 if [ ! -x "$BIN" ]; then
     gzip -dc /jffs/telltale/telltale.gz > "$BIN" || exit 1
@@ -116,6 +122,12 @@ exec "$BIN" "$@"
 LAUNCH
 chmod 755 "$dest/telltale"
 rm -f /tmp/telltale.bin
+# If the data volume is already mounted (a re-install on a running router), put
+# the binary there now rather than waiting for the next boot.
+if [ -d /tmp/mnt/telltale ]; then
+    gzip -dc "$dest/telltale.gz" > /tmp/mnt/telltale/telltale.bin 2>/dev/null &&
+        chmod 755 /tmp/mnt/telltale/telltale.bin
+fi
 
 if [ ! -f /jffs/scripts/services-start ]; then
     printf '#!/bin/sh\n' > /jffs/scripts/services-start
@@ -158,6 +170,15 @@ if [ -x /jffs/telltale/telltale ]; then
             mount | grep -q " on /tmp/mnt/telltale " || mount -o loop "$img" /tmp/mnt/telltale
             data=/tmp/mnt/telltale/data
         fi
+    fi
+    # Run the binary from the data volume, not from /tmp: the unpacked copy is
+    # 35 MB of RAM that a 512 MB router needs for its filter compile. Refresh it
+    # when the flash bundle is newer (an upgrade).
+    bin=/tmp/mnt/telltale/telltale.bin
+    if [ -d /tmp/mnt/telltale ] &&
+        { [ ! -x "$bin" ] || [ /jffs/telltale/telltale.gz -nt "$bin" ]; }; then
+        gzip -dc /jffs/telltale/telltale.gz > "$bin.tmp" 2>/dev/null &&
+            chmod 755 "$bin.tmp" && mv -f "$bin.tmp" "$bin"
     fi
     # Connection accounting for the Traffic page, and clear yesterday's firewall pauses.
     echo 1 > /proc/sys/net/netfilter/nf_conntrack_acct 2>/dev/null

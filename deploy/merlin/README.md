@@ -453,7 +453,10 @@ service restart_dnsmasq
   the whole router down rather than one process. The sort's working batch is
   capped at 1 MiB per parser thread in the code, so the peak no longer grows
   with the list, and the shipped config also sets `[filter] compile_memory =
-  "16MiB"` as a ceiling. The launcher marks the resolver with
+  "16MiB"` as a ceiling. The binary itself runs from the data volume (the ext4
+  image on the USB drive), not from `/tmp`: unpacking it into RAM costs about
+  35 MB on a 512 MB router, and that memory is needed for the compile. Without a
+  USB drive it falls back to `/tmp`, as before. The launcher marks the resolver with
   `oom_score_adj=500` so that, if there is still an OOM, the resolver is killed
   and not the router. dnsmasq keeps port 53, serves local names and falls back
   to the plain upstreams from `dnsmasq.conf.add`, so the LAN survives it. Re-run
