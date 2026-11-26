@@ -3,6 +3,10 @@
 // nothing. Expects the state 1-ui.spec.ts leaves (the admin `admin`, some queries in the log), as
 // 2-shots.spec.ts does. (The parts that need no browser are 7-i18n.spec.ts.)
 import { expect, test, type Page } from '@playwright/test';
+import { failOnPageErrors, listen } from './page-errors';
+
+// REQ: API-005 — a page error fails the test, as in 1-ui.spec.ts.
+failOnPageErrors(test);
 
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
 // The core: files directly under /assets/, of these kinds. No subfolder (assets/locales/), no JSON.
@@ -75,6 +79,7 @@ test('api_012 english plurals ignore the browser language', async ({ browser }) 
   for (const locale of ['en-US', 'fr-FR', 'ja-JP', 'ru-RU']) {
     const context = await browser.newContext({ baseURL, locale });
     const page = await context.newPage();
+    listen(page);
     let removed = [0, 1, 2];
     let waiting = 1;
     await page.route('**/api/v1/cache/lookup?**', (r) => r.fulfill({ json: lookup }));

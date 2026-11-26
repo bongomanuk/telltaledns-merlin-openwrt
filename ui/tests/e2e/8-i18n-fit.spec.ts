@@ -3,6 +3,10 @@
 // (`FIT360` lines in the log, and an annotation of the test) and never fails the test: pages that overflow
 // today would pull layout work into part A. Expects the state 1-ui.spec.ts leaves, as 8-i18n-pages.spec.ts does.
 import { expect, test, type Page } from '@playwright/test';
+import { failOnPageErrors } from './page-errors';
+
+// REQ: API-005 — a page error fails the test, as in 1-ui.spec.ts (the overflow itself is only reported).
+failOnPageErrors(test);
 
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
 const WIDTH = 360;
