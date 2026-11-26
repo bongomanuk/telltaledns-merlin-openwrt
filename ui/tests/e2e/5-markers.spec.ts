@@ -56,7 +56,8 @@ test('obs_033 it keeps the order and the objects it was given', () => {
 
 // REQ: OBS-033, API-005 — the buttons a chart draws for its markers (`markerColumns`): past 40 in view, one per 8-px column,
 // drawn at the pixel of the column's first marker; two neighbouring columns that would be drawn at one pixel are one button,
-// with both columns' markers. A chart keys its buttons by `k`, which is unique.
+// with both columns' markers. A chart keys its buttons by `k`, which is unique, and which a pixel (up to 40) and an 8-px
+// column (past 40) never share.
 const id = (x: number) => x;
 /** Markers far apart, one column each, to pass `MAX_SINGLE`. */
 const apart = (n: number) => Array.from({ length: n }, (_, i) => 100 + 8 * i);
@@ -64,12 +65,30 @@ const apart = (n: number) => Array.from({ length: n }, (_, i) => 100 + 8 * i);
 test('api_005 obs_033 two neighbouring columns drawn at one pixel are one button', () => {
   const cols = markerColumns([11.6, 12.1, ...apart(MAX_SINGLE - 1)], id);
   // 11.6 is column 1 and 12.1 column 2, both drawn at 12: one button, the left column's, with both markers.
-  expect(cols[0]).toEqual({ k: 1, x: 12, marks: [11.6, 12.1] });
+  expect(cols[0]).toEqual({ k: -2, x: 12, marks: [11.6, 12.1] });
   expect(cols).toHaveLength(MAX_SINGLE);
   expect(new Set(cols.map((c) => c.x)).size).toBe(cols.length);
   expect(new Set(cols.map((c) => c.k)).size).toBe(cols.length);
   // Up to 40, a column is one pixel: 11.6 and 12.1 are drawn as one button.
   expect(markerColumns([11.6, 12.1], id)).toEqual([{ k: 12, x: 12, marks: [11.6, 12.1] }]);
+});
+
+test('api_005 obs_033 a redraw across 40 markers gives no key a different place', () => {
+  // Pixels 0, 8, 16, … up to 40 markers; one more and they are 8-px columns 0, 1, 2, … : the numbers meet, the places don't.
+  const forty = Array.from({ length: MAX_SINGLE }, (_, i) => 8 * i);
+  const keys = (xs: number[]) => new Map(markerColumns(xs, id).map((c) => [c.k, c.x]));
+  const before = keys(forty);
+  const after = keys([...forty, 8 * MAX_SINGLE]);
+  expect([...before.keys()].filter((k) => after.has(k))).toEqual([]);
+  // The same over random redraws from 40 to 41 markers and back.
+  const rnd = random(0x4041);
+  for (let run = 0; run < 500; run++) {
+    const xs = Array.from({ length: MAX_SINGLE + 1 }, () => rnd() * 1200);
+    const a = keys(xs.slice(0, MAX_SINGLE));
+    const b = keys(xs);
+    const reused = [...a].filter(([k, x]) => b.has(k) && b.get(k) !== x);
+    expect(reused, `redraw ${run}: a key drawn at another place`).toEqual([]);
+  }
 });
 
 /** Each column its own button: the placement the merge of `drawn` starts from (markers by their index). */

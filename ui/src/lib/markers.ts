@@ -27,9 +27,12 @@ export function visibleMarkers<T extends { time: number }>(markers: T[], from: n
 /** Past this many markers in view, those within 8 px of each other share one button, with a count. */
 export const MAX_SINGLE = 40;
 
-/** One marker button: the markers it stands for, the whole pixel it is drawn at, and its column. */
+/** One marker button: the markers it stands for, the whole pixel it is drawn at, and its key. */
 export interface MarkerColumn<T> {
-  /** The column (`x / 8`, or `x` up to `MAX_SINGLE`, rounded): unique, so the chart keys its buttons by it (REQ: API-005). */
+  /**
+   * Its column, unique, so the chart keys its buttons by it (REQ: API-005): the pixel (0 or more) up to `MAX_SINGLE` markers,
+   * `-1 - column` (-1 or less) for an 8-px column past it, so a redraw across the threshold reuses no key for another place.
+   */
   k: number;
   /** Where the button is drawn: the rounded position of its first marker. */
   x: number;
@@ -62,5 +65,5 @@ export function markerColumns<T>(marks: T[], xOf: (m: T) => number): MarkerColum
       last.at = [...last.at, ...b.at].sort((p, q) => p - q);
     } else out.push(b);
   }
-  return out.map((b) => ({ k: b.c, x: b.x, marks: b.at.map((i) => marks[i]) }));
+  return out.map((b) => ({ k: col === 1 ? b.c : -1 - b.c, x: b.x, marks: b.at.map((i) => marks[i]) }));
 }
