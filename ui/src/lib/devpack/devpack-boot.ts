@@ -8,17 +8,18 @@
 // says so, without a reload, so nothing typed is lost. It follows who is signed in, as the app tells it:
 // someone going away (a sign-out, a session that ends, the display page) takes a pack this load shows
 // away (a sign-out that goes on to the provider's lets the page leave, and the page it comes back to is
-// paused), and a sign-in on a page paused for nobody or for another user reloads. Each of these reloads
-// leaves a flag for the load it lands on: after someone went away that load is paused, whoever the status
-// says is signed in; after a sign-in it does not reload for the first user the app reports. So two reads of
-// who is signed in that disagree (nodes that don't share sessions) reload a page once, never again and
-// again. "Show the test pack on this page" keeps its one load as it is. A tab removes or writes over only what it read, and reloads only once the key no
-// longer holds the pack, so a value it cannot change never makes it reload again.
+// paused), and a sign-in on a page paused for nobody or for another user reloads (`whenSeen`, `lifecycle.ts`). Each of these reloads leaves a
+// flag for the load it lands on: after someone went away that load is paused, whoever the status says is
+// signed in; and after either reload it does not reload for the first user the app reports. So reads of who is
+// signed in that disagree (nodes that don't share sessions), in either direction or in turn, reload a page
+// twice at most in a row. "Show the test pack on this page" keeps its one load as it is. A tab removes or
+// writes over only what it read, and reloads only once the key no longer holds the pack, so a value it cannot
+// change never makes it reload again.
 import { mount } from 'svelte';
 import type { Choice } from '../i18n';
 import { devpack } from '../i18n/devpack';
 import DevPackBanner from './DevPackBanner.svelte';
-import { decide, type Decision, type View } from './lifecycle';
+import { decide, whenSeen, type Decision, type View } from './lifecycle';
 import { ONCE_KEY, entryPath, notice, retire, type Held, type PackRecord, type Store } from './store';
 
 performance.mark('telltale.devpack.start');
@@ -124,39 +125,26 @@ function watchServer(r: PackRecord) {
 }
 
 /** Who is signed in, as the app says whenever it changes (null: nobody, or the display page), against who was
- * when this load decided: someone going away takes a pack this load shows away (the next load is paused,
- * whatever the status says then; a sign-out that goes on to the provider's is not reloaded, as the page is
- * leaving), and a sign-in on a page paused for nobody or for another user reloads (into the pack for the user
- * who loaded it), except for the first user the app reports on a load that follows such a reload: the two reads
- * disagreed, and would again. "Show the test pack on this page" keeps its load as it is. */
+ * when this load decided, by the rules of `whenSeen`: the flag for the next load, then the reload (none while the
+ * page leaves for the provider's sign-out, which a reload would cancel). */
 function watchUser(r: PackRecord, out: Decision) {
   let first = true;
   devpack.seen = (who) => {
     // Someone is signed in again: a page that was to leave for the provider's sign-out did not (its address never
     // replaced the page), and the next sign-out or session end takes the pack away as any does.
     if (who !== null) devpack.leaving = false;
-    const again = first && out.reloaded;
+    const act = whenSeen(out, who, { installed, first, leaving: !!devpack.leaving });
     first = false;
-    if (who === out.user || out.user === undefined || out.shown) return;
-    if (installed) {
-      try {
-        session?.setItem(ONCE_KEY, 'away');
-      } catch {
-        // Session storage blocked: the next load decides from the status alone.
-      }
-      // A sign-out that goes on to the provider's: the page is leaving, and a reload would cancel that navigation
-      // (the provider's session would stay). The page the provider sends back to is paused, by the flag.
-      if (who === null && devpack.leaving) return;
-      reload();
-    } else if (who !== null && !again && (out.paused === 'signed-out' || out.paused === 'user')) {
-      if (who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
-      try {
-        session?.setItem(ONCE_KEY, 'in');
-      } catch {
-        // Session storage blocked: the next load decides from the status alone.
-      }
-      reload();
+    if (act === 'none') return;
+    try {
+      session?.setItem(ONCE_KEY, act === 'in' ? 'in' : 'away');
+    } catch {
+      // Session storage blocked: the next load decides from the status alone.
     }
+    // The provider's session would stay if this page reloaded now; the page the provider sends back to is paused.
+    if (act === 'leave') return;
+    if (act === 'in' && who === r.user) banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
+    reload();
   };
 }
 

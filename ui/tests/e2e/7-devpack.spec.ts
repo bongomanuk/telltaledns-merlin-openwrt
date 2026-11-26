@@ -20,7 +20,7 @@ import { MAX_BYTES, MAX_CHARS, MAX_CONTEXTS, MAX_PAIRS, MULTI_SCRIPT, checkPack,
 import { identity, ship } from '../../src/lib/i18n/shipping';
 import { forPullRequest, materialize, readTemplate, writeTemplate, type Template } from '../../src/lib/i18n/template';
 import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from '../../src/lib/devpack/packWords';
-import { decide, type Checker, type Deps } from '../../src/lib/devpack/lifecycle';
+import { decide, whenSeen, type Checker, type Deps } from '../../src/lib/devpack/lifecycle';
 import { LIFETIME_MS, holds, keptTable, newRecord, notice, readValue, retire, rewrite, type Store } from '../../src/lib/devpack/store';
 import { DEVPACK_KEY } from '../../src/lib/i18n/devpack';
 import * as lib from '../../scripts/i18n-lib.mjs';
@@ -1064,6 +1064,49 @@ test('api_013 the one-load flag is taken whatever the load decides', async () =>
     await decide(v, deps({ ...o, takeOnce }));
     expect(flag, what).toBeNull();
   }
+});
+
+test('api_013 reads of who is signed in that disagree reload a page twice at most in a row', async () => {
+  // The boot's rules (`decide`, then `whenSeen` for the app's first report) replayed over every run of four page
+  // loads, each with what the pack's read of the status says and what the app reports first: nobody, the user who
+  // loaded the pack, or another user. A reload carries its flag to the load it lands on; a load that does nothing
+  // ends the run. Reads that disagree in one direction, in turn, or in any mix reload a page twice at most in a row.
+  const kept = { ...REC, checked: { ui: UI_A, sha: REC.sha, table: { deadbeef: 'Hält' } } };
+  const WHO = [null, 'admin', 'bob'];
+  const reads = WHO.flatMap((pack) => WHO.map((app) => ({ pack, app })));
+  const status = (u: string | null) => ({ user: u === null ? null : { username: u, display: null }, setupRequired: false });
+  const run = async (seq: { pack: string | null; app: string | null }[]) => {
+    let flag: string | null = null;
+    const acts: string[] = [];
+    for (const load of seq) {
+      const was = flag;
+      const out = await decide(JSON.stringify(kept), deps({ takeOnce: () => was }, { status: status(load.pack), calls: [] }));
+      const act = whenSeen(out, load.app, { installed: out.choice !== null, first: true, leaving: false });
+      acts.push(act);
+      if (act !== 'away' && act !== 'in') break;
+      flag = act;
+    }
+    return acts;
+  };
+  let worst: string[] = [];
+  for (const a of reads) for (const b of reads) for (const c of reads) for (const d of reads) {
+    const acts = await run([a, b, c, d]);
+    if (acts.filter((x) => x === 'away' || x === 'in').length > worst.filter((x) => x === 'away' || x === 'in').length) worst = acts;
+  }
+  expect(worst.filter((x) => x === 'away' || x === 'in').length, JSON.stringify(worst)).toBeLessThanOrEqual(2);
+  // In turn: the pack's read says nobody and the app the user, then the other way round: a sign-in reload, a
+  // going-away reload, and then nothing.
+  const turn = [{ pack: null, app: 'admin' }, { pack: 'admin', app: null }];
+  expect(await run([...turn, ...turn])).toEqual(['in', 'away', 'none']);
+  // A real sign-out and sign-in still bring the pack back: on the load after the sign-out, the app's first report is
+  // nobody, and a sign-in after it reloads into the pack.
+  const after = await decide(JSON.stringify(kept), deps({ takeOnce: () => 'away' }, { status: status(null), calls: [] }));
+  expect(whenSeen(after, null, { installed: false, first: true, leaving: false })).toBe('none');
+  expect(whenSeen(after, 'admin', { installed: false, first: false, leaving: false })).toBe('in');
+  // While the page leaves for the provider's sign-out it is not reloaded.
+  const shown = await decide(JSON.stringify(kept), deps({}, { status: status('admin'), calls: [] }));
+  expect(whenSeen(shown, null, { installed: true, first: false, leaving: true })).toBe('leave');
+  expect(whenSeen(shown, null, { installed: true, first: false, leaving: false })).toBe('away');
 });
 
 test('api_013 the clock is checked both ways', async () => {

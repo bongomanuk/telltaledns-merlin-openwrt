@@ -44,8 +44,8 @@ export type Deps = {
   readonly store: Store | null;
   /** Reads and removes the one-load flag: `1` after "Show the test pack on this page" (this load shows the
    * pack where it would pause), `away` after the pack left a page because someone went away (this load is
-   * paused, whoever the status says is signed in), `in` after a page reloaded for a sign-in (this load does
-   * not reload for the first user the app reports). */
+   * paused, whoever the status says is signed in), `in` after a page reloaded for a sign-in. A load that
+   * follows either reload does not reload for the first user the app reports. */
   readonly takeOnce: () => string | null;
   readonly fetch: typeof fetch;
   readonly now: () => number;
@@ -66,7 +66,7 @@ export type Deps = {
  * still applies (null when there is none, or it was just removed), the notice shown, and whether the file was
  * checked. `user`: who is signed in on this load (null: nobody), once the status was read; `shown`: "Show the
  * test pack on this page" lifted a pause for this one load; `reloaded`: a paused load that follows a reload for
- * a sign-in. */
+ * a sign-in or for someone going away. */
 export type Decision = {
   readonly choice: Choice | null;
   readonly view: View;
@@ -80,6 +80,21 @@ export type Decision = {
 };
 
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
+
+/** What a page load does when the app reports who is signed in (`who`; null: nobody, or the display page), against
+ * who was when it decided (`out`):
+ *   - `away`: someone went away from a page that shows the pack; the next load is paused, and the page reloads;
+ *   - `leave`: the same, but the page is leaving for the provider's sign-out, and a reload would cancel that;
+ *   - `in`: a sign-in on a page paused for nobody or for another user; the page reloads into the pack;
+ *   - `none`: nothing (a load "Show the test pack on this page" asked for keeps its load as it is).
+ * A load that follows a reload of the first three does not reload for the first user the app reports (`first`):
+ * the two reads of who is signed in disagreed, and would again, in either direction. */
+export function whenSeen(out: Decision, who: string | null, o: { readonly installed: boolean; readonly first: boolean; readonly leaving: boolean }): 'none' | 'away' | 'leave' | 'in' {
+  if (who === out.user || out.user === undefined || out.shown) return 'none';
+  if (o.installed) return who === null && o.leaving ? 'leave' : 'away';
+  if (who !== null && !(o.first && out.reloaded) && (out.paused === 'signed-out' || out.paused === 'user')) return 'in';
+  return 'none';
+}
 
 /** `p`, or a rejection when `signal` ends first (an import cannot be aborted, only given up). */
 const until = <T>(p: Promise<T>, signal: AbortSignal) =>
@@ -110,7 +125,7 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   const gone = lifetime(r, d.ui, now);
   if (gone) return removed(gone, r.name, r);
   const named: Named = { name: r.name, sha: r.sha, tag: r.tag };
-  const paused = (why: Paused, user?: string | null): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why, user, reloaded: flag === 'in' });
+  const paused = (why: Paused, user?: string | null): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why, user, reloaded: flag === 'in' || flag === 'away' });
   const unchecked: Decision = { choice: null, view: { kind: 'unchecked', ...named }, record: r };
   let user: string | null = null;
   let shown = false;
