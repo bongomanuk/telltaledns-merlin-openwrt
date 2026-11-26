@@ -122,6 +122,12 @@ async function storePack(page: Page, text: string, o: { tag?: string; name?: str
   return rec;
 }
 const kept = (page: Page) => page.evaluate((k) => localStorage.getItem(k), KEY);
+/** Signs in on the sign-in page shown (a session of this context's own, so signing it out leaves the file's). */
+async function signInHere(page: Page, who = ADMIN) {
+  await page.getByLabel('Username', { exact: true }).fill(who.user);
+  await page.getByLabel('Password', { exact: true }).fill(who.pass);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+}
 const banner = (page: Page) => page.getByTestId('devpack-banner');
 /** Settings → Account in the Advanced view, with the card open. */
 async function openCard(page: Page) {
@@ -348,11 +354,76 @@ test('api_013 signing in with a paused pack reloads into the pack', async ({ bro
   await s.page.getByLabel('Username', { exact: true }).fill(ADMIN.user);
   await s.page.getByLabel('Password', { exact: true }).fill(ADMIN.pass);
   await s.page.getByRole('button', { name: 'Sign in' }).click();
-  // The first build answer after sign-in reloads the page into the pack.
+  // Signing in reloads the page into the pack.
   await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
   await expect(banner(s.page)).toContainText('Test language pack: fr.json');
   await s.page.goto('/#/settings?tab=account');
   await expect(s.page.getByRole('heading', { level: 1 })).toHaveText(valueOf(SETTINGS.ctx));
+  await done(s);
+});
+
+test('api_013 signing out takes the pack off the page', async ({ browser }) => {
+  // Signed in with a pack, then Sign out: the sign-in page is drawn after one reload, in the usual language, and
+  // the pack is paused (review part A of T29.3, finding 1).
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  await expect(banner(s.page)).toContainText('Test language pack: fr.json');
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByRole('button', { name: 'Sign out' }).click()]);
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.');
+  await done(s);
+});
+
+test('api_013 a session that ends takes the pack off the page', async ({ browser }) => {
+  // A request that finds the session gone draws the sign-in page: after one reload, in the usual language, and
+  // the pack paused. Here the status still says signed in (as two nodes that disagree could): that load stays
+  // paused, and no reload follows (finding 1).
+  const s = await fresh(browser);
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/#/settings?tab=account');
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  let loads = 0;
+  s.page.on('load', () => loads++);
+  await s.page.route(
+    (u) => u.pathname.startsWith('/api/v1/') && !u.pathname.startsWith('/api/v1/auth/'),
+    (r) => r.fulfill({ status: 401, json: { type: 'about:blank', title: 'Unauthorized', status: 401, code: 'unauthorized', detail: 'the session is gone' } }),
+  );
+  await s.page.evaluate(() => (location.hash = '#/queries'));
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible({ timeout: 30_000 });
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('is paused on this page');
+  await s.page.waitForTimeout(3000);
+  expect(loads).toBe(1);
+  await done(s);
+});
+
+test('api_013 the display page from a signed-in page is drawn without the pack', async ({ browser }) => {
+  // A change of the hash alone (typed in the address bar) is not a page load: the display page reloads, paused.
+  const s = await fresh(browser);
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/#/');
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  await Promise.all([s.page.waitForEvent('load'), s.page.evaluate(() => (location.hash = '#/display?token=not-a-token'))]);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('is paused on this page');
+  await done(s);
+});
+
+test('api_013 show the test pack on this page keeps its load on the sign-in page', async ({ browser }) => {
+  // Nobody is signed in on the page "Show the test pack on this page" asked for: that is not someone going away.
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-once').click()]);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  await s.page.evaluate(() => ((window as unknown as { __dvpNoReload: boolean }).__dvpNoReload = true));
+  await s.page.waitForTimeout(2000);
+  expect(await s.page.evaluate(() => (window as unknown as { __dvpNoReload?: boolean }).__dvpNoReload)).toBe(true);
+  await expect(s.page.getByRole('heading', { name: valueOf(SIGN_IN.ctx) })).toBeVisible();
   await done(s);
 });
 

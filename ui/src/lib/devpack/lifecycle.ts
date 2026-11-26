@@ -6,7 +6,7 @@
 //   c. `?lang=` pauses it for this load; so does a page where nobody is signed in (sign-in, two-factor,
 //      setup, a server that cannot be reached), a display link and a display session, unless "Show the
 //      test pack on this page" asked for this one load (that flag is taken first, whatever the load
-//      decides);
+//      decides), and the load after the pack left a page because someone went away;
 //   d. the table the check gave is installed as it was kept, while the web UI build and the file's
 //      fingerprint it was made for are this record's (design section 8, "About the boot ceiling");
 //   e. otherwise the template is fetched (a failure: the usual language, and the pack stays for the next
@@ -38,8 +38,10 @@ export type Checker = { readonly readTemplate: typeof readTemplate; readonly tag
 
 export type Deps = {
   readonly store: Store | null;
-  /** Reads and removes the one-load flag of "Show the test pack on this page". */
-  readonly takeOnce: () => boolean;
+  /** Reads and removes the one-load flag: `1` after "Show the test pack on this page" (this load shows the
+   * pack where it would pause), `away` after the pack left a page because someone went away (this load is
+   * paused, whoever the status says is signed in). */
+  readonly takeOnce: () => string | null;
   readonly fetch: typeof fetch;
   readonly now: () => number;
   /** This web UI build, and the address of its template. */
@@ -57,7 +59,8 @@ export type Deps = {
 
 /** The page's language from the pack (null: the usual language), what the banner shows, the record that
  * still applies (null when there is none, or it was just removed), the notice shown, and whether the file was
- * checked. */
+ * checked. `user`: who is signed in on this load (null: nobody), once the status was read; `shown`: "Show the
+ * test pack on this page" lifted a pause for this one load. */
 export type Decision = {
   readonly choice: Choice | null;
   readonly view: View;
@@ -65,6 +68,8 @@ export type Decision = {
   readonly notice?: Notice;
   readonly paused?: Paused;
   readonly checked?: boolean;
+  readonly user?: string | null;
+  readonly shown?: boolean;
 };
 
 const NONE: Decision = { choice: null, view: { kind: 'none' }, record: null };
@@ -75,7 +80,8 @@ const until = <T>(p: Promise<T>, signal: AbortSignal) =>
 
 export async function decide(value: string, d: Deps): Promise<Decision> {
   // The one-load flag is taken first, so that no early return leaves it for a later page.
-  const once = d.takeOnce();
+  const flag = d.takeOnce();
+  const once = flag === '1';
   const now = d.now();
   const got = readValue(value);
   // What this load read is removed (or written over) only while the key still holds it.
@@ -97,20 +103,24 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   const gone = lifetime(r, d.ui, now);
   if (gone) return removed(gone, r.name, r);
   const named: Named = { name: r.name, sha: r.sha, tag: r.tag };
-  const paused = (why: Paused): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why });
+  const paused = (why: Paused, user?: string | null): Decision => ({ choice: null, view: { kind: 'paused', why, ...named }, record: r, paused: why, user });
   const unchecked: Decision = { choice: null, view: { kind: 'unchecked', ...named }, record: r };
+  let user: string | null = null;
+  let shown = false;
   const use = (table: NonNullable<Choice['table']>, checked: boolean): Decision => ({
     choice: { tag: r.tag, table, dir: r.dir, formatLocale: formatLocale(r.tag, d.languages) },
     view: { kind: 'active', ...named },
     record: r,
     checked,
+    user,
+    shown,
   });
   // c: `?lang=` is this load's language.
   if (new URLSearchParams(d.search).has('lang')) return paused('param');
   let json: string;
   let code: Checker;
   // c: who is signed in (the public status the app reads anyway).
-  let status: { user?: { display?: unknown } | null; setupRequired?: unknown };
+  let status: { user?: { display?: unknown; username?: unknown } | null; setupRequired?: unknown };
   try {
     const res = await d.fetch('/api/v1/auth/status', { signal: d.signal, credentials: 'same-origin' });
     if (!res.ok) return unchecked;
@@ -118,8 +128,13 @@ export async function decide(value: string, d: Deps): Promise<Decision> {
   } catch {
     return unchecked;
   }
+  user = status.user ? String(status.user.username ?? '') : null;
   const display = d.hash.startsWith('#/display') || !!status.user?.display;
-  if (!once && (display || !status.user || status.setupRequired)) return paused(display ? 'display' : 'signed-out');
+  // After the pack left a page because someone went away, this load is paused whatever the status says (a
+  // status that disagrees with the app's own requests never makes the page reload again and again).
+  const why: Paused | null = display ? 'display' : !status.user || status.setupRequired || flag === 'away' ? 'signed-out' : null;
+  if (why && !once) return paused(why, user);
+  shown = !!why;
   // d: the table kept for this build and this file.
   const kept = r.checked && r.checked.ui === d.ui && r.checked.sha === r.sha ? keptTable(r.checked.table) : null;
   if (kept) return use(kept, false);

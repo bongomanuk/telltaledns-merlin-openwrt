@@ -5,14 +5,17 @@
 // with the table kept for this build and file needs neither it nor the template. After sign-in it
 // compares the server's build commit, from the app's own build poll, with the one the pack was loaded
 // on: the first answer of a load that differs removes the pack and reloads; a later one removes it and
-// says so, without a reload, so nothing typed is lost. A pack paused only because nobody was signed in
-// loads at the first answer after sign-in. A tab removes or writes over only what it read, and reloads only
-// once the key no longer holds the pack, so a value it cannot change never makes it reload again.
+// says so, without a reload, so nothing typed is lost. It follows who is signed in, as the app tells it:
+// someone going away (a sign-out, a session that ends, the display page) takes a pack this load shows
+// away, and a sign-in on a page paused for nobody loads the pack; each reload lands on a load that decides
+// for whoever is there, so none repeats. "Show the test pack on this page" keeps its one load as it is. A
+// tab removes or writes over only what it read, and reloads only once the key no longer holds the pack, so
+// a value it cannot change never makes it reload again.
 import { mount } from 'svelte';
 import type { Choice } from '../i18n';
 import { devpack } from '../i18n/devpack';
 import DevPackBanner from './DevPackBanner.svelte';
-import { decide, type Paused, type View } from './lifecycle';
+import { decide, type Decision, type View } from './lifecycle';
 import { ONCE_KEY, notice, retire, type Held, type PackRecord, type Store } from './store';
 
 performance.mark('telltale.devpack.start');
@@ -60,11 +63,11 @@ export async function boot(value: string, signal: AbortSignal): Promise<Choice |
     store,
     takeOnce: () => {
       try {
-        const v = session?.getItem(ONCE_KEY);
+        const v = session?.getItem(ONCE_KEY) ?? null;
         session?.removeItem(ONCE_KEY);
-        return v === '1';
+        return v;
       } catch {
-        return false;
+        return null;
       }
     },
     fetch: (input, init) => fetch(input, init),
@@ -93,30 +96,46 @@ export async function boot(value: string, signal: AbortSignal): Promise<Choice |
     document.body.insertBefore(host, document.getElementById('app'));
     banner = mount(DevPackBanner, { target: host, props: { view, actions } });
   }
-  if (record) watchServer(record, out.view, out.paused);
+  if (r) {
+    watchServer(r);
+    watchUser(r, out);
+  }
   performance.mark('telltale.devpack.ready');
   return installed ? out.choice : null;
 }
 
-function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
+function watchServer(r: PackRecord) {
   let first = true;
   devpack.onBuild = (commit) => {
     if (!commit) return;
     const wasFirst = first;
     first = false;
-    if (!record) return;
-    const named = { name: r.name, sha: r.sha, tag: r.tag };
-    if (commit !== r.server.commit) {
-      // Another server build (an upgrade, a rollback or a downgrade): the pack goes, with a notice. The first
-      // answer of a load reloads, once the key no longer holds the pack (a reload never finds it again).
-      record = null;
-      const gone = retire(store, r, notice('upgrade', r.name, Date.now()));
-      if (wasFirst && gone) reload();
-      else banner?.set({ kind: 'updated', ...named });
-      return;
-    }
-    if (wasFirst && paused === 'signed-out' && view.kind === 'paused') {
-      banner?.set({ kind: 'signed-in', ...named });
+    if (!record || commit === r.server.commit) return;
+    // Another server build (an upgrade, a rollback or a downgrade): the pack goes, with a notice. The first
+    // answer of a load reloads, once the key no longer holds the pack (a reload never finds it again).
+    record = null;
+    const gone = retire(store, r, notice('upgrade', r.name, Date.now()));
+    if (wasFirst && gone) reload();
+    else banner?.set({ kind: 'updated', name: r.name, sha: r.sha, tag: r.tag });
+  };
+}
+
+/** Who is signed in, as the app says whenever it changes (null: nobody, or the display page), against who was
+ * when this load decided: someone going away takes a pack this load shows away (the next load is paused,
+ * whatever the status says then), and a sign-in on a page paused for nobody loads it. "Show the test pack on
+ * this page" keeps its load as it is. */
+function watchUser(r: PackRecord, out: Decision) {
+  devpack.seen = (who) => {
+    if (who === out.user || out.user === undefined || out.shown) return;
+    if (installed) {
+      try {
+        session?.setItem(ONCE_KEY, 'away');
+      } catch {
+        // Session storage blocked: the next load decides from the status alone.
+      }
+      reload();
+    } else if (who !== null && out.paused === 'signed-out') {
+      banner?.set({ kind: 'signed-in', name: r.name, sha: r.sha, tag: r.tag });
       reload();
     }
   };

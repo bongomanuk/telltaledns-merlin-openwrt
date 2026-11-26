@@ -120,6 +120,10 @@
   const nextTheme = $derived(theme === 'auto' ? 'dark' : theme === 'dark' ? 'light' : 'auto');
 
   void refreshSession();
+  // REQ: API-013 (ADR-190) — a test language pack follows who is signed in, and the display page.
+  $effect(() => {
+    if (session.loaded && !session.error) devpack.seen?.(route.path === '/display' ? null : (session.user?.username ?? null));
+  });
 
   // Each user has their own Simple/Advanced choice, and their own domain icon choice (OBS-039).
   $effect(() => {

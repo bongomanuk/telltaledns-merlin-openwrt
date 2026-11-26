@@ -9,7 +9,8 @@
 // a pack another tab loaded since.
 import { DEVPACK_KEY } from '../i18n/devpack';
 
-/** The one-load flag of "Show the test pack on this page" (session storage, removed when read). */
+/** The one-load flag (session storage, removed when read): `1` after "Show the test pack on this page",
+ * `away` after the pack left a page because someone went away. */
 export const ONCE_KEY = 'telltale.devpack.once';
 /** How long a pack (and the notice after one) lasts. */
 export const LIFETIME_MS = 7 * 24 * 3600 * 1000;

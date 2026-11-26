@@ -674,7 +674,7 @@ function deps(o: Partial<Deps> = {}, fake: Fake = { calls: [] }): Deps {
     if (url === TPL_URL) return fake.tpl === null ? new Response('', { status: 500 }) : new Response(fake.tpl ?? deJson());
     return new Response('', { status: 404 });
   };
-  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], checker: checking(), signal: new AbortController().signal, ...o };
+  return { store: new MemStore(), takeOnce: () => null, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], checker: checking(), signal: new AbortController().signal, ...o };
 }
 /** The checking code as the browser loads it (`recheck.ts`), with another check if given; `loads` counts the loads. */
 function checking(check = checkPack, loads = { n: 0 }): () => Promise<Checker> {
@@ -846,10 +846,21 @@ test('api_013 a page load pauses the pack where someone else may be next', async
   expect(await paused({ search: '?lang=en' }, fake)).toEqual(['param', 'usual language']);
   expect(fake.calls).toEqual([]);
   // "Show the test pack on this page": this one load, signed out or on a display.
-  expect(await paused({ takeOnce: () => true }, { status: { user: null, setupRequired: false }, calls: [] })).toEqual(['active', 'the pack']);
-  expect(await paused({ takeOnce: () => true, hash: '#/display?token=x' })).toEqual(['active', 'the pack']);
+  expect(await paused({ takeOnce: () => '1' }, { status: { user: null, setupRequired: false }, calls: [] })).toEqual(['active', 'the pack']);
+  expect(await paused({ takeOnce: () => '1', hash: '#/display?token=x' })).toEqual(['active', 'the pack']);
   // A server that can't be reached: the usual language, and the pack stays.
   expect(await paused({}, { status: null, calls: [] })).toEqual(['unchecked', 'usual language']);
+  // The load after the pack left a page because someone went away is paused, whoever the status says is signed
+  // in (review part A of T29.3, finding 1: a status that disagrees with the app never makes a reload loop).
+  expect(await paused({ takeOnce: () => 'away' })).toEqual(['signed-out', 'usual language']);
+  // What the boot needs to follow the user: who was signed in when the load decided, and whether "Show the test
+  // pack on this page" lifted a pause.
+  const on = await decide(v, deps());
+  expect([on.user, on.shown]).toEqual(['admin', false]);
+  const out = await decide(v, deps({}, { status: { user: null, setupRequired: false }, calls: [] }));
+  expect([out.user, out.paused]).toEqual([null, 'signed-out']);
+  const shown = await decide(v, deps({ takeOnce: () => '1' }, { status: { user: null, setupRequired: false }, calls: [] }));
+  expect([shown.user, shown.shown, shown.view.kind]).toEqual([null, true, 'active']);
 });
 
 test('api_013 the one-load flag is taken whatever the load decides', async () => {
@@ -864,14 +875,14 @@ test('api_013 the one-load flag is taken whatever the load decides', async () =>
     ['a page that uses the pack', JSON.stringify(REC), {}],
   ];
   for (const [what, v, o] of cases) {
-    let flag = true;
+    let flag: string | null = '1';
     const takeOnce = () => {
       const was = flag;
-      flag = false;
+      flag = null;
       return was;
     };
     await decide(v, deps({ ...o, takeOnce }));
-    expect(flag, what).toBe(false);
+    expect(flag, what).toBeNull();
   }
 });
 
