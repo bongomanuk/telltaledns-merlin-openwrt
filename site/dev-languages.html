@@ -16,7 +16,7 @@
 <section>
   <p class="eyebrow">Developers</p>
   <h1>Write a language pack</h1>
-  <p class="lede">A language pack is one file that holds your translation of the web UI. You can make it, check it and try it in your own browser without installing anything, and the project's checks tell you what to fix before anyone reads it. This page is the whole path, from the empty template to the pull request.</p>
+  <p class="lede">A language pack is your translation of the web UI, kept in one file. On a TelltaleDNS you can sign in to, you can make it, check it and try it in your browser with no other tools. The project's checks tell you what to fix before anyone reads it. This page is the whole path, from the empty template to the pull request.</p>
   <ul class="onpage">
     <li><a href="#what">What a language pack is</a></li>
     <li><a href="#template">Get the template</a></li>
@@ -42,15 +42,14 @@
     [["{n} answer","{n} answers"],{"other":"{n} qa-answers"}]
   ]
 }</code></pre>
-  <p class="muted">An excerpt of the made-up test language this page uses for every example. Its tag is <code>qaa</code>, one the standard sets aside for tests, so the card refuses it as a real language. Your file uses your language's real tag. The English texts in the examples are the test fixture's, not the UI's.</p>
-  <p>A file is data and is never run. A translation is shown only while it agrees with the English it replaces: the same placeholders, tags, web addresses and numbers. If not, the English shows.</p>
+  <p class="muted">An excerpt of the made-up test language this page uses for every example. Its tag is <code>qaa</code>, one that the language-code standards reserve for private use, so the card refuses it as a language. Your pack uses your language's real tag. The English texts in the examples are the test fixture's, not the UI's.</p>
+  <p>A pack is data and is never run. A translation is shown only while it agrees with the English it replaces: the same placeholders, tags, web addresses and numbers. If not, the English shows.</p>
   <p>The words used here:</p>
   <ul>
     <li><b>Tag</b> (a language tag): the short code for a language, such as <code>de</code> or <code>pt-BR</code>.</li>
-    <li><b>Template:</b> the empty file for a tag, with every English text and no translation.</li>
-    <li><b>File:</b> the template with your translations filled in.</li>
-    <li><b>Pack:</b> that file while you test it in a browser.</li>
-    <li><b>Fingerprint:</b> the first 12 characters of the file's SHA-256 hash, which the banner shows to tell one file from another.</li>
+    <li><b>Pack</b> (a language pack): your translation of the web UI, in one file named <code>&lt;tag&gt;.json</code>. The page also says "your file". A pack is <i>in use</i> while your browser is showing it.</li>
+    <li><b>Template:</b> the empty pack for a tag: every English text and no translation.</li>
+    <li><b>Fingerprint:</b> the first 12 characters of a pack's SHA-256 hash, which the banner shows to tell one pack from another.</li>
     <li><b>Pull request:</b> GitHub's way of proposing a change to the project.</li>
     <li><b>Manifest:</b> <code>ui/src/locales/manifest.json</code>, the list of languages with their owners and whether each is offered.</li>
   </ul>
@@ -59,11 +58,11 @@
 
 <section id="template">
   <h2>Get the template</h2>
-  <p>Two ways give the same file. The card needs only a browser. The repository tool needs a checkout and Node.</p>
+  <p>Two ways give the same template. The card needs a browser and a TelltaleDNS you can sign in to, with any role: your own, or a test installation (<a href="start.html">Get started</a> shows how to run one). The repository tool needs a checkout and Node.</p>
   <h3>With the card</h3>
   <ol class="steps">
     <li class="step">Sign in and switch to the <b class="ui">Advanced</b> view with the Simple | Advanced switch at the top of the page (in the menu on a phone).</li>
-    <li class="step">Open <b>Settings</b>, then the <b class="ui">Account</b> tab. Find <b class="ui">Test a language pack</b> and choose <b class="ui">Open</b>. In the Simple view the card shows only while a pack is in use.</li>
+    <li class="step">Open <b>Settings</b>, then the <b class="ui">Account</b> tab. Find <b class="ui">Test a language pack</b> and choose <b class="ui">Open</b>. In the Simple view the card shows only while a pack, or a notice about one, is in this browser.</li>
     <li class="step">Under <b class="ui">1. Get the template</b>, type your tag in <b class="ui">Language tag (such as de, fr, pt-BR or zh-Hant)</b>. The line below says what the card understood, for example <q>German (Deutsch): written left to right; saved as de.</q></li>
     <li class="step">Choose <b class="ui">Download the template (de.json)</b> and <b class="ui">Notes for translators (de-notes.txt)</b>.</li>
   </ol>
@@ -82,6 +81,7 @@ node scripts/i18n.mjs sync de</code></pre>
       <tr><td><code>de</code>, <code>pt-BR</code>, <code>zh-Hans</code>, <code>zh-Hant</code>, <code>sr-Latn</code></td><td>Accepted. The line shows the language's name, its direction and the tag it will be saved as.</td></tr>
       <tr><td><code>pt-br</code> (any case)</td><td>Accepted, saved as <code>pt-BR</code>.</td></tr>
       <tr><td><code>zh</code>, <code>zh-CN</code>, <code>sr</code></td><td><q>This language is written in more than one script: add the script, such as zh-Hans.</q> (for <code>sr</code>: <code>sr-Cyrl</code>)</td></tr>
+      <tr><td><code>zh-TW</code>, <code>zh-HK</code>, <code>zh-MO</code></td><td>The same message, with the same hint <code>zh-Hans</code>. The hint ignores the region: for Traditional Chinese write <code>zh-Hant</code> (or <code>zh-Hant-TW</code>).</td></tr>
       <tr><td><code>en</code>, <code>en-US</code>, <code>en-XA</code></td><td><q>English is the source of every text: there is no English language pack.</q></td></tr>
       <tr><td><code>ar-XB</code></td><td><q>This is a pseudo-locale: it is made from the English.</q></td></tr>
       <tr><td><code>qaa</code> (any of <code>qaa</code> to <code>qtz</code>), <code>und</code>, <code>mis</code>, <code>pt-BR-x-foo</code></td><td><q>This tag is for private or special use, not a language.</q></td></tr>
@@ -96,7 +96,7 @@ node scripts/i18n.mjs sync de</code></pre>
   <ul>
     <li><b>The language's name</b> comes from your browser and is only for display. It decides nothing.</li>
     <li><b>The direction</b> follows the script: right to left for Arabic, Hebrew, Thaana, Syriac, N'Ko, Adlam and Hanifi Rohingya. For those the card adds <q>The layout isn't ready for right-to-left languages yet.</q></li>
-    <li><b>The plural forms</b> (the categories <code>zero</code>, <code>one</code>, <code>two</code>, <code>few</code>, <code>many</code> and <code>other</code> that your language uses) come from <code>ui/src/locales/plurals.json</code>, a table the project checks in, and never from your browser. <code>ja</code> has only <code>other</code>, <code>de</code> has <code>one</code> and <code>other</code>, <code>ru</code> has <code>one</code>, <code>few</code>, <code>many</code> and <code>other</code>, and <code>ar</code> has all six.</li>
+    <li><b>The plural forms</b> are the categories <code>zero</code>, <code>one</code>, <code>two</code>, <code>few</code>, <code>many</code> and <code>other</code> that your language uses. They come from <code>ui/src/locales/plurals.json</code>, a table the project checks in, and never from your browser. <code>ja</code> has only <code>other</code>, <code>de</code> has <code>one</code> and <code>other</code>, <code>ru</code> has <code>one</code>, <code>few</code>, <code>many</code> and <code>other</code>, and <code>ar</code> has all six.</li>
   </ul>
 
   <h3>The notes for translators</h3>
@@ -108,7 +108,7 @@ node scripts/i18n.mjs sync de</code></pre>
   "Holds"
     note: A cache entry count
     sensitive: give a back-translation in the pull request</code></pre>
-  <p class="muted">The lines above it (the header, the steps and the terms) say the same for every language, except the tag, direction, plural forms, build and date. A note can also say <code>the English's own note: …</code>: see the third item under Translate.</p>
+  <p class="muted">The lines above it (the header, the steps and the terms) say the same for every language, except the language's name, tag, direction, plural forms, build and date. A note can also say <code>the English's own note: …</code>: that is the third item of a pair, described under Translate.</p>
 </section>
 
 <section id="translate">
@@ -118,7 +118,7 @@ node scripts/i18n.mjs sync de</code></pre>
   <ul>
     <li><b>Placeholders</b> such as <code>{kind}</code>: gaps the UI fills with a name or a number. Move them where your sentence needs them, but never rename or drop one. Never type a number in a placeholder's place. In a limit such as <code>{max}</code>, the UI writes the number as your language writes it, and you choose the noun form that goes with it. Keep <code>{max}</code> in every form of the plural.</li>
     <li><b>Markup tags</b> such as <code>&lt;b&gt;…&lt;/b&gt;</code>: keep them around the same words and translate the words inside.</li>
-    <li><b>Web addresses, paths, ports, settings and commands</b>: <code>https://example.com/docs</code>, <code>/etc/telltale/</code>, <code>mail.example:587</code>, <code>max_ttl</code>, text in backticks. You may not add one that the English does not have.</li>
+    <li><b>Web addresses, paths, ports, settings and commands</b>: <code>https://example.com/docs</code>, <code>/etc/telltale/</code>, <code>mail.example:587</code>, <code>max_ttl</code>, text in backticks. Add no address, port, path, <code>=</code>, <code>$</code> or <code>|</code> that the English does not have: the check fails it.</li>
     <li><b>Numbers</b>: every number of the English stays, written in digits.</li>
     <li><b>The words the notes file lists as "keep as written"</b>, the values people type (<code>email</code> above), and the terms kept everywhere, such as <code>NXDOMAIN</code>.</li>
     <li><b>No invisible characters</b>, no characters that change the direction of text, and no word that mixes Latin letters with Cyrillic or Greek ones that look alike.</li>
@@ -131,10 +131,22 @@ node scripts/i18n.mjs sync de</code></pre>
   <ol class="steps">
     <li class="step"><b>A changed placeholder.</b> The English is <code>Notify by {kind}</code>.
 <pre><code>["Notify by {kind}","Qa-notify {type}"]</code></pre>
-      The card says <q>Keep {kind} exactly as it is: it is replaced by a value.</q> and <q>{type} isn't in the English: a translation keeps the placeholders the English has, and no others.</q> Fix: <code>["Notify by {kind}","Qa-notify {kind}"]</code>.</li>
+      The card says two things:
+      <ul>
+        <li><q>Keep {kind} exactly as it is: it is replaced by a value.</q></li>
+        <li><q>{type} isn't in the English: a translation keeps the placeholders the English has, and no others.</q></li>
+      </ul>
+      The fix is <code>["Notify by {kind}","Qa-notify {kind}"]</code>.</li>
     <li class="step"><b>A translated web address.</b> The English is <code>Read https://example.com/docs first.</code>
 <pre><code>["Read https://example.com/docs first.","Qa-read https://qa-example.com/docs."]</code></pre>
-      The card says <q>Keep the web address exactly as in the English: https://example.com/docs</q>, <q>This web address isn't in the English: https://qa-example.com/docs</q>, <q>Keep https://example.com/docs as written.</q> and <q>Remove https://qa-example.com/docs: a translation adds no address, port, path or setting.</q> One mistake can show more than once. Fix it once and they all go.</li>
+      The card says four things:
+      <ul>
+        <li><q>Keep the web address exactly as in the English: https://example.com/docs</q></li>
+        <li><q>This web address isn't in the English: https://qa-example.com/docs</q></li>
+        <li><q>Keep https://example.com/docs as written.</q></li>
+        <li><q>Remove https://qa-example.com/docs: a translation adds no address, port, path or setting.</q></li>
+      </ul>
+      One mistake can show more than once. Fix it once and they all go.</li>
     <li class="step"><b>A plural with the language's forms.</b> The test language has only <code>other</code> (its notes file says <code>Plural forms of this language: other.</code>). Copying English's two forms is wrong:
 <pre><code>[["{n} answer","{n} answers"],{"one":"{n} qa-answer","other":"{n} qa-answers"}]</code></pre>
       The card says <q>This language uses other; this entry has one, other.</q> Fix: write exactly the forms the notes file lists. A language with <code>one</code> and <code>other</code> gets a template line like <code>[["{n} agent change to review","{n} agent changes to review"],{"one":"","other":""}]</code>, and you fill both.</li>
@@ -150,7 +162,7 @@ node scripts/i18n.mjs sync de</code></pre>
   <p>There are two checks and they apply the same rule. The card runs it in your browser. In the repository, <code>npm run check:i18n</code> (in <code>ui/</code>) runs it for every language file, and so does CI, the project's automatic check of every pull request. <b>FAIL</b> means the author of the file can fix it. <b>REPORT</b> means a person reads it. A missing translation is a report, never a failure.</p>
   <h3>On the card</h3>
   <ol class="steps">
-    <li class="step">Under <b class="ui">2. Check your file</b>, choose <b class="ui">Choose your file (or drop it on the button)</b>.</li>
+    <li class="step">Under <b class="ui">2. Check your file</b>, use the field <b class="ui">Choose your file (or drop it on the button)</b> and pick your pack.</li>
     <li class="step">Read the summary, for example <q>placeholder.json: 7 of 9 texts translated (78%). 1 text breaks a rule and shows in English.</q> The count is of texts. The list below shows every finding, so one text can appear in it twice.</li>
     <li class="step">Open the lists: <b class="ui">Breaks a rule, shown in English (1)</b>, <b class="ui">Not translated (1)</b>, <b class="ui">Left over (0)</b> and <b class="ui">Worth a look (9)</b>. Each entry names the part of the UI and shows the English, with your text and what to do where a rule is broken. A list shows 200 entries at most.</li>
     <li class="step"><b class="ui">Coverage per context, lowest first</b> shows which parts of the UI still need work. <b class="ui">Before you send it: what only the check of the pull request can judge</b> lists what the card cannot know.</li>
@@ -181,7 +193,7 @@ i18n: 2 failure(s)</code></pre>
     <tbody>
       <tr><td><q>Keep … exactly as it is: it is replaced by a value.</q><br><q>… isn't in the English: a translation keeps the placeholders the English has, and no others.</q></td><td><code>placeholders: missing</code><br><code>placeholders: added at N</code></td><td>Write each placeholder back exactly, braces included, and remove any that is not in the English.</td></tr>
       <tr><td><q>Keep the tag … exactly as in the English.</q><br><q>The tag … isn't in the English.</q></td><td><code>tags: missing</code><br><code>tags: added at N</code></td><td>Keep each markup tag, such as <code>&lt;b&gt;</code> and <code>&lt;/b&gt;</code>, around the same words.</td></tr>
-      <tr><td><q>Keep the web address exactly as in the English: …</q><br><q>This web address isn't in the English: …</q><br><q>The translation has more web addresses than the English.</q></td><td><code>urls: missing</code><br><code>urls: added at N</code></td><td>Copy the address from the English, character for character.</td></tr>
+      <tr><td><q>Keep the web address exactly as in the English: …</q><br><q>This web address isn't in the English: …</q><br><q>The translation has more web addresses than the English.</q></td><td><code>urls: missing</code><br><code>urls: added at N</code><br><code>urls: added: the English has N</code></td><td>Copy the address from the English, character for character.</td></tr>
       <tr><td><q>Keep … as written.</q><br><q>Remove …: a translation adds no address, port, path or setting.</q></td><td><code>structural: missing</code><br><code>structural: added at N</code></td><td>Keep what the English has, and add nothing that looks like an address, port, path or setting. A time such as 24:00 counts as one.</td></tr>
       <tr><td><q>Keep the number ….</q></td><td><code>digits: missing</code></td><td>Write the number in digits. A language that needs words can ask a maintainer for an exemption.</td></tr>
       <tr><td><q>Keep … untranslated: it is a value people type.</q></td><td><code>verbatim: missing</code></td><td>Keep the word the notes file lists as "keep as written".</td></tr>
@@ -201,7 +213,7 @@ i18n: 2 failure(s)</code></pre>
     <li><b>Plural forms.</b> A wrong set of forms in one pair drops that one text on the card, and the check goes on. The tool fails the whole file and prints nothing else about it until you fix that.</li>
     <li><b>Pairs under <code>~leftover</code></b> are listed on the card and not printed by the tool.</li>
     <li><b>Coverage</b> is per context on the card and one line for the language in the tool.</li>
-    <li><b>The sensitive and swap lines</b> come only from the tool. It needs the file before yours to compare: in CI, and locally when your commit has a parent that holds the file. A swap is a new translation equal to another message's old one. Otherwise the tool says <code>sensitive and swap lines: not checked</code>.</li>
+    <li><b>The sensitive and swap lines</b> come only from the tool. It compares your file with the copy in the commit before yours: in CI, and on your computer once your repository has an earlier commit. A swap is a new translation equal to another message's old one. With no earlier commit the tool says <code>sensitive and swap lines: not checked</code>.</li>
     <li><b>The file's exact form.</b> The card says <q>Not in the repository's exact form: "Download for a pull request" fixes that.</q> The tool says <code>FAIL canonical</code> (another layout, such as Windows line ends) or <code>FAIL malformed … an unexpected character at offset 0</code> for a byte-order mark. The card reads past a byte-order mark and still calls the file not exact.</li>
     <li><b>Tags</b> (above) and the manifest: only the tool reads <code>manifest.json</code>.</li>
   </ul>
@@ -211,7 +223,7 @@ i18n: 2 failure(s)</code></pre>
   <h2>Try it</h2>
   <p>Seeing your translation in the real UI finds problems no check can: a label that is too long, or a sentence that reads wrongly.</p>
   <ol class="steps">
-    <li class="step">On the card, choose a file that has nothing under <b class="ui">Breaks a rule, shown in English</b>, then <b class="ui">Use this pack…</b>.</li>
+    <li class="step">On the card, choose your file, ideally with nothing under <b class="ui">Breaks a rule, shown in English</b> (those texts show in English), then choose <b class="ui">Use this pack…</b>.</li>
     <li class="step">Read the confirmation, <q>Use this language pack in this browser?</q>, and choose <b class="ui">Use it and reload</b>. <b class="ui">Cancel</b> changes nothing.</li>
     <li class="step">The page reloads in your language. An English banner stays at the top of every page: <q>Test language pack: … (…, fingerprint …). Labels come from that file, not from TelltaleDNS.</q> It has <b class="ui">Details</b>, a link to Settings, Account, and <b class="ui">Remove</b>.</li>
     <li class="step">To try a new version of the file, choose <b class="ui">Check a new version of the file</b> on the card, and use it again.</li>
@@ -221,46 +233,47 @@ i18n: 2 failure(s)</code></pre>
     <li><b>Where:</b> in this browser only, for this TelltaleDNS address, and for the user who loaded it. Another user of the same browser sees their usual language. Any signed-in user can try a pack: it changes nothing on the server.</li>
     <li><b>Removed by the page</b> at the next page load after an upgrade of the web UI. After an upgrade of the server, it goes at the first page you open once you are signed in. A rollback or a downgrade counts as an upgrade.</li>
     <li><b>Also removed</b> 7 days after you loaded it, or when the kept copy cannot be read.</li>
-    <li><b>Also removed</b> when its check fails twice in a row, or when a page cannot be drawn with it (the page then loads once more without it).</li>
+    <li><b>Also removed</b> when it could not be checked twice in a row. That is an error in the check itself, not a finding about your file.</li>
+    <li><b>Also removed</b> when a page cannot be drawn with it (the page then loads once more without it).</li>
     <li><b>Removed by you</b> with <b class="ui">Remove</b> in the banner or <b class="ui">Remove and reload</b> on the card.</li>
-    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load). After you sign out, after your session ends, or after a sign-out at a sign-in provider, the page the browser loads is in your usual language. The pack returns when you sign in again. The sign-in page on screen as the browser leaves for the provider may still show the pack.</li>
-    <li><b>Real English:</b> put <code>?lang=en</code> after the address and before any <code>#</code>, for one page load. Any <code>?lang=</code> pauses the pack for that load.</li>
+    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load). After you sign out, after your session ends, or after a sign-out at a sign-in provider, the page the browser loads is in your usual language. The pack returns when you sign in again. The sign-in page on screen as the browser leaves for the provider may still show the pack, and a page you return to with Back reloads first.</li>
+    <li><b>Real English:</b> put <code>?lang=en</code> after the address and before any <code>#</code>, for one page load: <code>https://dns.example/?lang=en#/settings</code>. Any <code>?lang=</code> pauses the pack for that load.</li>
   </ul>
   <h3>What to look at</h3>
   <ul>
     <li><b>Long text.</b> Buttons, table headings and menus at a phone's width of about 360 px.</li>
     <li><b>Counts.</b> A page that shows 0, 1, 2, 5 or 21 of something: does each form read right?</li>
     <li><b>Right to left.</b> Not ready. The card says <q>The layout isn't ready for right-to-left languages yet.</q> for such a language, so judge the words, not the layout.</li>
-    <li><b>Text that is still English.</b> Open the UI with <code>?lang=en-XA</code>. Every text on the translation layer shows with accented letters and a few dots at the end, about a third longer, so <code>Holds {n}</code> reads <code>Ĥóļðš {n}···</code>. A text in plain English is not on the layer yet, and a translation cannot reach it. Tell the maintainers in an issue.</li>
+    <li><b>Text that is still English.</b> Open the UI with <code>?lang=en-XA</code>. Every text on the translation layer shows with accented letters and a few dots at the end, about a third longer, so <code>Holds {n}</code> reads <code>Ĥóļðš {n}···</code>. A text in plain English is not on the layer yet, and a translation cannot reach it: tell the maintainers in an issue. Some English is plain on purpose, so leave it. That is the test pack's own banner, confirmation and buttons, what the server says (error details and alert text), the in-app help, and names and values.</li>
   </ul>
-  <p>A developer with a checkout has a second way. A language that is in the manifest is built into the UI with <code>"offered": false</code>, and <code>?lang=&lt;tag&gt;</code> shows it for one page load even though it is not offered. <code>ui/README.md</code> has the commands to run the UI from the repository.</p>
+  <p>A developer with a checkout has a second way. A language that is in the manifest is built into the UI with <code>"offered": false</code>. Then <code>?lang=&lt;tag&gt;</code> shows it for one page load, though it is not offered. <code>ui/README.md</code> has the commands to run the UI from the repository.</p>
 </section>
 
 <section id="send">
   <h2>Send it</h2>
-  <p>Your pull request changes your language's file and nothing else. For a new language, ask in an issue first (<a href="https://github.com/paimonsoror/telltaledns/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING.md</a> says so).</p>
+  <p>A pull request for a new language carries two things: your pack, and the language's entry in the manifest. The check fails either one alone. Ask in an issue first (<a href="https://github.com/paimonsoror/telltaledns/blob/main/CONTRIBUTING.md#translations">CONTRIBUTING.md</a> says so).</p>
   <ol class="steps">
     <li class="step">Be sure nothing is under <b class="ui">Breaks a rule, shown in English</b>.</li>
     <li class="step">Choose <b class="ui">Download for a pull request (de.json)</b>. It is your file in the exact form the project keeps, with the texts you have not translated added as empty pairs. Or use the file <code>sync</code> wrote. Do not edit it afterwards: an editor can add Windows line ends or a byte-order mark.</li>
-    <li class="step">A new language needs one entry in <code>ui/src/locales/manifest.json</code>. A maintainer adds it. To run the check on your own computer, add it in your working copy and say so in the pull request. Keep this layout exactly, or the check says <code>not in canonical form</code>:
+    <li class="step">Add the language's entry to <code>ui/src/locales/manifest.json</code>, or ask a maintainer to add it to your branch. Without its entry your pack fails the check (<code>FAIL stray</code>), and an entry without its pack fails it too. Keep this layout exactly, or the check says <code>not in canonical form</code>:
 <pre><code>{
   "de": {
     "dir": "ltr",
     "offered": false,
     "owners": [
-      "example-owner"
+      "your-github-name"
     ],
     "since": "0.9.0"
   }
 }</code></pre>
-      <code>owners</code> are the GitHub names of the people who answer for the language, without the at-sign. <code>dir</code> is <code>ltr</code> or <code>rtl</code>, as the notes file says. <code>since</code> is a release version, which a maintainer settles.</li>
-    <li class="step">Open the pull request with <code>ui/src/locales/&lt;tag&gt;.json</code> (and the manifest entry, if the maintainer asks for it).</li>
+      <code>owners</code> are the GitHub names of the people who answer for the language, without the at-sign. <code>dir</code> is <code>ltr</code> or <code>rtl</code>, as the notes file says. <code>offered</code> stays <code>false</code> for a new language. <code>since</code> is a release version, which a maintainer settles.</li>
+    <li class="step">Open the pull request with <code>ui/src/locales/&lt;tag&gt;.json</code> and the manifest entry, and nothing else.</li>
     <li class="step">In its description, say the language and that you read every text (a machine translation is a draft only). Add a back-translation of each sensitive message you changed.</li>
     <li class="step">Wait for the checks and for the review of the language's owner.</li>
   </ol>
   <h3>Who checks what</h3>
   <ul>
-    <li><b>The reviewers check structure and need not read the language.</b> The pull request changes that language's file only. <code>npm run check:i18n</code> is green. Every sensitive and swap line in the job summary is explained. The language's owner has approved.</li>
+    <li><b>The reviewers check structure and need not read the language.</b> The pull request holds that language's pack and its manifest entry, and nothing else. <code>npm run check:i18n</code> is green. Every sensitive and swap line in the job summary is explained. The language's owner has approved.</li>
     <li><b>The language's owner checks the translation:</b> that it is right, reads well and means what the English means. The checks cannot know that.</li>
   </ul>
   <h3>How a language is offered, and taken off</h3>
@@ -275,7 +288,7 @@ i18n: 2 failure(s)</code></pre>
   <h2>Keep it alive</h2>
   <ul>
     <li><b>The owner.</b> The person (or people) named in the manifest answer for the language's content and approve changes to its file. Maintainers review the structure.</li>
-    <li><b>When the English changes.</b> A text whose English changes by more than punctuation or spacing loses its translation until the owner confirms the new text, and the English shows meanwhile. Run <code>node scripts/i18n.mjs sync &lt;tag&gt;</code>: it keeps your translations, adds new texts empty, and sets the old pairs aside under <code>~leftover</code>, or deletes them with <code>--prune</code>. A maintainer keeps translations through an edit that does not change the meaning with <code>carry</code>.</li>
+    <li><b>When the English changes.</b> Any change to a text's English loses its translation, except spacing and the form of quotes, dashes and ellipsis. Adding a full stop or changing a capital letter counts. The translation stays lost until the owner confirms the new text, and the English shows meanwhile. Run <code>node scripts/i18n.mjs sync &lt;tag&gt;</code>: it keeps your translations, adds new texts empty, and sets the old pairs aside under <code>~leftover</code>, or deletes them with <code>--prune</code>. A maintainer keeps translations through an edit that does not change the meaning with <code>carry</code>.</li>
     <li><b>The CI summary.</b> It lists the sensitive and swap lines of your pull request. Explain each in the description.</li>
     <li><b>The terms.</b> Terms such as <code>NXDOMAIN</code> are kept as written everywhere: the list is <code>ui/src/locales/glossary.json</code>, and the notes file shows it. A term that is missing is a request to a maintainer.</li>
   </ul>
@@ -285,9 +298,9 @@ i18n: 2 failure(s)</code></pre>
   <h2>Safety</h2>
   <ul>
     <li><b>A pack never runs code.</b> It is data, read by a strict parser. The card shows its text as plain text, never as markup.</li>
-    <li><b>Nothing leaves your browser.</b> The card fetches the template from your own TelltaleDNS. When you choose <b class="ui">Use it and reload</b>, it also asks that server for its build and for who is signed in. The file itself is never sent.</li>
-    <li><b>A pack can still make a label lie.</b> A button that deletes something could say "Cancel", and no structural check notices. Load only a file you made, or one from someone you trust, and ideally on a test installation.</li>
-    <li><b>The safeguards:</b> a confirmation before a pack is used, and a banner above every page with the file's name and fingerprint. A pack is paused for any other user and on the sign-in screens. <code>?lang=en</code> shows real English, and a pack ends after 7 days or on any upgrade.</li>
+    <li><b>Nothing leaves your browser.</b> The card fetches the template from your own TelltaleDNS. When you choose <b class="ui">Use it and reload</b>, it also asks that server for its build and for who is signed in. The pack itself is never sent.</li>
+    <li><b>A pack can still make a label lie.</b> A button that deletes something could say "Cancel", and no structural check notices. Load only a pack you made, or one from someone you trust, and ideally on a test installation.</li>
+    <li><b>The safeguards:</b> a confirmation before a pack is used, and a banner above every page with the pack's file name and fingerprint. A pack is paused for any other user and on the sign-in screens. <code>?lang=en</code> shows real English, and a pack ends after 7 days or on any upgrade.</li>
     <li><b>What the checks cannot know is meaning.</b> That is why every language has a human owner, and why a sensitive message needs a back-translation.</li>
   </ul>
 </section>
@@ -335,19 +348,26 @@ i18n: 2 failure(s)</code></pre>
     <li><q>The test language pack … was removed: TelltaleDNS was updated. Download the template again and check your file: translations whose English didn't change still apply.</q> Do as it says, then use the file again.</li>
     <li><q>The test language pack … was removed: it was loaded 7 days ago.</q> Use the file again.</li>
     <li><q>The test language pack … was removed: the copy kept in this browser couldn't be read.</q> Choose the file again.</li>
-    <li><q>The test language pack … was removed: it could not be checked twice in a row. Check the file again under Settings.</q> Check the file on the card, and fix what it lists.</li>
+    <li><q>The test language pack … was removed: it could not be checked twice in a row. Check the file again under Settings.</q> The check itself could not run, twice: it was not a finding about your file. Check the file on the card again.</li>
     <li><q>The test language pack … was removed: a page could not be drawn with it.</q> The page loaded once more in your usual language. Check the file on the card. If a file that passes the check keeps doing this, tell the maintainers in an issue, and say which page it was.</li>
   </ul>
 
   <h3>The tool says FAIL about a file or a field I did not write</h3>
   <ul>
     <li><code>FAIL stray src/locales/&lt;tag&gt;.json</code>: the language has no manifest entry. See <a href="#send">Send it</a>.</li>
+    <li><code>FAIL manifest src/locales/manifest.json: "&lt;tag&gt;": src/locales/&lt;tag&gt;.json is missing</code>: the entry has no pack beside it.</li>
     <li><code>FAIL canonical src/locales/manifest.json</code>: the entry is not in the exact layout. The message offers <code>sync</code>, which only rewrites the language's file. Copy the layout above.</li>
     <li><code>FAIL manifest … "owners" lists the GitHub logins</code>: write the name with no at-sign.</li>
   </ul>
 
   <h3>The check refuses a time, a price or a number in words</h3>
-  <p>These fail as an added address, port, path or setting: a time, a ratio, a date pattern, a list joined by slashes, a grouped number or a price (<code>24:00</code>, <code>16:9</code>, <code>1.000.000.000</code>, <code>$5</code>). A number written in words fails the number rule. If your language needs either, say so in the pull request. A maintainer may allow that message in <code>ui/src/locales/notes.json</code>, with a reason.</p>
+  <p>These fail as an added address, port, path or setting:</p>
+  <ul>
+    <li>a time (<code>24:00</code>), a ratio (<code>16:9</code>) or a date pattern (<code>TT/MM/JJJJ</code>);</li>
+    <li>three or more items joined by slashes (<code>a/b/c</code>);</li>
+    <li>a grouped number (<code>1.000.000.000</code>) or a price (<code>$5</code>).</li>
+  </ul>
+  <p>A number written in words fails the number rule. If your language needs either, say so in the pull request. A maintainer may allow that message in <code>ui/src/locales/notes.json</code>: the tokens it may add (<code>exemptAdded</code>) or the number rule (<code>exemptDigits</code>), with a reason.</p>
 
   <div class="guide-nav">
     <a class="btn" href="dev-svelte.html">← Svelte pitfalls</a>
