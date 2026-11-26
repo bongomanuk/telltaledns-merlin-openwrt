@@ -76,7 +76,7 @@ export function decodeFile(bytes: Uint8Array): { text: string; bom: boolean } | 
   } catch {
     return null;
   }
-  const bom = text.startsWith('﻿');
+  const bom = text.startsWith('\uFEFF');
   return { text: bom ? text.slice(1) : text, bom };
 }
 

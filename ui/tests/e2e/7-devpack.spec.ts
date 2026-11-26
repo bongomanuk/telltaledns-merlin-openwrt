@@ -232,9 +232,9 @@ test('api_013 the browser and the script write the same canonical bytes', () => 
     expect(forPullRequest(parse(text) as Catalog, tpl, cats), what).toBe(fromScript);
   }
   // A byte-order mark: the browser's decoder reads past it, the script refuses the file (as the check does).
-  put(dir, 'src/locales/de.json', `﻿${good}`);
+  put(dir, 'src/locales/de.json', `\uFEFF${good}`);
   expect(() => lib.sync(dir, 'de')).toThrow();
-  expect(forPullRequest(parse(new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(`﻿${good}`))) as Catalog, tpl, cats)).toBe(good);
+  expect(forPullRequest(parse(new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(`\uFEFF${good}`))) as Catalog, tpl, cats)).toBe(good);
   // The order is by code unit: some context of the UI sorts otherwise under a collator, and the bytes keep code-unit order.
   const differs = Object.values(cat).some((pairs) => {
     const e = pairs.map((p) => JSON.stringify(p[0]));
@@ -319,7 +319,7 @@ test('api_013 a pack is refused whole for its structure', () => {
   expect(refusalWords({ code: 'json', line: 41, column: 7 })).toBe("This file can't be used: it isn't valid JSON (line 41, column 7).");
   // Strict UTF-8; a byte-order mark is read past (and noted: the file is not in the repository's form).
   expect(decodeFile(new Uint8Array([0x7b, 0xff, 0x7d]))).toBeNull();
-  expect(decodeFile(new TextEncoder().encode('﻿{}'))).toEqual({ text: '{}', bom: true });
+  expect(decodeFile(new TextEncoder().encode('\uFEFF{}'))).toEqual({ text: '{}', bom: true });
   const bom = checkPack(JSON.stringify({ cache: [['Holds', 'Hält']] }), true, fixture(), DE);
   expect(bom.checked?.canonical).toBe(false);
 });
@@ -344,9 +344,9 @@ test('api_013 pack text in a reason line is marked and limited', () => {
   const plural = ['{n} answer', '{n} answers'];
   expect(refusal(JSON.stringify({ cache: [[plural, { one: 'a', ['o'.repeat(4001)]: 'b', other: 'c' }]] }))).toMatchObject({ code: 'long', ctx: 'cache', n: 1 });
   expect(refusal(JSON.stringify({ cache: [[plural, { one: 'a', ['o'.repeat(4000)]: 'b', other: 'c' }]] }))).toBeUndefined();
-  const words = brokenWords({ ctx: 'cache', english: plural as [string, string], rule: 'categories', got: ['one', '‮other'], want: ['one', 'other'] });
+  const words = brokenWords({ ctx: 'cache', english: plural as [string, string], rule: 'categories', got: ['one', '\u202Eother'], want: ['one', 'other'] });
   expect(words).toContain('one, ⟨U+202E⟩other');
-  expect(words).not.toContain('‮');
+  expect(words).not.toContain('\u202E');
 });
 
 test('api_013 a pack entry that breaks the agreement rule is dropped and named in plain words', () => {
@@ -357,7 +357,7 @@ test('api_013 a pack entry that breaks the agreement rule is dropped and named i
       ['Read https://example.com/docs first.', 'Lies https://evil.example/docs zuerst.'],
       ['Sends mail to smtp://mail.example:587', 'Sendet Mail an smtp://mail.example'],
       ['Choose email or ntfy', 'Wähle E-Mail oder ntfy'],
-      ['Kept by <b>{who}</b>', 'Von {who} behalten‮'],
+      ['Kept by <b>{who}</b>', 'Von {who} behalten\u202E'],
     ],
     common: [['Save', 'Sаve']],
   });
@@ -378,7 +378,7 @@ test('api_013 a pack entry that breaks the agreement rule is dropped and named i
   ])
     expect(words).toContain(w);
   // Each names its entry and the translation it judged.
-  expect(c.broken.find((b) => b.rule === 'code-point')).toMatchObject({ ctx: 'cache', english: 'Kept by <b>{who}</b>', translation: 'Von {who} behalten‮', token: 'U+202E' });
+  expect(c.broken.find((b) => b.rule === 'code-point')).toMatchObject({ ctx: 'cache', english: 'Kept by <b>{who}</b>', translation: 'Von {who} behalten\u202E', token: 'U+202E' });
   // An entry is not also "missing" when it was dropped.
   expect(c.missing.map((m) => m.english)).toEqual([['{n} answer', '{n} answers'], 'Lists']);
   // Plural categories other than the language's: that entry is dropped, the rest stands.
@@ -593,7 +593,7 @@ const PIECES = [
   'a_b', '[x]', '[[router]]', '/etc/telltale/', 'key=value', '$HOME', 'a|b', '1.1.1.1', '２１．１．１．１５', 'a.example:53', 'DNS：53', 'ｅｖｉｌ．ｈｅｌｐ：８５３',
   '53', '٥٣', '８．８．８．８', '8。8。8。8', '24:00', '5353', '0',
   '：', '。', '．', '＝', ',', '.', ':', '-', '(', ')', '`code`', '`x`', "'ya",
-  '‮', '​', '‍', 'ب‍ب', '‎', '️', '­', 'ㅤ', ' ',
+  '\u202E', '\u200B', '\u200D', 'ب\u200Dب', '\u200E', '\uFE0F', '\u00AD', '\u3164', '\u2028',
 ];
 function draw(rand: () => number): { english: string; translation: string; o: object } {
   const pick = () => PIECES[Math.floor(rand() * PIECES.length)];
@@ -646,9 +646,29 @@ test('api_012 the agreement rule gives what it gave before it was made linear', 
   expect(findings).toBeGreaterThan(10_000);
 });
 
+test('api_013 no source holds a literal direction control, line separator or byte-order mark', () => {
+  // Such a character reorders a line in an editor and in a review, and a line separator breaks the test runner's
+  // line numbers: a source writes it as an escape (review part B of T29.3, finding 2).
+  const bad = /[\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}\u{FEFF}]/u;
+  const found: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!['node_modules', '.e2e', 'test-results'].includes(e.name)) walk(p);
+      } else if (/\.(ts|svelte|mjs|js|json|css|html)$/.test(e.name) && bad.test(readFileSync(p, 'utf8'))) found.push(p.slice(UI.length + 1));
+    }
+  };
+  walk(join(UI, 'src'));
+  walk(join(UI, 'tests'));
+  expect(found).toEqual([]);
+  // The check itself sees one.
+  expect(bad.test(`a${String.fromCharCode(0x202e)}b`)).toBe(true);
+});
+
 test('api_013 a displayed file name loses forbidden code points and is cut to 48', () => {
-  expect(shownName('nos‮j.ed')).toBe('nosj.ed');
-  expect(shownName('de​.json')).toBe('de.json');
+  expect(shownName('nos\u202Ej.ed')).toBe('nosj.ed');
+  expect(shownName('de\u200B.json')).toBe('de.json');
   expect(shownName('a\nb\tc.json')).toBe('abc.json');
   expect(shownName('de.json')).toBe('de.json');
   const cut = shownName(`${'x'.repeat(100)}.json`);
@@ -656,9 +676,9 @@ test('api_013 a displayed file name loses forbidden code points and is cut to 48
   expect(cut).toBe(`${'x'.repeat(23)}…${'x'.repeat(19)}.json`);
   // By code point: never half of a pair.
   expect([...shownName('\u{1F600}'.repeat(60))]).toHaveLength(48);
-  expect(shownName('\u{1F600}'.repeat(60)).includes('�')).toBe(false);
+  expect(shownName('\u{1F600}'.repeat(60)).includes('\uFFFD')).toBe(false);
   // Pack text on the check screen: a visible marker for each forbidden code point.
-  expect(markers('ab‮cd')).toBe('ab⟨U+202E⟩cd');
+  expect(markers('ab\u202Ecd')).toBe('ab⟨U+202E⟩cd');
   expect(markers('a\u{E0041}b')).toBe('a⟨U+E0041⟩b');
   expect(markers('plain')).toBe('plain');
 });
@@ -1033,7 +1053,7 @@ test('api_013 a pack lookup never throws', () => {
   });
   // And what a hostile file installs: every message of the template reads without a throw.
   const tpl = readTemplate(deJson());
-  const hostile = { cache: [...tpl.entries.values()].filter((e) => e.ctx === 'cache').map((e) => [e.english, typeof e.english === 'string' ? `‮${'{x}'.repeat(50)}<b>` : { one: '\uD800', other: '{n}'.repeat(999) }]) };
+  const hostile = { cache: [...tpl.entries.values()].filter((e) => e.ctx === 'cache').map((e) => [e.english, typeof e.english === 'string' ? `\u202E${'{x}'.repeat(50)}<b>` : { one: '\uD800', other: '{n}'.repeat(999) }]) };
   const r = checkPack(JSON.stringify(hostile), false, tpl, DE);
   under({ tag: 'de', table: (r.checked?.table ?? {}) as never }, () => {
     for (const e of tpl.entries.values()) {

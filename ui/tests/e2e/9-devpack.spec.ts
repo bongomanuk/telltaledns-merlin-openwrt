@@ -891,7 +891,7 @@ test("api_013 the card's actions send nothing about the pack", async ({ browser 
 test('api_013 the check screen shows pack text inert', async ({ browser }) => {
   const s = await fresh(browser);
   await openCard(s.page);
-  const pack = { [SETTINGS.ctx]: [[SETTINGS.english, 'Régla‮ges abc']], [SIGN_IN.ctx]: [[SIGN_IN.english, '<b>Se</b> connecter']] };
+  const pack = { [SETTINGS.ctx]: [[SETTINGS.english, 'Régla\u202Eges abc']], [SIGN_IN.ctx]: [[SIGN_IN.english, '<b>Se</b> connecter']] };
   await chooseFile(s.page, JSON.stringify(pack), 'fr.json');
   await s.page.getByTestId('devpack-broken').locator('summary').click();
   const list = s.page.getByTestId('devpack-broken').locator('li');
@@ -978,7 +978,7 @@ test('api_012 pseudo locale leaves no literal text: the language pack card and b
   await expect(s.page.getByTestId('devpack-in-use')).toBeVisible();
   expect(await leftovers(s.page, received), 'the banner (paused) and the card with a pack in use').toEqual([]);
   // A file checked, every list open; then the confirmation.
-  const pack = { ...FR, [SETTINGS.ctx]: [[SETTINGS.english, 'Régla‮ges'], ['Gone', 'Parti']], '~leftover': [['Older', 'Ancien']] };
+  const pack = { ...FR, [SETTINGS.ctx]: [[SETTINGS.english, 'Régla\u202Eges'], ['Gone', 'Parti']], '~leftover': [['Older', 'Ancien']] };
   await chooseFile(s.page, JSON.stringify(pack), 'fr.json', 'fr');
   await expect(s.page.getByTestId('devpack-summary').last()).toContainText('fr.json');
   for (const d of ['devpack-broken', 'devpack-missing', 'devpack-left', 'devpack-worth', 'devpack-coverage']) await s.page.getByTestId(d).locator('summary').click();
