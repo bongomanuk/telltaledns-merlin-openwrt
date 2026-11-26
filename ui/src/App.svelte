@@ -39,7 +39,7 @@
   import Settings from './pages/Settings.svelte';
   import Alerts from './pages/Alerts.svelte';
   import { tr } from './lib/i18n';
-  import { serverBuild } from './lib/i18n/devpack';
+  import { devpack } from './lib/i18n/devpack';
   import T from './lib/i18n/T.svelte';
   const { t } = tr('app');
 
@@ -133,7 +133,7 @@
       // Refreshed every minute: the masked-client-IP banner (OPS-003) can come and go, and at
       // once when maintenance starts or ends (OPS-010). REQ: API-013 — a test language pack compares
       // the server's build with the one it was loaded on.
-      const stop = poll(() => api.info().then((i) => ((info = i), serverBuild(i.build?.commit))), 60_000);
+      const stop = poll(() => api.info().then((i) => ((info = i), devpack.onBuild?.(i.build?.commit))), 60_000);
       const changed = () => void api.info().then((i) => (info = i)).catch(() => {});
       window.addEventListener('telltale:maintenance-changed', changed);
       return () => {

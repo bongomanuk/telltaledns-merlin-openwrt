@@ -6,7 +6,7 @@
   whatever the pack's direction. The file's name is shown without forbidden code points, at most 48
   characters, isolated for direction; the fingerprint (12 hex digits of its SHA-256) is its identity. -->
 <script lang="ts">
-  import { languageName, shownName } from '../i18n/pack';
+  import { languageName, shownName } from '../i18n/names';
   import type { View } from './lifecycle';
 
   type Actions = { remove(): void; dismiss(): void; once(): void; reload(): void };

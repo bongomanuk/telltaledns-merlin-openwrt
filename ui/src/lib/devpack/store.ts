@@ -1,8 +1,10 @@
 // REQ: API-013 (ADR-190) — a test language pack in this browser: one storage key for this address
 // holds either the record and the file's text together (one write, so two tabs can never pair one
 // file's record with another's text), or the notice that the pack was removed and why. The record
-// carries two stamps, the web UI build and the server's build commit, and lasts 7 days. Nothing here
-// is trusted as checked: the page checks the text again at every load.
+// carries two stamps, the web UI build and the server's build commit, and lasts 7 days. With them it
+// keeps what the check of the text gave (the table a page installs), stamped with the build and the
+// fingerprint it was made for: a page load uses it only while both are unchanged, and checks the text
+// again otherwise (or when the kept table is not well formed). Same record, same write.
 import { DEVPACK_KEY } from '../i18n/devpack';
 
 /** The one-load flag of "Show the test pack on this page" (session storage, removed when read). */
@@ -27,6 +29,9 @@ export type PackRecord = {
   /** Checks in a row that threw on this file and build. */
   readonly fails: number;
   readonly text: string;
+  /** What the check of `text` gave on the web UI build `ui`, for the fingerprint `sha`: hash ->
+   * translation (or plural forms). Absent: each load checks the text. */
+  readonly checked?: { readonly ui: string; readonly sha: string; readonly table: Readonly<Record<string, unknown>> };
 };
 export type Notice = { readonly v: 1; readonly gone: Gone; readonly name: string; readonly at: number };
 export type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -95,7 +100,25 @@ export function forget(store: Store | null): void {
   }
 }
 
-/** The record of a pack loaded now from a checked file. */
-export function newRecord(p: { ui: string; commit: string; name: string; sha: string; tag: string; dir: 'ltr' | 'rtl'; text: string }, now: number): PackRecord {
-  return { v: 1, ui: p.ui, server: { commit: p.commit }, loadedAt: now, expires: now + LIFETIME_MS, name: p.name, sha: p.sha, tag: p.tag, dir: p.dir, fails: 0, text: p.text };
+/** The record of a pack loaded now from a checked file (with the check's table, when given). */
+export function newRecord(
+  p: { ui: string; commit: string; name: string; sha: string; tag: string; dir: 'ltr' | 'rtl'; text: string; table?: Readonly<Record<string, unknown>> },
+  now: number,
+): PackRecord {
+  const rec: PackRecord = { v: 1, ui: p.ui, server: { commit: p.commit }, loadedAt: now, expires: now + LIFETIME_MS, name: p.name, sha: p.sha, tag: p.tag, dir: p.dir, fails: 0, text: p.text };
+  return p.table ? { ...rec, checked: { ui: p.ui, sha: p.sha, table: p.table } } : rec;
+}
+
+/** A kept table that is well formed: 8-hex keys; a string, or an object of plural forms (strings, `other`
+ * among them), as values. Anything else: null (the page checks the text again). */
+export function keptTable(t: unknown): Record<string, string | Record<string, string>> | null {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+  const out: Record<string, string | Record<string, string>> = Object.create(null);
+  for (const [k, v] of Object.entries(t)) {
+    if (!/^[0-9a-f]{8}$/.test(k)) return null;
+    if (typeof v === 'string') out[k] = v;
+    else if (v && typeof v === 'object' && !Array.isArray(v) && Object.hasOwn(v, 'other') && Object.values(v).every((s) => typeof s === 'string')) out[k] = v as Record<string, string>;
+    else return null;
+  }
+  return out;
 }

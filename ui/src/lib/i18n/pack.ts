@@ -3,13 +3,15 @@
 // build's template. A file outside the format or the limits is refused whole (nothing is kept); an
 // entry that breaks the agreement rule, or has other plural categories than its language, is
 // dropped and English is shown; report-only findings drop nothing; left-over pairs say why. Text
-// decides what is current, never a hash. Also the language tag a translator types, and how a file
-// name and a pack's text are shown inert. Pure, apart from `Intl` (canonical tags, scripts, names).
+// decides what is current, never a hash. Also the language tag a translator types (and, from
+// `names.ts`, how a file name and a pack's text are shown inert). Pure, apart from `Intl` (canonical
+// tags, scripts).
 import { englishKey } from './ident.ts';
 import { LEFTOVER, PairFileError, parse, serialize, shapeProblem, type Catalog, type Pair } from './pairs.ts';
-import { forbidden } from './safe.ts';
 import { identity, ship } from './shipping.ts';
 import { forPullRequest, type Template } from './template.ts';
+
+export { languageName, markers, shownName } from './names.ts';
 
 /** The limits of a pack: the file's bytes, its pairs and contexts, and the length of one string. */
 export const MAX_BYTES = 1024 * 1024;
@@ -64,41 +66,6 @@ export function tagInfo(input: string, plurals: ReadonlyMap<string, readonly str
   if (MULTI_SCRIPT.includes(language) && !loc.script) return no({ code: 'script', language, hint: `${language}-${new Intl.Locale(language).maximize().script ?? ''}` });
   const script = loc.maximize().script ?? '';
   return { ok: true, value: { tag, language, dir: RTL.includes(script) ? 'rtl' : 'ltr', categories } };
-}
-
-/** The name of a language in a language (`de` in `en`: German), for display only; it decides nothing. */
-export function languageName(tag: string, inLanguage: string): string | undefined {
-  try {
-    return new Intl.DisplayNames([inLanguage], { type: 'language' }).of(tag) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** A file's name as the page shows it: without forbidden code points or controls, at most 48
- * characters (`…` in the middle). The fingerprint, not the name, is the file's identity. */
-export function shownName(name: string): string {
-  const drop = new Set(forbidden(name).map((f) => f.at));
-  let clean = '';
-  for (let i = 0; i < name.length; ) {
-    const ch = String.fromCodePoint(name.codePointAt(i) ?? 0);
-    if (!drop.has(i) && !/[\u0000-\u001f]/.test(ch)) clean += ch;
-    i += ch.length;
-  }
-  const chars = [...clean];
-  return chars.length <= 48 ? clean : `${chars.slice(0, 23).join('')}…${chars.slice(-24).join('')}`;
-}
-
-/** A pack's text as the check screen shows it: each forbidden code point as a visible marker
- * (`⟨U+202E⟩`), so a direction override cannot reorder the rest of the line. */
-export function markers(s: string, dir: 'ltr' | 'rtl' = 'ltr'): string {
-  let out = '';
-  let last = 0;
-  for (const f of forbidden(s, dir)) {
-    out += `${s.slice(last, f.at)}⟨${f.cp}⟩`;
-    last = f.at + ((s.codePointAt(f.at) ?? 0) > 0xffff ? 2 : 1);
-  }
-  return out + s.slice(last);
 }
 
 /** Strict UTF-8 (null when the bytes are not), and whether a byte-order mark led. */

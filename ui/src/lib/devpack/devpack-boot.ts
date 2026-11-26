@@ -1,14 +1,15 @@
 // REQ: API-013 (ADR-190) — the code a page load runs when this browser keeps a test language pack (or
 // the notice after one); an English reader never loads it. It decides (`lifecycle.ts`), shows the
 // English banner in its own node before the app, above every overlay, and returns the pack's language
-// for this load. After sign-in it compares the server's build commit, from the app's own build poll,
-// with the one the pack was loaded on: the first answer of a load that differs removes the pack and
-// reloads; a later one removes it and says so, without a reload, so nothing typed is lost. A pack
-// paused only because nobody was signed in loads at the first answer after sign-in.
+// for this load. The checking code (`recheck.ts`) loads only when the file is checked again: a load
+// with the table kept for this build and file needs neither it nor the template. After sign-in it
+// compares the server's build commit, from the app's own build poll, with the one the pack was loaded
+// on: the first answer of a load that differs removes the pack and reloads; a later one removes it and
+// says so, without a reload, so nothing typed is lost. A pack paused only because nobody was signed in
+// loads at the first answer after sign-in.
 import { mount } from 'svelte';
 import type { Choice } from '../i18n';
-import { devpack, onServerBuild } from '../i18n/devpack';
-import { checkPack } from '../i18n/pack';
+import { devpack } from '../i18n/devpack';
 import DevPackBanner from './DevPackBanner.svelte';
 import { decide, type Paused, type View } from './lifecycle';
 import { ONCE_KEY, forget, notice, write, type PackRecord, type Store } from './store';
@@ -69,11 +70,12 @@ export async function boot(value: string): Promise<Choice | null> {
     search: location.search,
     hash: location.hash,
     languages: navigator.languages ?? [],
-    check: checkPack,
+    checker: () => import('./recheck'),
     timeoutMs: 4000,
   });
   record = out.record;
   installed = out.choice !== null;
+  devpack.failed = failed;
   if (out.view.kind !== 'none') {
     devpack.active = true;
     const host = document.createElement('div');
@@ -88,7 +90,8 @@ export async function boot(value: string): Promise<Choice | null> {
 
 function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
   let first = true;
-  onServerBuild((commit) => {
+  devpack.onBuild = (commit) => {
+    if (!commit) return;
     const wasFirst = first;
     first = false;
     if (!record) return;
@@ -105,11 +108,11 @@ function watchServer(r: PackRecord, view: View, paused: Paused | undefined) {
       banner?.set({ kind: 'signed-in', ...named });
       reload();
     }
-  });
+  };
 }
 
 /** The page failed to draw with the pack: it is removed, and the page reloads once without it. */
-export function failed(): boolean {
+function failed(): boolean {
   if (!installed || !record) return false;
   const name = record.name;
   record = null;

@@ -10,7 +10,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import * as lib from '../../scripts/i18n-lib.mjs';
-import { readTemplate, materialize } from '../../src/lib/i18n/template';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 
 const UI = resolve(import.meta.dirname, '../..');
@@ -184,6 +183,8 @@ test('api_013 the template downloads for a chosen tag', async ({ browser }) => {
   expect(res.headers()['content-type']).toBe('application/json');
   expect(res.headers()['cache-control']).toContain('immutable');
   expect(res.headers()['content-encoding']).toBe('gzip');
+  // Imported here, so the file loads (and each test fails on its own) on a tree without the module.
+  const { readTemplate, materialize } = await import('../../src/lib/i18n/template');
   const tpl = readTemplate(await res.text());
   await openCard(s.page);
   await s.page.getByTestId('devpack-tag').fill('de');
@@ -219,6 +220,15 @@ test('api_013 a loaded pack shows after apply and reload', async ({ browser }) =
   await s.page.getByTestId('devpack-use').click();
   await expect(s.page.getByTestId('devpack-confirm')).toContainText('Use this language pack in this browser?');
   await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-confirm-use').click()]);
+  // The record keeps the check's table for this build and this file: a load after Use fetches neither the
+  // template nor the checking code (the card, when open, fetches the template itself).
+  expect(JSON.parse((await kept(s.page)) ?? '{}').checked).toMatchObject({ ui: ENTRY, sha: createHash('sha256').update(FR_TEXT).digest('hex') });
+  const after: string[] = [];
+  s.page.on('request', (r) => after.push(new URL(r.url()).pathname));
+  await s.page.goto('/?devpack-test=again#/');
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+  await expect(banner(s.page)).toBeVisible();
+  expect(after.filter((p) => p.startsWith('/assets/locales/') || /\/recheck-[\w-]+\.js$/.test(p))).toEqual([]);
   // After the reload: the pack's text, its lang and dir, and its plural rules.
   await s.page.goto('/#/settings?tab=account');
   await expect(s.page.getByRole('heading', { level: 1 })).toHaveText(valueOf(SETTINGS.ctx));
@@ -475,15 +485,57 @@ test('api_013 a quota error on use writes nothing', async ({ browser }) => {
       };
     },
   });
-  const before = await storePack(s.page, FR_TEXT, { name: 'earlier.json' });
+  await storePack(s.page, FR_TEXT, { name: 'earlier.json' });
   await openCard(s.page);
+  // The page load checked the kept file and kept its table with it.
+  const before = await kept(s.page);
+  expect(JSON.parse(before ?? '{}')).toMatchObject({ name: 'earlier.json', checked: { ui: ENTRY } });
   await s.page.evaluate(() => ((window as unknown as { __dvpFull: boolean }).__dvpFull = true));
   await chooseFile(s.page, JSON.stringify({ [SETTINGS.ctx]: [[SETTINGS.english, 'Paramètres']] }), 'fr.json');
   await s.page.getByTestId('devpack-use').click();
   await s.page.getByTestId('devpack-confirm-use').click();
   await expect(s.page.getByTestId('devpack-use-error')).toBeVisible();
   // The pack kept before is the one still kept, as it was.
-  expect(JSON.parse((await kept(s.page)) ?? '{}')).toEqual(before);
+  expect(await kept(s.page)).toBe(before);
+  // How much this browser keeps for one address (for the report: a record holds the file's text and its table).
+  const fits = await s.page.evaluate(() => {
+    let most = 0;
+    for (const n of [1_000_000, 2_000_000, 2_500_000, 3_000_000, 4_000_000, 5_000_000]) {
+      try {
+        localStorage.setItem('telltale.devpack.probe', 'x'.repeat(n));
+        most = n;
+      } catch {
+        break;
+      }
+    }
+    localStorage.removeItem('telltale.devpack.probe');
+    return most;
+  });
+  console.log(`DVP_QUOTA this Chromium keeps a value of ${fits} characters (and not the next size tried)`);
+  await done(s);
+});
+
+test('api_013 a pack whose table does not fit is kept without it', async ({ browser }) => {
+  // A store that refuses the record with its table, and takes it without.
+  const s = await fresh(browser, {
+    init: () => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+        if (k === 'telltale.devpack' && v.includes('"checked"')) throw new DOMException('full', 'QuotaExceededError');
+        return set.call(this, k, v);
+      };
+    },
+  });
+  await openCard(s.page);
+  await chooseFile(s.page, FR_TEXT);
+  await s.page.getByTestId('devpack-use').click();
+  await Promise.all([s.page.waitForEvent('load'), s.page.getByTestId('devpack-confirm-use').click()]);
+  // Kept without the table; each load checks the file again, and the page is in the pack's language.
+  const rec = JSON.parse((await kept(s.page)) ?? '{}');
+  expect([rec.name, rec.checked]).toEqual(['fr.json', undefined]);
+  await s.page.goto('/?devpack-test=again#/settings?tab=account');
+  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText(valueOf(SETTINGS.ctx));
+  await expect(banner(s.page)).toContainText('Test language pack: fr.json');
   await done(s);
 });
 

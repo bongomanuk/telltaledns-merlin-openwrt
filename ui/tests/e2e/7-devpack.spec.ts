@@ -18,8 +18,8 @@ import { MAX_BYTES, MULTI_SCRIPT, checkPack, decodeFile, markers, shownName, tag
 import { identity, ship } from '../../src/lib/i18n/shipping';
 import { forPullRequest, materialize, readTemplate, writeTemplate, type Template } from '../../src/lib/i18n/template';
 import { brokenWords, leftoverWords, refusalWords, tagWords, worthWords } from '../../src/lib/devpack/packWords';
-import { decide, type Deps } from '../../src/lib/devpack/lifecycle';
-import { LIFETIME_MS, newRecord, notice, type Store } from '../../src/lib/devpack/store';
+import { decide, type Checker, type Deps } from '../../src/lib/devpack/lifecycle';
+import { LIFETIME_MS, keptTable, newRecord, notice, readValue, type Store } from '../../src/lib/devpack/store';
 import { DEVPACK_KEY } from '../../src/lib/i18n/devpack';
 import * as lib from '../../scripts/i18n-lib.mjs';
 
@@ -532,7 +532,14 @@ function deps(o: Partial<Deps> = {}, fake: Fake = { calls: [] }): Deps {
     if (url === TPL_URL) return fake.tpl === null ? new Response('', { status: 500 }) : new Response(fake.tpl ?? deJson());
     return new Response('', { status: 404 });
   };
-  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], check: checkPack, timeoutMs: 4000, ...o };
+  return { store: new MemStore(), takeOnce: () => false, fetch: ((u: string) => answer(u)) as typeof fetch, now: () => NOW, ui: UI_A, template: TPL_URL, search: '', hash: '#/', languages: ['de-DE', 'en'], checker: checking(), timeoutMs: 4000, ...o };
+}
+/** The checking code as the browser loads it (`recheck.ts`), with another check if given; `loads` counts the loads. */
+function checking(check = checkPack, loads = { n: 0 }): () => Promise<Checker> {
+  return async () => {
+    loads.n++;
+    return { readTemplate, tagInfo, checkPack: check };
+  };
 }
 const stored = (s: MemStore) => JSON.parse(s.getItem(DEVPACK_KEY) ?? 'null');
 
@@ -576,10 +583,10 @@ test('api_013 a check that throws twice in a row retires the pack', async () => 
   const throwing = (() => {
     throw new Error('a fault this file sets off');
   }) as typeof checkPack;
-  const first = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, check: throwing }));
+  const first = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, checker: checking(throwing) }));
   expect([first.view.kind, first.choice]).toEqual(['unchecked', null]);
   expect(stored(store).fails).toBe(1);
-  const second = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, check: throwing }));
+  const second = await decide(store.getItem(DEVPACK_KEY) ?? '', deps({ store, checker: checking(throwing) }));
   expect(second.view).toEqual({ kind: 'notice', gone: 'failed', name: 'de.json' });
   expect(stored(store).gone).toBe('failed');
   // A template that can't be fetched, read or reached in time is not the file's doing: not counted.
@@ -592,6 +599,7 @@ test('api_013 a check that throws twice in a row retires the pack', async () => 
     ['an empty answer', deps({ store: s }, { tpl: '', calls: [] })],
     ['no template in the build', deps({ store: s, template: null })],
     ['a server that hangs', deps({ store: s, fetch: hung, timeoutMs: 30 })],
+    ['checking code that does not load', deps({ store: s, checker: () => Promise.reject(new Error('404')) })],
   ] as const) {
     expect((await decide(s.getItem(DEVPACK_KEY) ?? '', d)).view.kind, what).toBe('unchecked');
     expect(stored(s).fails, what).toBe(1);
@@ -599,6 +607,80 @@ test('api_013 a check that throws twice in a row retires the pack', async () => 
   // A check that passes sets the count back to zero.
   expect((await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s }))).view.kind).toBe('active');
   expect(stored(s).fails).toBe(0);
+});
+
+test('api_013 a kept table spares the check while the build and the fingerprint are unchanged', async () => {
+  const v = JSON.stringify(REC);
+  // A record as Use writes it: the check's table for this build and this file.
+  const fresh = await decide(v, deps());
+  const table = fresh.choice?.table ?? {};
+  const kept = newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: REC.sha, tag: 'de', dir: 'ltr', text: REC.text, table }, NOW - 60_000);
+  expect(kept.checked).toEqual({ ui: UI_A, sha: REC.sha, table });
+  // Kept: no template, no checking code, the same table, the same language.
+  const loads = { n: 0 };
+  const fake: Fake = { calls: [] };
+  const s = new MemStore();
+  s.setItem(DEVPACK_KEY, JSON.stringify(kept));
+  const fast = await decide(s.getItem(DEVPACK_KEY) ?? '', deps({ store: s, checker: checking(checkPack, loads) }, fake));
+  expect([fast.view.kind, fast.checked, loads.n, fake.calls]).toEqual(['active', false, 0, ['/api/v1/auth/status']]);
+  expect(fast.choice).toEqual(fresh.choice);
+  expect(s.getItem(DEVPACK_KEY)).toBe(JSON.stringify(kept));
+  // A table for another build or another file, or one that is not well formed: the file is checked again,
+  // and the record keeps the new table, in its one write.
+  const odd: [string, object][] = [
+    ['another web UI build', { ...kept, checked: { ...kept.checked, ui: '/assets/index-OTHER.js' } }],
+    ['another fingerprint', { ...kept, checked: { ...kept.checked, sha: 'b2'.repeat(32) } }],
+    ['a key that is no hash', { ...kept, checked: { ...kept.checked, table: { ...table, constructor: 'x' } } }],
+    ['a value of the wrong kind', { ...kept, checked: { ...kept.checked, table: { [hash('cache', 'Holds')]: 3 } } }],
+    ['plural forms without other', { ...kept, checked: { ...kept.checked, table: { [hash('cache', 'Holds')]: { one: 'x' } } } }],
+    ['no table at all', { ...kept, checked: { ui: UI_A, sha: REC.sha } }],
+    ['something else', { ...kept, checked: 'yes' }],
+  ];
+  for (const [what, rec] of odd) {
+    const st = new MemStore();
+    const l = { n: 0 };
+    const f: Fake = { calls: [] };
+    // The record itself still applies (a damaged kept table is not a damaged record).
+    expect('record' in readValue(JSON.stringify(rec)), what).toBe(true);
+    const r = await decide(JSON.stringify(rec), deps({ store: st, checker: checking(checkPack, l) }, f));
+    expect([r.view.kind, r.checked, l.n, f.calls.includes(TPL_URL)], what).toEqual(['active', true, 1, true]);
+    expect(r.choice?.table, what).toEqual(table);
+    expect(stored(st).checked, what).toEqual({ ui: UI_A, sha: REC.sha, table });
+    expect(stored(st).fails, what).toBe(0);
+  }
+  // A store that is full keeps the record as it was, and the page still has the pack.
+  const full: Store = { getItem: () => null, removeItem: () => undefined, setItem: () => { throw new DOMException('full', 'QuotaExceededError'); } };
+  expect((await decide(v, deps({ store: full }))).view.kind).toBe('active');
+  // The well-formed tables only.
+  expect(keptTable({ [hash('c', 'x')]: 'y', [hash('c', ['a', 'b'])]: { one: 'p', other: 'q' } })).toEqual({ [hash('c', 'x')]: 'y', [hash('c', ['a', 'b'])]: { one: 'p', other: 'q' } });
+  for (const t of [null, [], 'x', { ['__proto__']: 'x' }, { ['1234567']: 'x' }, { [hash('c', 'x')]: null }, { [hash('c', 'x')]: ['y'] }]) expect(keptTable(t), JSON.stringify(t)).toBeNull();
+  expect(Object.getPrototypeOf(keptTable({}))).toBeNull();
+});
+
+test("api_013 a kept record's size for a typical and for the largest pack", () => {
+  const { tpl } = uiTemplate();
+  const de: Tag = { tag: 'de', language: 'de', dir: 'ltr', categories: ['one', 'other'] };
+  const record = (pack: object) => {
+    const text = JSON.stringify(pack, null, 2);
+    const r = checkPack(text, false, tpl, de);
+    if (r.refused) throw new Error(JSON.stringify(r.refused));
+    const rec = JSON.stringify(newRecord({ ui: UI_A, commit: 'c0ffee1', name: 'de.json', sha: 'a1'.repeat(32), tag: 'de', dir: 'ltr', text, table: r.checked.table }, NOW));
+    return { text: new TextEncoder().encode(text).length, chars: rec.length, translated: r.checked.translated };
+  };
+  const all = (pad: string) =>
+    Object.fromEntries(tpl.contexts.map((ctx) => [ctx, [...tpl.entries.values()].filter((e) => e.ctx === ctx).map((e) => [e.english, typeof e.english === 'string' ? `${e.english} Ü${pad}` : { one: `${e.english[0]} Ü${pad}`, other: `${e.english[1]} Ü${pad}` }, ...(e.note ? [e.note] : [])])]));
+  // Every message of this build translated (about 2,500 pairs).
+  const typical = record(all(''));
+  // As large as a file may be (1 MiB): each translation padded until the file reaches the limit.
+  const room = Math.floor((1024 * 1024 - typical.text) / tpl.entries.size / 1.1);
+  const largest = record(all('ü'.repeat(Math.max(0, Math.floor(room / 2)))));
+  console.log(`DVP_RECORD typical: ${typical.translated} translated, file ${typical.text} B, record ${typical.chars} characters (${typical.chars * 2} B as UTF-16)`);
+  console.log(`DVP_RECORD largest: ${largest.translated} translated, file ${largest.text} B, record ${largest.chars} characters (${largest.chars * 2} B as UTF-16)`);
+  expect(typical.translated).toBe(tpl.entries.size);
+  expect(largest.text).toBeLessThanOrEqual(1024 * 1024);
+  expect(largest.text).toBeGreaterThan(900 * 1024);
+  // A record holds the text and, at most, a second copy of the translations: never three times the file.
+  expect(largest.chars).toBeLessThan(3 * 1024 * 1024);
 });
 
 test('api_013 a page load pauses the pack where someone else may be next', async () => {

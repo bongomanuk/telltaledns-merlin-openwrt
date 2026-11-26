@@ -159,8 +159,10 @@
       busy = false;
       return;
     }
-    const rec = newRecord({ ui: devpack.ui, commit, name: chosen.name, sha: chosen.sha, tag: outcome.tag.tag, dir: outcome.tag.dir, text: chosen.text ?? '' }, Date.now());
-    if (!write(store, rec)) {
+    // The record keeps the check's table for this build and fingerprint, so a page load need not check
+    // the file again; when that does not fit, the record alone (each load then checks the file).
+    const rec = newRecord({ ui: devpack.ui, commit, name: chosen.name, sha: chosen.sha, tag: outcome.tag.tag, dir: outcome.tag.dir, text: chosen.text ?? '', table: outcome.checked.table }, Date.now());
+    if (!write(store, rec) && !write(store, { ...rec, checked: undefined })) {
       useError = 'storage';
       busy = false;
       return;
@@ -215,6 +217,7 @@
 {/snippet}
 
 <div class="devpack" data-testid="devpack-body">
+  <p class="muted">{t('For translators: see your translation of this web UI before you send it to the project. The file stays in this browser; nothing about it is sent to TelltaleDNS or anyone else.')}</p>
   <p><a href={GUIDE} target="_blank" rel="noreferrer">{t('How to translate TelltaleDNS')}</a></p>
 
   {#if kept.record}

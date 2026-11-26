@@ -33,16 +33,8 @@ async function start() {
   }
   // REQ: API-013 (ADR-190) — a test pack's code loads only when this browser keeps one (or the
   // notice after one); it comes before the stored choice, and pauses itself under `?lang=`.
-  let failed: (() => boolean) | undefined;
   const value = pack;
-  const provider =
-    value === null
-      ? undefined
-      : async () => {
-          const m = await import('./lib/devpack/devpack-boot');
-          failed = m.failed;
-          return m.boot(value);
-        };
+  const provider = value === null ? undefined : () => import('./lib/devpack/devpack-boot').then((m) => m.boot(value));
   let choice: Choice = { tag: 'en' };
   try {
     choice = await load(LOCALES, { search: location.search, stored, languages: navigator.languages ?? [] }, fetch, 4000, provider);
@@ -62,7 +54,7 @@ async function start() {
     // (a test pack is removed instead, and the page loads once more without it).
     if (rt.lang === 'en') throw e;
     console.error(e);
-    if (failed?.()) return;
+    if (devpack.failed?.()) return;
     target.replaceChildren();
     use({ tag: 'en' });
     mount(App, { target });
