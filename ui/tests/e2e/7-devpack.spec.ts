@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { cleanup, project, put, table, uiCopy, under } from './i18n-fixture';
 import * as safe from '../../src/lib/i18n/safe';
 import * as added from '../../src/lib/i18n/added';
@@ -738,24 +738,33 @@ test('api_012 the agreement rule gives what it gave before it was made linear', 
   expect(findings).toBeGreaterThan(10_000);
 });
 
-test('api_013 no source holds a literal direction control, line separator or byte-order mark', () => {
+test('api_013 no source of the web ui holds a literal direction control or mark, line separator or byte-order mark', () => {
   // Such a character reorders a line in an editor and in a review, and a line separator breaks the test runner's
-  // line numbers: a source writes it as an escape (review part B of T29.3, finding 2).
-  const bad = /[\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}\u{FEFF}]/u;
+  // line numbers: a source writes it as an escape (review part B of T29.3, finding 2). Every text file under ui/:
+  // the code, the tests, the scripts, the page and the configuration files. Not the language files, which are data
+  // the check holds to its own rule (a language written right to left may use the direction marks there).
+  const bad = /[\u{061C}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}\u{FEFF}]/u;
+  const skip = new Set(['node_modules', '.e2e', 'test-results', 'playwright-report', 'dist', join('src', 'locales'), join('public', 'assets', 'locales')]);
   const found: string[] = [];
+  const read = new Set<string>();
   const walk = (dir: string) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
+      const rel = p.slice(UI.length + 1).split(sep).join('/');
       if (e.isDirectory()) {
-        if (!['node_modules', '.e2e', 'test-results'].includes(e.name)) walk(p);
-      } else if (/\.(ts|svelte|mjs|js|json|css|html)$/.test(e.name) && bad.test(readFileSync(p, 'utf8'))) found.push(p.slice(UI.length + 1));
+        if (!skip.has(p.slice(UI.length + 1)) && !skip.has(e.name)) walk(p);
+      } else if (/\.(ts|svelte|mjs|cjs|js|json|css|html|md|svg|txt|ya?ml)$/.test(e.name)) {
+        read.add(rel);
+        if (bad.test(readFileSync(p, 'utf8'))) found.push(rel);
+      }
     }
   };
-  walk(join(UI, 'src'));
-  walk(join(UI, 'tests'));
+  walk(UI);
   expect(found).toEqual([]);
-  // The check itself sees one.
-  expect(bad.test(`a${String.fromCharCode(0x202e)}b`)).toBe(true);
+  for (const p of ['index.html', 'vite.config.ts', 'playwright.config.ts', 'package.json', 'scripts/i18n-lib.mjs', 'scripts/postbuild.mjs', 'src/main.ts', 'tests/e2e/9-devpack.spec.ts']) expect(read.has(p), p).toBe(true);
+  expect([...read].some((p) => p.startsWith('src/locales/'))).toBe(false);
+  // The check itself sees each kind.
+  for (const cp of [0x061c, 0x200e, 0x200f, 0x2028, 0x2029, 0x202e, 0x2066, 0x2069, 0xfeff]) expect(bad.test(`a${String.fromCharCode(cp)}b`), cp.toString(16)).toBe(true);
 });
 
 test('api_013 a displayed file name loses forbidden code points and is cut to 48', () => {

@@ -1074,8 +1074,11 @@ test("api_013 the card's actions send nothing about the pack", async ({ browser 
   // Only reads: the card's chunk and its stylesheet, the template, and the app's own polls.
   expect(card.filter((x) => !x.startsWith('GET '))).toEqual([]);
   expect(card.filter((x) => x.includes('/assets/locales/')).map((x) => new URL(x.split(' ')[1]).pathname)).toEqual([templateUrl()]);
-  // Use: /system/info for the server's build and /auth/status for who is signed in; then the reload.
-  const use = r.sent.slice(beforeUse);
+  // Use: /system/info for the server's build and /auth/status for who is signed in, up to the reload's own page
+  // request (the reloaded page asks for both too).
+  const reloadAt = r.sent.findIndex((x, i) => i >= beforeUse && x.startsWith('GET ') && new URL(x.split(' ')[1]).pathname === '/');
+  expect(reloadAt).toBeGreaterThan(beforeUse);
+  const use = r.sent.slice(beforeUse, reloadAt);
   expect(use.filter((x) => !x.startsWith('GET '))).toEqual([]);
   expect(use.filter((x) => x.includes('/api/v1/system/info')).length).toBeGreaterThanOrEqual(1);
   expect(use.filter((x) => x.includes('/api/v1/auth/status')).length).toBeGreaterThanOrEqual(1);
