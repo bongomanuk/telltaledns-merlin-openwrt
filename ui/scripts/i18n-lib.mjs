@@ -13,6 +13,7 @@ import { parse as parseSvelte } from 'svelte/compiler';
 import { englishKey, hash, normalize } from '../src/lib/i18n/ident.ts';
 import { CATEGORIES, LEFTOVER, LIMITS, merge, parse, serialize, shapeError, skeleton } from '../src/lib/i18n/pairs.ts';
 import { identity, ship } from '../src/lib/i18n/shipping.ts';
+import { writeTemplate } from '../src/lib/i18n/template.ts';
 
 /** The hash and normalization the runtime uses (one module, `src/lib/i18n/ident.ts`), the pair
  * files' parser and canonical form (`src/lib/i18n/pairs.ts`), and what a locale file ships
@@ -1010,6 +1011,13 @@ export function summaryMarkdown(result) {
   return `${out.join('\n')}\n`;
 }
 
+/** REQ: API-013 (ADR-190) — the pair-file template's bytes (`src/lib/i18n/template.ts`) from a
+ * check's result: every message from the same extraction `sync` uses, with what `notes.json` and
+ * `verbatim.json` say of it, the glossary and a copy of the plural table. */
+export function templateJson(result) {
+  return writeTemplate(result.entries.values(), { notes: byIdentity(result.data.notes), verbatim: byIdentity(result.data.verbatim), glossary: result.data.glossary, plurals: result.data.plurals });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Commands that write
 
@@ -1022,7 +1030,6 @@ export function prebuild(root, result = check(root, { ratchets: false })) {
   rmSync(outDir, { recursive: true, force: true });
   const rows = [];
   const emitted = [];
-  const template = null;
   for (const [tag, s] of Object.entries(result.shipped)) {
     const sha = createHash('sha256').update(s.json).digest('hex').slice(0, 8);
     const name = `${tag}-${sha}.json`;
@@ -1031,6 +1038,7 @@ export function prebuild(root, result = check(root, { ratchets: false })) {
     emitted.push({ file: name, tag });
     rows.push(`  ${JSON.stringify(tag)}: { url: ${JSON.stringify(`/assets/locales/${name}`)}, dir: ${JSON.stringify(s.dir)}, offered: ${s.offered} },`);
   }
+  const template = null;
   mkdirSync(join(root, 'src', 'lib', 'i18n'), { recursive: true });
   writeFileSync(join(root, 'src', 'lib', 'i18n', 'emitted.gen.json'), serializeJson(emitted));
   const gen = [

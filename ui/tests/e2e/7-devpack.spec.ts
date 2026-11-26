@@ -1,15 +1,19 @@
-// REQ: API-012 (ADR-189) — what the build's rules share with code that runs them in the browser, without a
-// browser: the whole agreement rule apart from the runtime's first-use check.
+// REQ: API-012 (ADR-189), API-013 (ADR-190) — what the build's rules share with code that runs them in the
+// browser, without a browser: the whole agreement rule apart from the runtime's first-use check, the shipping
+// function, the template's slot in the build; and testing a language pack: the template, the check of a
+// translated file, the tag, and what a page keeps in its storage. (The pages are 9-devpack.spec.ts.)
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { cleanup, project } from './i18n-fixture';
+import { cleanup, project, put, uiCopy } from './i18n-fixture';
 import * as safe from '../../src/lib/i18n/safe';
 import { agree } from '../../src/lib/i18n/agree';
+import { parse, type Catalog } from '../../src/lib/i18n/pairs';
 import { identity, ship } from '../../src/lib/i18n/shipping';
+import { forPullRequest, materialize, readTemplate, type Template } from '../../src/lib/i18n/template';
 import * as lib from '../../scripts/i18n-lib.mjs';
 
 const UI = resolve(import.meta.dirname, '../..');
@@ -117,4 +121,131 @@ test('api_012 the shipping function is shared and its findings name their pair',
   expect(Object.values(s.table)).toEqual(['Qa-open']);
   expect([...s.translated]).toEqual([identity('c', 'Open', 'verb')]);
   expect(s.leftovers).toEqual([{ ctx: 'c', english: 'Gone', note: undefined }]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// API-013: the template
+
+const PLURALS = JSON.parse(readFileSync(join(UI, 'src/locales/plurals.json'), 'utf8')) as Record<string, string[]>;
+const code = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** The template of the tree `dir`, as the build writes it. */
+function templateOf(dir: string): { json: string; tpl: Template } {
+  const json = lib.templateJson(lib.check(dir, { ratchets: false }));
+  return { json, tpl: readTemplate(json) };
+}
+/** `sync <tag>` on `dir`, and the file it wrote. */
+function synced(dir: string, tag: string): string {
+  lib.sync(dir, tag);
+  return readFileSync(join(dir, `src/locales/${tag}.json`), 'utf8');
+}
+let uiTpl: { dir: string; json: string; tpl: Template } | null = null;
+/** A copy of the UI's sources with its template (once per worker). */
+function uiTemplate() {
+  if (!uiTpl) {
+    const dir = uiCopy();
+    uiTpl = { dir, ...templateOf(dir) };
+  }
+  return uiTpl;
+}
+
+test('api_013 the template equals what sync writes for a new language', () => {
+  const { dir, json, tpl } = uiTemplate();
+  // Every message of this build, once.
+  expect(tpl.entries.size).toBe(lib.check(dir, { ratchets: false }).entries.size);
+  expect(tpl.entries.size).toBeGreaterThan(2000);
+  for (const tag of ['de', 'fr', 'ru', 'zh-Hans']) {
+    rmSync(join(dir, `src/locales/${tag}.json`), { force: true });
+    expect(materialize(tpl, PLURALS[new Intl.Locale(tag).language]), tag).toBe(synced(dir, tag));
+  }
+  // The same tree gives the same bytes.
+  expect(templateOf(dir).json).toBe(json);
+  // The notes, sensitive marks, verbatim words, glossary and plural table go with it (the fixture has each).
+  const f = templateOf(project()).tpl;
+  expect(f.entries.get(identity('cache', 'Holds'))?.info).toEqual({ sensitive: true, text: 'A cache entry count' });
+  expect(f.entries.get(identity('cache', 'Choose email or ntfy'))?.verbatim).toEqual(['email', 'ntfy']);
+  expect(f.glossary).toEqual(['NXDOMAIN']);
+  expect([...f.plurals]).toEqual([['qaa', ['other']]]);
+  expect(f.contexts).toEqual([...f.contexts].sort(code));
+});
+
+test('api_013 plural categories come from the committed table not the engine', () => {
+  const { dir, tpl } = uiTemplate();
+  const real = Intl.PluralRules;
+  let written = '';
+  let fromSync = '';
+  (Intl as { PluralRules: unknown }).PluralRules = function () {
+    throw new Error('the engine was asked for plural rules');
+  };
+  try {
+    rmSync(join(dir, 'src/locales/fr.json'), { force: true });
+    written = materialize(tpl, tpl.plurals.get('fr') ?? []);
+    fromSync = synced(dir, 'fr');
+    templateOf(dir);
+  } finally {
+    (Intl as { PluralRules: unknown }).PluralRules = real;
+  }
+  expect(written).toBe(fromSync);
+  // French has one, many and other in the committed table: a plural's text has those three.
+  expect(tpl.plurals.get('fr')).toEqual(['one', 'many', 'other']);
+  const plural = Object.values(parse(written) as Catalog).flat().find((p) => Array.isArray(p[0]));
+  expect(Object.keys(plural?.[1] as object)).toEqual(['one', 'many', 'other']);
+  // The template carries the committed table itself.
+  expect(Object.fromEntries(tpl.plurals)).toEqual(PLURALS);
+});
+
+test('api_013 the browser and the script write the same canonical bytes', () => {
+  const { dir, tpl } = uiTemplate();
+  const cats = tpl.plurals.get('de') ?? [];
+  const good = materialize(tpl, cats);
+  const cat = parse(good) as Catalog;
+  const reversed = Object.fromEntries(Object.entries(cat).reverse().map(([k, v]) => [k, [...v].reverse()]));
+  const inputs: Record<string, string> = {
+    'shuffled, hand-spaced': JSON.stringify(reversed, null, 3),
+    'tabs': JSON.stringify(reversed, null, '\t'),
+    'CRLF': good.replace(/\n/g, '\r\n'),
+    'one line': JSON.stringify(cat),
+  };
+  for (const [what, text] of Object.entries(inputs)) {
+    put(dir, 'src/locales/de.json', text);
+    const fromScript = synced(dir, 'de');
+    expect(fromScript, what).toBe(good);
+    expect(forPullRequest(parse(text) as Catalog, tpl, cats), what).toBe(fromScript);
+  }
+  // A byte-order mark: the browser's decoder reads past it, the script refuses the file (as the check does).
+  put(dir, 'src/locales/de.json', `﻿${good}`);
+  expect(() => lib.sync(dir, 'de')).toThrow();
+  expect(forPullRequest(parse(new TextDecoder('utf-8', { fatal: true }).decode(new TextEncoder().encode(`﻿${good}`))) as Catalog, tpl, cats)).toBe(good);
+  // The order is by code unit: some context of the UI sorts otherwise under a collator, and the bytes keep code-unit order.
+  const differs = Object.values(cat).some((pairs) => {
+    const e = pairs.map((p) => JSON.stringify(p[0]));
+    return [...e].sort(code).join('\n') !== [...e].sort((a, b) => a.localeCompare(b)).join('\n') && e.join('\n') === [...e].sort(code).join('\n');
+  });
+  expect(differs, 'a context whose code-unit order is not its collator order').toBe(true);
+});
+
+test('api_013 download for a pull request is what sync writes for that file', () => {
+  const { dir, tpl } = uiTemplate();
+  const cats = tpl.plurals.get('ru') ?? [];
+  const all = [...tpl.entries.values()];
+  const one = all.find((e) => typeof e.english === 'string' && !e.note);
+  const plural = all.find((e) => Array.isArray(e.english));
+  if (!one || !plural) throw new Error('the UI has a message and a plural');
+  const pack: Catalog = Object.create(null);
+  const add = (ctx: string, p: Catalog[string][number]) => (pack[ctx] ??= []).push(p);
+  add(one.ctx, [one.english, 'Перевод']);
+  add(one.ctx, ['An English this build does not have', 'Старый']);
+  // Russian has one, few, many and other: this plural names two of them, and one the language does not have.
+  add(plural.ctx, [plural.english, { one: 'один', other: 'много', two: 'два' }]);
+  pack['~leftover'] = [['Older English', 'Старое']];
+  const text = JSON.stringify(pack, null, 1);
+  put(dir, 'src/locales/ru.json', text);
+  const fromScript = synced(dir, 'ru');
+  expect(forPullRequest(parse(text) as Catalog, tpl, cats)).toBe(fromScript);
+  // Translations kept, the missing added empty, left-over pairs moved aside and never pruned.
+  const pr = parse(fromScript) as Catalog;
+  expect(pr[one.ctx]).toContainEqual([one.english, 'Перевод']);
+  expect(pr[plural.ctx]).toContainEqual([plural.english, { one: 'один', few: '', many: '', other: 'много' }]);
+  expect(pr['~leftover']).toEqual([['An English this build does not have', 'Старый'], ['Older English', 'Старое']]);
+  expect(Object.values(pr).flat().length).toBe(tpl.entries.size + 2);
 });
