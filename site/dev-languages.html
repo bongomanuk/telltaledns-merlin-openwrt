@@ -116,7 +116,7 @@ node scripts/i18n.mjs sync de</code></pre>
   <p>Write your translation in the second place of each pair. Everything else is the project's, and has to stay as it is.</p>
   <h3>What to keep exactly</h3>
   <ul>
-    <li><b>Placeholders</b> such as <code>{kind}</code>: gaps the UI fills with a name or a number. Move them where your sentence needs them, but never rename or drop one.</li>
+    <li><b>Placeholders</b> such as <code>{kind}</code>: gaps the UI fills with a name or a number. Move them where your sentence needs them, but never rename or drop one. Never type a number in a placeholder's place. In a limit such as <code>{max}</code>, the UI writes the number as your language writes it, and you choose the noun form that goes with it.</li>
     <li><b>Markup tags</b> such as <code>&lt;b&gt;…&lt;/b&gt;</code>: keep them around the same words and translate the words inside.</li>
     <li><b>Web addresses, paths, ports, settings and commands</b>: <code>https://example.com/docs</code>, <code>/etc/telltale/</code>, <code>mail.example:587</code>, <code>max_ttl</code>, text in backticks. You may not add one that the English does not have.</li>
     <li><b>Numbers</b>: every number of the English stays, written in digits.</li>
@@ -151,8 +151,8 @@ node scripts/i18n.mjs sync de</code></pre>
   <h3>On the card</h3>
   <ol class="steps">
     <li class="step">Under <b class="ui">2. Check your file</b>, choose <b class="ui">Choose your file (or drop it on the button)</b>.</li>
-    <li class="step">Read the summary, for example <q>placeholder.json: 7 of 9 texts translated (78%). 2 texts break a rule and show in English.</q> The count is of findings, so one mistake can count twice.</li>
-    <li class="step">Open the lists: <b class="ui">Breaks a rule, shown in English (2)</b>, <b class="ui">Not translated (1)</b>, <b class="ui">Left over (0)</b> and <b class="ui">Worth a look (9)</b>. Each entry names the part of the UI and shows the English, with your text and what to do where a rule is broken. A list shows 200 entries at most.</li>
+    <li class="step">Read the summary, for example <q>placeholder.json: 7 of 9 texts translated (78%). 1 text breaks a rule and shows in English.</q> The count is of texts. The list below shows every finding, so one text can appear in it twice.</li>
+    <li class="step">Open the lists: <b class="ui">Breaks a rule, shown in English (1)</b>, <b class="ui">Not translated (1)</b>, <b class="ui">Left over (0)</b> and <b class="ui">Worth a look (9)</b>. Each entry names the part of the UI and shows the English, with your text and what to do where a rule is broken. A list shows 200 entries at most.</li>
     <li class="step"><b class="ui">Coverage per context, lowest first</b> shows which parts of the UI still need work. <b class="ui">Before you send it: what only the check of the pull request can judge</b> lists what the card cannot know.</li>
     <li class="step">Fix the file and choose it again. Repeat until nothing is under <b class="ui">Breaks a rule, shown in English</b>.</li>
   </ol>
@@ -220,9 +220,10 @@ i18n: 2 failure(s)</code></pre>
   <ul>
     <li><b>Where:</b> in this browser only, for this TelltaleDNS address, and for the user who loaded it. Another user of the same browser sees their usual language. Any signed-in user can try a pack: it changes nothing on the server.</li>
     <li><b>Removed by the page</b> at the next page load after any upgrade of the web UI or the server, a rollback or a downgrade included.</li>
-    <li><b>Also removed</b> 7 days after you loaded it, when the kept copy cannot be read, or when its check fails twice in a row.</li>
+    <li><b>Also removed</b> 7 days after you loaded it, or when the kept copy cannot be read.</li>
+    <li><b>Also removed</b> when its check fails twice in a row, or when a page cannot be drawn with it (the page then loads once more without it).</li>
     <li><b>Removed by you</b> with <b class="ui">Remove</b> in the banner or <b class="ui">Remove and reload</b> on the card.</li>
-    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load).</li>
+    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load). When you sign out, or your session ends, you are back in your usual language, and the pack returns when you sign in again.</li>
     <li><b>Real English:</b> put <code>?lang=en</code> after the address and before any <code>#</code>, for one page load. Any <code>?lang=</code> pauses the pack for that load.</li>
   </ul>
   <h3>What to look at</h3>
@@ -335,6 +336,7 @@ i18n: 2 failure(s)</code></pre>
     <li><q>The test language pack … was removed: it was loaded 7 days ago.</q> Use the file again.</li>
     <li><q>The test language pack … was removed: the copy kept in this browser couldn't be read.</q> Choose the file again.</li>
     <li><q>The test language pack … was removed: it could not be checked twice in a row. Check the file again under Settings.</q> Check the file on the card, and fix what it lists.</li>
+    <li><q>The test language pack … was removed: a page could not be drawn with it.</q> The page loaded once more in your usual language. Check the file on the card. If a file that passes the check keeps doing this, tell the maintainers in an issue, and say which page it was.</li>
   </ul>
 
   <h3>The tool says FAIL about a file or a field I did not write</h3>
