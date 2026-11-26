@@ -398,17 +398,20 @@ test('api_013 a limit of the check reads as the language writes numbers', () => 
   const c = checked({ packWords: limits.map((e, i) => [e.english, de[i]]) }, tplOf(limits));
   expect(c.broken).toEqual([]);
   expect(Object.keys(c.table)).toHaveLength(3);
-  under({ tag: 'de', table: c.table as never, formatLocale: 'de-DE' }, () => {
-    // The formats follow the page's language, as main.ts installs them before the app is drawn.
-    installFormat(makeFormat('de-DE', (ctx) => tr(ctx as never)));
-    try {
+  try {
+    under({ tag: 'de', table: c.table as never, formatLocale: 'de-DE' }, () => {
+      // The formats follow the page's language, as main.ts installs them before the app is drawn.
+      installFormat(makeFormat('de-DE', (ctx) => tr(ctx as never)));
       expect(refusalWords({ code: 'contexts' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 600 Kontexte.');
       expect(refusalWords({ code: 'pairs' })).toBe('Diese Datei ist nicht verwendbar: Sie hat mehr als 10.000 Paare.');
       expect(refusalWords({ code: 'long', ctx: 'cache', n: 2 })).toBe('Diese Datei ist nicht verwendbar: Paar 2 von "cache" hat einen Text, der länger als 4.000 Zeichen ist.');
-    } finally {
-      installFormat(makeFormat(undefined, (ctx) => tr(ctx as never)));
-    }
-  });
+    });
+  } finally {
+    // English again, made once English is installed (a format reads whether the text is English when it is made),
+    // so later tests of this worker see the formats as before.
+    installFormat(makeFormat(undefined, (ctx) => tr(ctx as never)));
+  }
+  expect(refusalWords({ code: 'pairs' })).toBe(`This file can't be used: it has more than ${MAX_PAIRS.toLocaleString('en-US')} pairs.`);
   // A translator who types the number in place of {max} is told to keep it, whatever way the number is written.
   const typed = checked({ packWords: [[limits[1].english, { one: de[1].one, other: 'Diese Datei ist nicht verwendbar: Sie hat mehr als 10000 Paare.' }]] }, tplOf(limits));
   expect(typed.broken.some((b) => b.rule === 'placeholders' && b.token === '{max}'), JSON.stringify(typed.broken)).toBe(true);
