@@ -11,7 +11,7 @@ import { gzipSync, constants } from 'node:zlib';
 import ts from 'typescript';
 import { parse as parseSvelte } from 'svelte/compiler';
 import { englishKey, hash, normalize } from '../src/lib/i18n/ident.ts';
-import { agree } from '../src/lib/i18n/safe.ts';
+import { agree } from '../src/lib/i18n/agree.ts';
 import { CATEGORIES, LEFTOVER, LIMITS, merge, parse, serialize, shapeError, skeleton } from '../src/lib/i18n/pairs.ts';
 
 /** The hash and normalization the runtime uses (one module, `src/lib/i18n/ident.ts`), and the pair

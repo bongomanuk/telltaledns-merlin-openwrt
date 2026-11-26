@@ -1,10 +1,12 @@
 // REQ: API-012 (ADR-189) — a translation must agree with its English: the same placeholders, tags
 // and web addresses; every structural token, number and `verbatim` word of the English, and no
 // address, port, path or setting the English does not have; no direction overrides, invisible
-// characters or words that mix scripts. The check script applies all of it (`agree`, findings with
-// the token and its position); the browser re-checks what needs no data file (`agreesAtRuntime`, a
-// yes or no that stops at the first problem) the first time it shows a translation, and shows
-// English instead when they disagree. Pure; no imports.
+// characters or words that mix scripts. The check script applies all of it (`agree` in `agree.ts`,
+// findings with the token and its position); the browser re-checks what needs no data file
+// (`agreesAtRuntime`, a yes or no that stops at the first problem) the first time it shows a
+// translation, and shows English instead when they disagree. This module holds the readings both
+// use and the runtime's check; the full rule is a module of its own, so code loaded later can run
+// it without the page's first load carrying it. Pure; no imports.
 
 /** One problem: the rule, the token concerned, and where it is in the translation (-1: absent). */
 export type Finding = { readonly rule: string; readonly token: string; readonly at: number; readonly detail: string };
@@ -38,8 +40,8 @@ export function prepare(s: string): string {
  * ideographic full stop to `.`), so `８．８．８．８` and `8。8。8。8` read as `8.8.8.8`. */
 const fold = (s: string) => s.normalize('NFKC').replace(/\u3002/g, '.');
 
-const PLACEHOLDER = /\{[A-Za-z_][A-Za-z0-9_]*\}/g;
-const TAG = /<\/?[a-z][a-z0-9]*\/?>/g;
+export const PLACEHOLDER = /\{[A-Za-z_][A-Za-z0-9_]*\}/g;
+export const TAG = /<\/?[a-z][a-z0-9]*\/?>/g;
 // Every pattern below runs on a translator's text, in the check and in the browser: none of them
 // backtracks over an unbounded run, so any text is read in linear time.
 // `https?://` in any case and zero or more RFC 3986 characters; trailing `. , ; : ! ? )` are not part of it.
@@ -71,7 +73,7 @@ function trim(s: string, chars: string): string {
   return s.slice(a, b);
 }
 const STRUCTURAL = [...ADDED, HOST_PORT, /\[[^\]\s]+\]/, /_/];
-const CODE_SPAN = /`[^`]+`/g;
+export const CODE_SPAN = /`[^`]+`/g;
 // Letters, digits and marks (sticky): the host of a bare scheme written in another script.
 const SCRIPT_RUN = /[\p{L}\p{N}\p{M}]+/uy;
 
@@ -118,10 +120,10 @@ export function structural(token: string, glossary: readonly string[] = []): boo
 
 /** Whether a token a translation adds is an address, a port, a path or a setting (`also`: the
  * host-and-port pattern of that reading). */
-const isAdded = (token: string, also = HOST_PORT) => also.test(token) || ADDED.some((re) => re.test(token));
+export const isAdded = (token: string, also = HOST_PORT) => also.test(token) || ADDED.some((re) => re.test(token));
 
 /** `w` as a whole word: not inside a longer run of letters, digits or `_`. */
-const whole = (w: string, flags?: string) => new RegExp(`(?<![A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, flags);
+export const whole = (w: string, flags?: string) => new RegExp(`(?<![A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, flags);
 
 /** The tokens a translation adds that are an address, a port, a path or a setting: in the prepared
  * reading, then in the folded one. There a token the first reading already judged is left out, and
@@ -142,16 +144,11 @@ export function addedStructural(english: string, translation: string): string[] 
   return unique([...tt.filter((t) => !te.has(t) && isAdded(t)), ...tokens(translation, true).filter((t) => !fe.has(t) && !ts.has(t) && isAdded(rest(t), DOTTED_HOST_PORT))]);
 }
 
-// A `.` between two letters of other scripts: an address the ASCII readings cannot see (`例子.公司`).
-const WORD_RUN = /[\p{L}\p{N}\p{M}.]+/gu;
-const SCRIPT_DOT = /(?![\x00-\x7F])\p{L}\.(?![\x00-\x7F])\p{L}/u;
-const scriptDots = (s: string) => (s.normalize('NFKC').match(WORD_RUN) ?? []).filter((w) => SCRIPT_DOT.test(w));
-
-const digits = (s: string): string[] => prepare(s).replace(PLACEHOLDER, ' ').match(/\d+/g) ?? [];
-const all = (s: string, re: RegExp): string[] => s.match(re) ?? [];
+export const digits = (s: string): string[] => prepare(s).replace(PLACEHOLDER, ' ').match(/\d+/g) ?? [];
+export const all = (s: string, re: RegExp): string[] => s.match(re) ?? [];
 
 /** The members of multiset `a` that `b` lacks. */
-function missingFrom(a: readonly string[], b: readonly string[]): string[] {
+export function missingFrom(a: readonly string[], b: readonly string[]): string[] {
   const left = new Map<string, number>();
   for (const v of b) left.set(v, (left.get(v) ?? 0) + 1);
   const out: string[] = [];
@@ -162,7 +159,7 @@ function missingFrom(a: readonly string[], b: readonly string[]): string[] {
   }
   return out;
 }
-const unique = (xs: readonly string[]) => [...new Set(xs)];
+export const unique = (xs: readonly string[]) => [...new Set(xs)];
 const sameSet = (a: readonly string[], b: readonly string[]) => {
   const x = new Set(a);
   const y = new Set(b);
@@ -208,57 +205,6 @@ export function codePoints(s: string, dir: 'ltr' | 'rtl' = 'ltr'): string[] {
 /** Words of a translation that mix Latin letters with Cyrillic or Greek ones, with their offsets. */
 export function mixedScript(s: string): { word: string; at: number }[] {
   return [...s.matchAll(WORD)].filter((m) => LATIN.test(m[0]) && CYRILLIC_OR_GREEK.test(m[0])).map((m) => ({ word: m[0], at: m.index }));
-}
-
-/** Everything that fails, one finding per token. */
-function failures(english: string, translation: string, o: AgreeOptions): Finding[] {
-  const fails: Finding[] = [];
-  const add = (rule: string, token: string, detail: string, at = translation.indexOf(token)) => fails.push({ rule, token, at, detail });
-  // The same set, both directions (only "added" counts for a plural form that may hold a subset).
-  const both = (rule: string, e: string[], t: string[], subset = false) => {
-    if (!subset) for (const x of unique(e)) if (!t.includes(x)) add(rule, x, 'missing', -1);
-    for (const x of unique(t)) if (!e.includes(x)) add(rule, x, 'added');
-  };
-  both('placeholders', all(english, PLACEHOLDER), all(translation, PLACEHOLDER), o.placeholderSubset);
-  both('tags', all(english, TAG), all(translation, TAG));
-  both('urls', urls(english), urls(translation));
-  const se = schemes(english);
-  const st = schemes(translation);
-  if (st > se) add('urls', `${st} schemes`, `added: the English has ${se}`, -1);
-  const te = tokens(english);
-  const tt = tokens(translation);
-  for (const x of unique(te.filter((t) => structural(t, o.glossary)))) if (!tt.includes(x)) add('structural', x, 'missing', -1);
-  for (const x of addedStructural(english, translation)) if (!o.exemptAdded?.includes(x)) add('structural', x, 'added');
-  if (!o.exemptDigits) for (const x of missingFrom(digits(english), digits(translation))) add('digits', x, 'missing', -1);
-  const prepared = prepare(translation);
-  for (const w of o.verbatim ?? []) if (!whole(w).test(prepared)) add('verbatim', w, 'missing', -1);
-  for (const m of mixedScript(translation)) add('mixed-script', m.word, 'mixes Latin with Cyrillic or Greek letters', m.at);
-  both('code', all(english, CODE_SPAN), all(translation, CODE_SPAN));
-  for (const f of forbidden(translation, o.dir)) add('code-point', f.cp, 'forbidden', f.at);
-  return fails;
-}
-
-const HYPHENATED = /^[A-Za-z]+(?:-[A-Za-z]+)+$/;
-const CAPITALS = /^[A-Z]{2,}$/;
-
-/** The whole rule, for the check script: FAIL findings and REPORT findings. */
-export function agree(english: string, translation: string, o: AgreeOptions = {}): Verdict {
-  const fails = failures(english, translation, o);
-  const reports: Finding[] = [];
-  const glossary = o.glossary ?? [];
-  const te = tokens(english);
-  const tt = tokens(translation);
-  const report = (rule: string, xs: string[], detail: string) => {
-    for (const x of unique(xs)) reports.push({ rule, token: x, at: translation.indexOf(x), detail });
-  };
-  report('hyphenated', te.filter((t) => HYPHENATED.test(t) && !tt.includes(t)), 'translated');
-  report('capitals', te.filter((t) => CAPITALS.test(t) && !glossary.includes(t) && !tt.includes(t)), 'translated');
-  // Added tokens that are not structural (and those a maintainer's exemption allows), and a `.`
-  // between letters of another script, which may be an address the rule cannot read.
-  const dots = scriptDots(english);
-  const exempt = o.exemptAdded ? addedStructural(english, translation).filter((x) => o.exemptAdded?.includes(x)) : [];
-  report('added', [...tt.filter((t) => !te.includes(t) && !isAdded(t)), ...exempt, ...scriptDots(translation).filter((w) => !dots.includes(w))], 'added');
-  return { fails, reports };
 }
 
 /** What the browser checks before it shows a translation: the same rules without the data files

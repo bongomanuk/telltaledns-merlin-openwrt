@@ -5,7 +5,8 @@
 import { expect, test } from '@playwright/test';
 import { interpolate, parts, plural } from '../../src/lib/i18n/message';
 import { candidates, canonical, match, type Request } from '../../src/lib/i18n/match';
-import { agree, agreesAtRuntime, codePoints, schemes, tokens, urls } from '../../src/lib/i18n/safe';
+import { agreesAtRuntime, codePoints, schemes, tokens, urls } from '../../src/lib/i18n/safe';
+import { agree } from '../../src/lib/i18n/agree';
 import { LOWER, UPPER, pseudo } from '../../src/lib/i18n/pseudo';
 import { hash } from '../../src/lib/i18n/ident';
 import { PairFileError, merge, parse, shapeError, shapeProblem, skeleton } from '../../src/lib/i18n/pairs';
