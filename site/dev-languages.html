@@ -46,7 +46,7 @@
   <p>A file is data and is never run. A translation is shown only while it agrees with the English it replaces: the same placeholders, tags, web addresses and numbers. If not, the English shows.</p>
   <p>The words used here:</p>
   <ul>
-    <li><b>Tag:</b> the short code for a language, such as <code>de</code> or <code>pt-BR</code>.</li>
+    <li><b>Tag</b> (a language tag): the short code for a language, such as <code>de</code> or <code>pt-BR</code>.</li>
     <li><b>Template:</b> the empty file for a tag, with every English text and no translation.</li>
     <li><b>File:</b> the template with your translations filled in.</li>
     <li><b>Pack:</b> that file while you test it in a browser.</li>
@@ -117,7 +117,7 @@ node scripts/i18n.mjs sync de</code></pre>
   <h3>What to keep exactly</h3>
   <ul>
     <li><b>Placeholders</b> such as <code>{kind}</code>: gaps the UI fills with a name or a number. Move them where your sentence needs them, but never rename or drop one.</li>
-    <li><b>Tags</b> such as <code>&lt;b&gt;…&lt;/b&gt;</code>: keep them around the same words and translate the words inside.</li>
+    <li><b>Markup tags</b> such as <code>&lt;b&gt;…&lt;/b&gt;</code>: keep them around the same words and translate the words inside.</li>
     <li><b>Web addresses, paths, ports, settings and commands</b>: <code>https://example.com/docs</code>, <code>/etc/telltale/</code>, <code>mail.example:587</code>, <code>max_ttl</code>, text in backticks. You may not add one that the English does not have.</li>
     <li><b>Numbers</b>: every number of the English stays, written in digits.</li>
     <li><b>The words the notes file lists as "keep as written"</b>, the values people type (<code>email</code> above), and the terms kept everywhere, such as <code>NXDOMAIN</code>.</li>
@@ -180,7 +180,7 @@ i18n: 2 failure(s)</code></pre>
     <thead><tr><th>The card says</th><th>The tool prints</th><th>What to do</th></tr></thead>
     <tbody>
       <tr><td><q>Keep … exactly as it is: it is replaced by a value.</q><br><q>… isn't in the English: a translation keeps the placeholders the English has, and no others.</q></td><td><code>placeholders: missing</code><br><code>placeholders: added at N</code></td><td>Write each placeholder back exactly, braces included, and remove any that is not in the English.</td></tr>
-      <tr><td><q>Keep the tag … exactly as in the English.</q><br><q>The tag … isn't in the English.</q></td><td><code>tags: missing</code><br><code>tags: added at N</code></td><td>Keep each tag around the same words.</td></tr>
+      <tr><td><q>Keep the tag … exactly as in the English.</q><br><q>The tag … isn't in the English.</q></td><td><code>tags: missing</code><br><code>tags: added at N</code></td><td>Keep each markup tag, such as <code>&lt;b&gt;</code> and <code>&lt;/b&gt;</code>, around the same words.</td></tr>
       <tr><td><q>Keep the web address exactly as in the English: …</q><br><q>This web address isn't in the English: …</q><br><q>The translation has more web addresses than the English.</q></td><td><code>urls: missing</code><br><code>urls: added at N</code></td><td>Copy the address from the English, character for character.</td></tr>
       <tr><td><q>Keep … as written.</q><br><q>Remove …: a translation adds no address, port, path or setting.</q></td><td><code>structural: missing</code><br><code>structural: added at N</code></td><td>Keep what the English has, and add nothing that looks like an address, port, path or setting. A time such as 24:00 counts as one.</td></tr>
       <tr><td><q>Keep the number ….</q></td><td><code>digits: missing</code></td><td>Write the number in digits. A language that needs words can ask a maintainer for an exemption.</td></tr>
