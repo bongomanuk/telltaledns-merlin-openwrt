@@ -400,3 +400,13 @@ test('api_005 names on my network: after a forwarded domain is removed, the focu
   // The removed domain's row went with its button: a second Enter would not remove the next domain.
   expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '')).not.toBe('Stop sending lab.example');
 });
+
+// ---- Firing alerts: one per rule and subject, both free text.
+
+test('api_005 alerts: two firing alerts whose rule and subject join to the same text', async ({ page }) => {
+  const firing = [{ rule: 'down', subject: 'quad9', summary: 'One.' }, { rule: 'downq', subject: 'uad9', summary: 'Two.' }];
+  await page.route(/\/api\/v1\/alerts$/, (r) => r.fulfill({ json: { evaluating: true, firing, maintenance: [], deliveries: [] } }));
+  await signIn(page);
+  await page.goto('/#/alerts');
+  await expect(page.getByTestId('alerts-now').locator('tbody tr td:nth-child(3)')).toHaveText(['One.', 'Two.']);
+});
