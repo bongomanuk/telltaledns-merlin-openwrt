@@ -155,8 +155,9 @@ what `node scripts/i18n.mjs sync <tag>` writes for a new language at that build 
 (`<tag>-notes.txt`). The card checks a translated file with the build's own rules (`src/lib/i18n/pack.ts`:
 the parser of `pairs.ts`, the shipping function of `shipping.ts`, the whole agreement rule of `agree.ts`)
 and lists what breaks a rule (shown in English), what is missing and what is left over; **Use this
-pack…** shows the UI in that file's language in that browser only, under an English banner, until
-another build of the web UI or the server, 7 days, or **Remove**; **Download for a pull request** writes
+pack…** shows the UI in that file's language in that browser only, for the user who loaded it (paused for
+anyone else, and on the sign-in page after a sign-out), under an English banner, until another build of the
+web UI or the server, 7 days, or **Remove**; **Download for a pull request** writes
 the file in the repository's exact form. Only CI judges the manifest entry and owner, back-translations of
 sensitive messages, English changed since that build, and the file as committed. The banner, the
 confirmation, the notices and the card's Use, Download for a pull request and Remove are English on
@@ -182,8 +183,8 @@ two rules for a catalog the build shipped, and does for any other.
    of its English, every structural token (a URL, a path, `[x]`, `=`, `_`, `$`, `|`, a host and port,
    an IP address, a glossary term), every number, and every word `src/locales/verbatim.json` lists
    for it; it adds no address, port, path or setting (also written with fullwidth or ideographic
-   punctuation, `８．８．８．８`); and it has no direction overrides, invisible characters or words
-   that mix scripts. The added-token lines of the report name no address.
+   punctuation, `８．８．８．８`); and it has no direction overrides, invisible characters, lone
+   surrogates or words that mix scripts. The added-token lines of the report name no address.
    An address written in the language's own script shows only as an added-token line (`例子.公司`,
    for its `.` between two letters of that script; after a bare `https://` it fails), and with an
    ideographic full stop (`例子。公司`) not at all. Digits of another script (`٨٫٨٫٨٫٨`) and an
