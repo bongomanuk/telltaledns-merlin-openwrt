@@ -5,6 +5,7 @@
 // (the admin, some queries), as 8-i18n-pages.spec.ts does.
 import { expect, test, type Page } from '@playwright/test';
 import { partKey, partsOf } from '../../src/lib/donut';
+import { occurrenceKeys } from '../../src/lib/keys';
 import { fold } from '../../src/lib/sankey';
 import { failOnPageErrors } from './page-errors';
 
@@ -371,4 +372,31 @@ test("api_005 obs_031 a device's rhythm: two domains that read alike", async ({ 
   await expect(page.getByTestId('rhythm-row')).toHaveCount(2);
   await page.getByTestId('rhythm-table-toggle').click();
   await expect(page.getByTestId('rhythm-table').locator('tbody tr')).toHaveCount(2);
+});
+
+// ---- A forwarded domain's row stays with its domain: its Remove acts at once.
+
+test('api_005 the keys of a list whose values can repeat: each value with how many times it came before', () => {
+  expect(occurrenceKeys(['corp.example', 'lab.example', 'corp.example'])).toEqual(['corp.example\u00000', 'lab.example\u00000', 'corp.example\u00001']);
+  // A value listed once has one key wherever it is.
+  expect(occurrenceKeys(['lab.example'])).toEqual(occurrenceKeys(['corp.example', 'lab.example']).slice(1));
+});
+
+test('api_005 names on my network: after a forwarded domain is removed, the focus is not on the next one', async ({ page }) => {
+  let domains = ['corp.example', 'lab.example'];
+  await page.route('**/api/v1/forwards', (r) => r.fulfill({ json: ITEMS(domains.map((domain) => ({ domain, servers: ['10.0.0.53'], source: 'api', stub: false }))) }));
+  await page.route('**/api/v1/forwards/*', (r) => {
+    if (r.request().method() !== 'DELETE') return r.fallback();
+    const gone = decodeURIComponent(new URL(r.request().url()).pathname.split('/').pop() ?? '');
+    domains = domains.filter((d) => d !== gone);
+    return r.fulfill({ json: { applied: true, configVersion: 8, impact: '', keepInGit: null, warnings: [], recentQueries: 0 } });
+  });
+  await signIn(page);
+  await page.goto('/#/local-dns');
+  await page.getByRole('button', { name: 'Stop sending corp.example' }).focus();
+  await page.keyboard.press('Enter');
+  const forwards = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Domains sent to other servers' }) }).locator('tbody tr');
+  await expect(forwards.locator('td:nth-child(1)')).toHaveText(['lab.example']);
+  // The removed domain's row went with its button: a second Enter would not remove the next domain.
+  expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '')).not.toBe('Stop sending lab.example');
 });
