@@ -4,10 +4,10 @@
 // carries two stamps, the web UI build and the server's build commit, and lasts 7 days. With them it
 // keeps what the check of the text gave (the table a page installs), stamped with the build and the
 // fingerprint it was made for: a page load uses it only while both are unchanged, and checks the text
-// again otherwise (or when the kept table is not well formed). Same record, same write. It also names the
-// user who loaded it: the pack is that user's, paused for anyone else. A tab writes over
-// or removes only what it read, while the key still holds it, so a tab left open never replaces or deletes
-// a pack another tab loaded since.
+// again otherwise (or when the kept table is not well formed). Same record, same write. It also names
+// the user who loaded it: the pack is that user's, paused for anyone else. A tab writes over or removes
+// only what it read, while the key still holds it, so a tab left open never replaces or deletes a pack
+// another tab loaded since.
 import { DEVPACK_KEY } from '../i18n/devpack';
 
 /** The one-load flag (session storage, removed when read): `1` after "Show the test pack on this page",

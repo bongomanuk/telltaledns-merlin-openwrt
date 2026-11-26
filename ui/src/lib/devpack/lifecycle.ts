@@ -5,9 +5,9 @@
 //      removes the pack, with a notice;
 //   c. `?lang=` pauses it for this load; so does a page where nobody is signed in (sign-in, two-factor,
 //      setup, a server that cannot be reached), a display link and a display session, and a user other
-//      than the one who loaded it, unless "Show the
-//      test pack on this page" asked for this one load (that flag is taken first, whatever the load
-//      decides), and the load after the pack left a page because someone went away;
+//      than the one who loaded it, unless "Show the test pack on this page" asked for this one load (that
+//      flag is taken first, whatever the load decides); and so does the load after the pack left a page
+//      because someone went away;
 //   d. the table the check gave is installed as it was kept, while the web UI build and the file's
 //      fingerprint it was made for are this record's (design section 8, "About the boot ceiling");
 //   e. otherwise the template is fetched (a failure: the usual language, and the pack stays for the next
