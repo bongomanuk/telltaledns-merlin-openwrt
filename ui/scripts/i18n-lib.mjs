@@ -1014,12 +1014,15 @@ export function summaryMarkdown(result) {
 // Commands that write
 
 /** Writes the shipped catalogs, the URL table and the list of the files it wrote (all git-ignored;
- * postbuild allows exactly the listed files in `assets/locales/`). With no locale: an empty table. */
+ * postbuild allows exactly the listed files in `assets/locales/`: `{ file, tag }` for a catalog,
+ * `{ file, template: true }` for the build's one pair-file template, whose address the table file
+ * exports as `TEMPLATE`, null without one). With no locale: an empty table. */
 export function prebuild(root, result = check(root, { ratchets: false })) {
   const outDir = join(root, 'public', 'assets', 'locales');
   rmSync(outDir, { recursive: true, force: true });
   const rows = [];
   const emitted = [];
+  const template = null;
   for (const [tag, s] of Object.entries(result.shipped)) {
     const sha = createHash('sha256').update(s.json).digest('hex').slice(0, 8);
     const name = `${tag}-${sha}.json`;
@@ -1035,6 +1038,7 @@ export function prebuild(root, result = check(root, { ratchets: false })) {
     "import type { LocaleTable } from './index';",
     '',
     `export const LOCALES: LocaleTable = Object.freeze(Object.assign(Object.create(null), {${rows.length ? `\n${rows.join('\n')}\n` : ''}}));`,
+    `export const TEMPLATE: string | null = ${JSON.stringify(template)};`,
     '',
   ].join('\n');
   const genPath = join(root, 'src', 'lib', 'i18n', 'locales.gen.ts');

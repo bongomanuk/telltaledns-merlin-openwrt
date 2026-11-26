@@ -11,11 +11,9 @@ import { agreesAtRuntime } from './safe';
 
 export type { Binder, Msg, Param, Params } from './message';
 
-/** The build's table of catalogs (`locales.gen.ts`, made by `scripts/i18n.mjs prebuild`).
- * `template` is reserved for a later pair-file template; nothing writes or reads it yet. */
-export type LocaleTable = Readonly<
-  Record<string, { readonly url: string; readonly dir: 'ltr' | 'rtl'; readonly offered: boolean; readonly template?: string }>
->;
+/** The build's table of catalogs (`locales.gen.ts`, made by `scripts/i18n.mjs prebuild`). The same
+ * file exports `TEMPLATE`, the address of the build's one pair-file template (null without one). */
+export type LocaleTable = Readonly<Record<string, { readonly url: string; readonly dir: 'ltr' | 'rtl'; readonly offered: boolean }>>;
 
 /** A shipped catalog: hash -> translation, or plural forms by category. Null prototype. */
 export type Table = Readonly<Record<string, string | Forms>>;
