@@ -9,6 +9,18 @@ config_version = 1
 # setup token from `telltale auth setup-token` (Compose: `docker compose exec telltale
 # telltale auth setup-token`) to create the first admin.
 
+# If another program on this machine already uses port 53 (the start stops with "Address
+# already in use"), listen on this machine's own address instead: uncomment these and put in
+# its LAN address. Only the listed addresses answer then. See "Port 53 already in use" in
+# docs/running.md.
+# [[listen]]
+# proto = "udp"
+# addr = "192.168.1.2:53"
+#
+# [[listen]]
+# proto = "tcp"
+# addr = "192.168.1.2:53"
+
 # Where answers come from: encrypted (DNS over TLS) to Cloudflare and Quad9, whichever is
 # faster. `telltale presets list` shows other providers.
 [[upstream]]

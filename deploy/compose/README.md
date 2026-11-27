@@ -13,4 +13,7 @@ docker compose exec telltale telltale auth setup-token   # then open http://<hos
 - `e2e.sh IMAGE` is the CI test of this bundle.
 
 Port 53 busy, running unprivileged, SD-card tips: see "Raspberry Pi and Linux" in
-[docs/running.md](../../docs/running.md#raspberry-pi-and-linux).
+[docs/running.md](../../docs/running.md#raspberry-pi-and-linux). If the container stops at
+start with "Address already in use", another program on the host uses port 53: uncomment the
+`[[listen]]` example in `telltale.toml` and put in this machine's own address ("Port 53 already
+in use" in that section has the details).
