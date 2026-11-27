@@ -1701,16 +1701,19 @@ fn json_of<T: serde::Serialize>(v: &T) -> String {
 ///
 /// Names devices across every view: the query log, live tail, charts, and history (names
 /// are resolved when read, so earlier queries are relabelled too). To rename, send the new
-/// `name` in the body. Devices defined in the config files are read-only here (409). Needs
-/// the operator role (or a `write` token).
+/// `name` in the body. Devices defined in the config files are read-only here (409), and so,
+/// on a primary promoted from replica, are those of the cluster version it builds on. The
+/// change is checked against the configuration the node applies (ADR-040, ADR-191): those
+/// files or that version, every device and setting made through the API, and the change.
+/// Needs the operator role (or a `write` token).
 #[utoipa::path(put, path = "/api/v1/clients/{name}", tag = "config",
     params(("name" = String, Path, description = "The device's current name (or the name for a new one)."), DryRun),
     request_body = ClientInput,
     responses(
         (status = 200, body = ClientChange, description = "Applied (or, with dryRun, what would change)."),
-        (status = 409, body = Problem, description = "Defined in the config files, or an Idempotency-Key reused for another request; or the Idempotency-Key's first request is still running (`change_in_progress`, with `Retry-After`: retry shortly for its answer)."),
+        (status = 409, body = Problem, description = "Defined in the config files (or in the cluster version a promoted primary builds on), or an Idempotency-Key reused for another request; or the Idempotency-Key's first request is still running (`change_in_progress`, with `Retry-After`: retry shortly for its answer)."),
         (status = 412, body = Problem, description = "If-Match: the config changed since that version."),
-        (status = 422, body = Problem, description = "The resulting configuration is invalid (e.g. an unknown group)."),
+        (status = 422, body = Problem, description = "The resulting configuration is invalid (e.g. an unknown group, or a match key another device has, named in the detail); nothing is stored."),
         (status = 503, body = Problem, description = "Too many configuration changes are running at once (`Retry-After`: retry shortly)."),
     ))]
 pub(crate) async fn put_client(
@@ -1742,15 +1745,20 @@ pub(crate) async fn put_client(
 /// Delete a device named through the API.
 ///
 /// Its queries, past and future, go back to showing the address, and it leaves its groups
-/// (the `default` group applies). Devices from the config files can't be deleted here (409).
-/// Needs the operator role (or a `write` token).
+/// (the `default` group applies). Devices from the config files can't be deleted here (409),
+/// nor, on a primary promoted from replica, those of the cluster version it builds on. A device
+/// stored through the API that isn't in effect (the files or that version have a device of its
+/// name, or the devices and settings made through the API don't apply) is removed too, even
+/// while they still don't apply after it (`warnings` then say why, ADR-191). Needs the operator
+/// role (or a `write` token).
 #[utoipa::path(delete, path = "/api/v1/clients/{name}", tag = "config",
     params(("name" = String, Path, description = "The device's name."), DryRun),
     responses(
-        (status = 200, body = ClientChange, description = "The result."),
+        (status = 200, body = ClientChange, description = "The result: removed (or, with dryRun, what would change)."),
         (status = 404, body = Problem, description = "No device by that name was created through the API."),
-        (status = 409, body = Problem, description = "Defined in the config files; or the Idempotency-Key's first request is still running (`change_in_progress`, with `Retry-After`: retry shortly for its answer)."),
+        (status = 409, body = Problem, description = "Defined in the config files (or in the cluster version a promoted primary builds on); or the Idempotency-Key's first request is still running (`change_in_progress`, with `Retry-After`: retry shortly for its answer)."),
         (status = 412, body = Problem, description = "The configuration changed since the If-Match version: re-read it and retry."),
+        (status = 422, body = Problem, description = "Without it the configuration would be invalid (e.g. a quick rule still names it); nothing is stored."),
         (status = 503, body = Problem, description = "Too many configuration changes are running at once (`Retry-After`: retry shortly)."),
     ))]
 pub(crate) async fn delete_client(

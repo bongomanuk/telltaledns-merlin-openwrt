@@ -808,8 +808,8 @@ struct Inherited {
 /// (the reload would leave them out), and hiding a group a device of that version is in. What is
 /// accepted is in effect after its reload; what is refused stores nothing, and, stored anyway,
 /// would be left out.
-#[tokio::test]
 #[allow(clippy::too_many_lines)] // one case per kind of check
+#[tokio::test]
 async fn clu_003_promoted_primary_checks_writes_on_its_inherited_base() {
     let n = Node::promoted(config(OWN_DIFFERENT), &config(INHERITED));
     assert!(!n.falls_back());
