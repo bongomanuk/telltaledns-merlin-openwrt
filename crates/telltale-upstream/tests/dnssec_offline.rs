@@ -742,6 +742,9 @@ fn tld_answer(z: &Tld, m: &mut Message, qn: &Name, qt: RecordType) {
         parked_answer(z, m, qn, qt);
     } else if below("v.t.") {
         if !chase(&z.plain, m, qn, qt) {
+            if unsigned_nxdomain(qn) {
+                m.metadata.response_code = ResponseCode::NXDomain;
+            }
             m.add_authorities(z.plain[&(n("v.t."), RecordType::SOA)].clone());
         }
     } else if *qn == n("s.t.") && qt == RecordType::DS && z.no_ds.load(Ordering::Relaxed) {
@@ -1083,8 +1086,19 @@ fn plain_answer(z: &Zone, m: &mut Message, qn: &Name, qt: RecordType) {
         name = target;
     }
     if m.answers.is_empty() {
+        if unsigned_nxdomain(qn) {
+            m.metadata.response_code = ResponseCode::NXDomain;
+        }
         m.add_authorities(z.plain[&(n("u."), RecordType::SOA)].clone());
     }
+}
+
+/// DNS-011 — names at or below these don't exist in the unsigned zones `u.` and `v.t.`: they are
+/// answered NXDOMAIN (any other name without records there, NODATA).
+const UNSIGNED_NXDOMAIN: [&str; 2] = ["nx.u.", "nx.v.t."];
+
+fn unsigned_nxdomain(qn: &Name) -> bool {
+    UNSIGNED_NXDOMAIN.iter().any(|zone| n(zone).zone_of(qn))
 }
 
 /// DNS-011 — with `unrelated_soa`, the denial of a question of [`UNRELATED_DENIALS`]: the other
@@ -1695,6 +1709,38 @@ async fn dns_011_offline_denial_beside_an_unrelated_unsigned_soa_is_bogus() {
         "never judged insecure"
     );
     assert_eq!(stats.secure.load(Ordering::Relaxed), secure, "nor secure");
+}
+
+/// REQ: DNS-011 (T10.9, ADR-098) — the control of the test above: a genuine denial in an unsigned
+/// zone, with that zone's own SOA, stays insecure (served, without AD), never bogus. NODATA and
+/// NXDOMAIN in `u.` (delegated from the signed root without a DS) and in `v.t.` (inside `t.`'s
+/// NSEC3 Opt-Out span), one and five labels below the zone.
+#[tokio::test]
+async fn dns_011_offline_unsigned_zone_denials_stay_insecure() {
+    use telltale_proto::rcode::{NOERROR, NXDOMAIN};
+    let budget = Duration::from_secs(5);
+    let (v, g, _, stats, _dir) = setup(true).await;
+    warm_tld(&v, &g).await;
+    let (mut got, mut want) = (Vec::new(), Vec::new());
+    for (name, qtype, code) in [
+        ("cdn.u", rtype::AAAA, NOERROR),
+        ("nope.nx.u", rtype::A, NXDOMAIN),
+        ("a.b.c.nope.nx.u", rtype::A, NXDOMAIN),
+        ("x.l.v.t", rtype::AAAA, NOERROR),
+        ("nope.nx.v.t", rtype::A, NXDOMAIN),
+        ("a.b.c.nope.nx.v.t", rtype::A, NXDOMAIN),
+    ] {
+        for round in 1..=2 {
+            let r = v
+                .resolve(&g, question(name, qtype), budget, true, false)
+                .await;
+            let what = format!("{name} {qtype} (question {round})");
+            got.push((what.clone(), r.ok().map(|r| (r.verdict, served(&r.bytes)))));
+            want.push((what, Some((Verdict::Insecure, Some((code, false, vec![]))))));
+        }
+    }
+    assert_eq!(got, want);
+    assert_eq!(stats.bogus.load(Ordering::Relaxed), 0, "never judged bogus");
 }
 
 /// The answer's records, as (owner, type), without signatures and denials.
