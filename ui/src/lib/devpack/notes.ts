@@ -28,7 +28,7 @@ export function notesText(tpl: Template, tag: Tag, names: { english?: string; ow
     '',
     'Sending it',
     `1. On GitHub, add ui/src/locales/${tag.tag}.json: the file from "Download for a pull request", unchanged.`,
-    `2. Add the language to ui/src/locales/manifest.json, or ask a maintainer: your GitHub name as its owner, "dir": "${tag.dir}", "offered": false.`,
+    `2. Add the language to ui/src/locales/manifest.json, or ask a maintainer: your GitHub name as its owner, "dir": "${tag.dir}", "offered": false, and "since" (a release version such as "0.9.0", which a maintainer settles). All four are required and the check reads the layout exactly, so copy the block from the page behind "How to translate TelltaleDNS" on the card.`,
     '3. In the description: the language; that you read every text (a machine translation is a draft only); a back-translation of each sensitive message you changed (listed below).',
     '4. Wait for the check and for the review of the language\'s owner.',
     '',
