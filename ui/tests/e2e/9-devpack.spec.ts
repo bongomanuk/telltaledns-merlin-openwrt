@@ -12,6 +12,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import * as lib from '../../scripts/i18n-lib.mjs';
+import { agree } from '../../src/lib/i18n/agree';
+import { identity } from '../../src/lib/i18n/shipping';
 import { materialize, readTemplate } from '../../src/lib/i18n/template';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
@@ -1163,19 +1165,41 @@ test('api_013 pack text never reaches a request or storage', async ({ browser })
   await done(s);
 });
 
-test('api_013 api_005 a skeleton pack draws the dashboards and the cache with live data and no page error', async ({ browser }) => {
-  // The template a translator downloads, with one word translated: nearly every page shows English with a pack in use.
-  // The pages that draw lists from data that can repeat a value get such data: markers over 40 in a chart's window, names
-  // that read alike in the top lists, two cache nodes that show one name. Every list is drawn, the pack's banner stays,
-  // and no page error occurs (page-errors.ts).
-  test.setTimeout(90_000);
+test('api_013 api_005 a pack that reads one word draws every page with live data and no page error', async ({ browser }) => {
+  // The template a translator downloads, every message translated as the same word with the tokens the check keeps
+  // (its placeholders, tags, addresses, numbers, words kept as written): a key built from a translated text repeats on
+  // every page that draws one. Every route of the app is visited once; the pages that draw lists from data that can
+  // repeat a value get such data: markers over 40 in a chart's window, names that read alike in the top lists, two
+  // cache nodes that show one name. Every list is drawn, the pack's banner stays, and no page error occurs.
+  test.setTimeout(150_000);
   const FR_TAG = ['one', 'many', 'other'];
-  const skeleton = JSON.parse(materialize(readTemplate(lib.templateJson(lib.check(UI, { ratchets: false }))), FR_TAG)) as Record<string, unknown[][]>;
-  const settings = skeleton[SETTINGS.ctx].find((p) => p[0] === SETTINGS.english && p.length === 2);
-  if (!settings) throw new Error('the Settings pair is not in the template');
-  settings[1] = 'Réglages';
-  const translated = Object.values(skeleton).flat().filter((p) => (typeof p[1] === 'string' ? p[1] !== '' : Object.values(p[1] as object).some((v) => v !== ''))).length;
-  expect(translated, 'one translated pair in the skeleton').toBe(1);
+  const tpl = readTemplate(lib.templateJson(lib.check(UI, { ratchets: false })));
+  const skeleton = JSON.parse(materialize(tpl, FR_TAG)) as Record<string, unknown[][]>;
+  const WORD = 'Mot';
+  /** The word, with what the check finds missing from it for `english`; empty when that does not agree. */
+  const word = (english: string, o: { verbatim: readonly string[]; glossary: readonly string[] }) => {
+    const missing = agree(english, WORD, { ...o, dir: 'ltr' }).fails.filter((f) => f.token && !f.detail.startsWith('added')).map((f) => f.token);
+    const text = [WORD, ...new Set(missing)].join(' ');
+    return agree(english, text, { ...o, dir: 'ltr' }).fails.length ? '' : text;
+  };
+  let same = 0;
+  let all = 0;
+  for (const [ctx, pairs] of Object.entries(skeleton)) {
+    if (ctx === '~leftover') continue;
+    for (const pair of pairs) {
+      const english = pair[0] as string | [string, string];
+      const o = { verbatim: tpl.entries.get(identity(ctx, english, pair[2] as string | undefined))?.verbatim ?? [], glossary: tpl.glossary };
+      all++;
+      if (typeof english === 'string') pair[1] = word(english, o);
+      else {
+        const forms = { one: word(english[0], o), many: word(english[1], o), other: word(english[1], o) };
+        pair[1] = Object.values(forms).every(Boolean) ? forms : { one: '', many: '', other: '' };
+      }
+      if (pair[1] === WORD) same++;
+    }
+  }
+  console.log(`DVP_SKELETON ${same} of ${all} messages read "${WORD}" alone`);
+  expect(same, 'most messages read the one word alone').toBeGreaterThan(all / 2);
   const s = await fresh(browser);
   const now = Math.floor(Date.now() / 1000);
   const marks = Array.from({ length: 60 }, (_, i) => ({ tUnixMs: (now - 22 * 3600 + i * 1260) * 1000, kind: 'config.applied', summary: `change ${i + 1}`, seq: i + 1, node: null, nodes: [], actor: null, href: null }));
@@ -1197,7 +1221,6 @@ test('api_013 api_005 a skeleton pack draws the dashboards and the cache with li
   };
   await s.page.goto('/#/');
   await shows();
-  await expect(s.page.getByRole('heading', { name: 'Dashboard' }).first()).toBeVisible();
   await expect(s.page.locator('ol.tl a.dom', { hasText: /^a\.b\.example$/ })).toHaveCount(2);
   await expect(s.page.getByTestId('chart-markers').first().locator('button.mk').first()).toBeAttached();
   await s.page.goto('/#/?view=legacy');
@@ -1209,9 +1232,16 @@ test('api_013 api_005 a skeleton pack draws the dashboards and the cache with li
   await s.page.goto('/#/cache');
   await shows();
   await expect(s.page.getByTestId('cache-node').locator('h2')).toHaveText(['home', 'home']);
-  // The one word the pack translates.
   await s.page.goto('/#/settings?tab=account');
-  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText('Réglages');
+  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText(WORD);
+  // Every route of the app (its list of pages), the previous dashboard and the wall, once each.
+  const routes = [...readFileSync(join(UI, 'src/App.svelte'), 'utf8').matchAll(/\{ path: '(\/[^']*)'/g)].map((m) => m[1]);
+  expect(routes.length, 'the app lists its pages').toBeGreaterThan(15);
+  for (const path of [...routes, '/?view=legacy', '/wall']) {
+    await s.page.goto(`/#${path}`);
+    await shows();
+    await s.page.waitForTimeout(600);
+  }
   await done(s);
 });
 
