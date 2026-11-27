@@ -164,3 +164,23 @@ test('doc_006 search, area, order, expand all and a link to a record still work 
   await open(page, b.name, `#${target}`);
   await expect(page.locator(`#${target}`)).toHaveJSProperty('open', true);
 });
+
+// REQ: DOC-005 (ADR-136) — every link to a record names the part page that holds it, and a link to a page that no longer
+// holds the record (the pages were split again) goes on to the one that does.
+test('doc_005 every index row links to the part page that holds its record', () => {
+  const html = readFileSync(join(OUT, 'decisions.html'), 'utf8');
+  const rows = [...html.matchAll(/<article class="adr[^"]*" id="(adr-\d{3})"[^>]*><a class="adr-head" href="([^"#]+)#([^"]+)"/g)];
+  expect(rows.length).toBe(index.records.length);
+  const holder = new Map(parts.flatMap((p) => p.records.map((r): [string, string] => [r.id, p.name])));
+  for (const [, id, href, anchor] of rows) expect([href, anchor], id).toEqual([holder.get(id), id]);
+});
+
+// REQ: DOC-005
+test('doc_005 a link to a record on another part page goes on to the page that holds it', async ({ page }) => {
+  const last = parts[parts.length - 1];
+  const target = last.records[last.records.length - 1].id;
+  expect(parts[0].records.map((r) => r.id)).not.toContain(target);
+  await open(page, parts[0].name, `#${target}`);
+  await expect(page).toHaveURL(new RegExp(`/${last.name.replace('.', '\\.')}#${target}$`));
+  await expect(page.locator(`#${target}`)).toHaveJSProperty('open', true);
+});

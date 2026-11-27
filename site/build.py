@@ -558,14 +558,22 @@ ADR_HEAD = re.compile(r"^## (ADR-(\d{3})) — (.*?)(?: \(([^()]*)\))?\s*$")
 SECTION = re.compile(r"^\*\*([A-Z][A-Za-z ]+):\*\*\s*(.*)$")
 
 
-# REQ: DOC-005, DOC-006 (ADR-136) — the records live on part pages of this many each, so no
-# page outgrows the page budget as decisions are added; decisions.html is their index.
+# REQ: DOC-005, DOC-006 (ADR-136) — the records live on part pages, so no page outgrows the page
+# budget as decisions are added; decisions.html is their index. ADR-001 to ADR-150 are on pages
+# of 50 (decisions-1 to 3). The records after them run three to six times longer, so from
+# ADR-151 a page holds 10: decisions-4 is ADR-151 to 160, decisions-5 ADR-161 to 170, and so on.
 ADRS_PER_PAGE = 50
+LATER_PAGES_FROM = 151
+ADRS_PER_LATER_PAGE = 10
 
 
 def adr_page(num):
     """The part page that holds ADR number `num`."""
-    return "decisions-{}.html".format((num - 1) // ADRS_PER_PAGE + 1)
+    if num < LATER_PAGES_FROM:
+        part = (num - 1) // ADRS_PER_PAGE + 1
+    else:
+        part = (LATER_PAGES_FROM - 1) // ADRS_PER_PAGE + 1 + (num - LATER_PAGES_FROM) // ADRS_PER_LATER_PAGE
+    return "decisions-{}.html".format(part)
 
 
 def adr_href(adr_id):
@@ -1052,6 +1060,7 @@ def coverage_errors(data):
 
 def link_errors(out_dir, names):
     errors = []
+    records = {}
     for name in names:
         text = read(os.path.join(out_dir, name))
         for ref in re.findall(r'(?:href|src)="([^"#]+)"', text):
@@ -1059,6 +1068,14 @@ def link_errors(out_dir, names):
                 continue
             if not os.path.exists(os.path.join(out_dir, ref)):
                 errors.append("{}: broken link {}".format(name, ref))
+        # REQ: DOC-005 (ADR-136) — a link to a decision record names the part page that holds it.
+        for part, anchor in re.findall(r'href="(decisions-\d+\.html)#(adr-\d{3})"', text):
+            if part not in records:
+                path = os.path.join(out_dir, part)
+                records[part] = set(re.findall(r'\bid="(adr-\d{3})"', read(path))) if os.path.exists(path) else set()
+            if anchor not in records[part]:
+                errors.append("{}: {}#{} is not on that page ({} holds it)".format(
+                    name, part, anchor, adr_page(int(anchor[4:]))))
     return errors
 
 

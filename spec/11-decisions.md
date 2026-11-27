@@ -2699,6 +2699,7 @@ A list the configuration disables (`enabled = false`) is left out of the `tellta
 - `decisions.html` is the index: one row per ADR (number, title, status, areas, its first sentence), still searchable and filterable, linking to the record.
 - The records are on `decisions-1.html` (ADR-001 to 050), `decisions-2.html` (051 to 100), and so on (`ADRS_PER_PAGE` in `site/build.py`), with the same explorer within the page and links between the pages.
 - Links to a record go to its page (`decisions-3.html#adr-133`). The index keeps each row's `id`, so an old `decisions.html#adr-NNN` lands on that row without JavaScript, and with it goes on to the record.
+- Amended 2026-11-27: from ADR-151 a part holds 10 (`ADRS_PER_LATER_PAGE`): the later records run three to six times longer, and `decisions-4.html` (ADR-151 to 190) had reached 488 KiB. ADR-001 to 150 keep their pages. On a part page, a link to a record that another page holds goes there through the index (with JavaScript), and the site check fails on a link that names the wrong part page.
 - Rejected: raising the budget for this one page (it would keep growing).
 **Consequences:** the index is 80 KiB and each part about 200 KiB; search on the index covers titles and first sentences, full-text search works within a part page.
 
