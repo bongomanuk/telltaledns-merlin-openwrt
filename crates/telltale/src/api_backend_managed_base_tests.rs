@@ -22,6 +22,17 @@ use telltale_store::state::State;
 
 use super::{ApiBackend, Sources};
 
+/// What a person is shown of a refusal: its detail and its hint, the fuller one included (the
+/// node that answers a person gives that one in `hint`, `sanitize_problem`).
+fn said(p: &Problem) -> String {
+    format!(
+        "{} | {} | {}",
+        p.detail,
+        p.hint.as_deref().unwrap_or(""),
+        p.fuller_hint.as_deref().map_or("", |h| h.as_str())
+    )
+}
+
 /// A configuration from TOML, as the loader reads the files.
 fn config(toml: &str) -> Config {
     telltale_config::Loader::new()
@@ -383,10 +394,11 @@ fn outcome<T>(r: &Result<T, Problem>, n: &Node) -> String {
 /// `Newt` is in the version it builds on, and also stored (it was made in the UI here, while this
 /// node was primary before). Renaming it with the same address would leave the address on two
 /// devices in the merge the reload applies, which then sets every stored device aside (`tablet`'s
-/// client ID would stop working on every node). The rename is refused, saved or dry run, with
-/// words that name `Newt`, and so is a new device on `Newt`'s address (the refusal names `Newt`
-/// and where it comes from, not only places in a list); nothing is stored, the configuration
-/// version doesn't move, and the devices made in the UI stay in effect.
+/// client ID would stop working on every node). The rename is refused, saved or dry run, and so is
+/// a new device on `Newt`'s address; what a person is shown names `Newt` and where it comes from,
+/// not only places in a list (an agent that may not read every device is shown less:
+/// `agt_004_a_group_agent_is_not_told_which_device_holds_a_key`). Nothing is stored, the
+/// configuration version doesn't move, and the devices made in the UI stay in effect.
 #[tokio::test]
 async fn api_010_rename_onto_an_address_the_base_still_holds_is_refused() {
     let n = newt_primary();
@@ -412,8 +424,8 @@ async fn api_010_rename_onto_an_address_the_base_still_holds_is_refused() {
                         "{what}, dry run {dry_run}: {p:?}"
                     );
                     assert!(
-                        p.detail.contains("`Newt`")
-                            && p.detail.contains("the cluster version this node builds on"),
+                        said(p).contains("`Newt`")
+                            && said(p).contains("the cluster version this node builds on"),
                         "{what}: names the device that holds the address, and where it is: {p:?}"
                     );
                 }
@@ -439,7 +451,9 @@ async fn api_010_rename_onto_an_address_the_base_still_holds_is_refused() {
 /// stored (made in the UI before the config file gained a `[[client]]` of that name), and the
 /// files' `nas` is the one in effect. Renaming the stored copy with the files' address, changing
 /// the files' device in place, and giving a stored device the files' name are all refused, saved
-/// or dry run, with words that name `nas`; nothing is stored and the stored devices stay in effect.
+/// or dry run, and what a person is shown names `nas`; nothing is stored and the stored devices
+/// stay in effect. (A rename of the stored copy to a free name and address is accepted, as it was:
+/// `api_010_renaming_a_hidden_stored_device_to_a_free_name_applies_as_before`.)
 #[tokio::test]
 async fn api_010_rename_shadowed_by_a_file_device_is_refused() {
     let n = Node::standalone(config(
@@ -483,7 +497,7 @@ match = ["192.168.1.10"]
             match &r {
                 Err(p) => {
                     assert!((400..500).contains(&p.status), "{what}: {p:?}");
-                    assert!(p.detail.contains("`nas`"), "{what}: {p:?}");
+                    assert!(said(p).contains("`nas`"), "{what}: {p:?}");
                 }
                 Ok(_) => panic!("{what} (dry run {dry_run}): {}", outcome(&r, &n)),
             }
@@ -1162,4 +1176,317 @@ match = ["192.168.1.10"]
     let r = r.unwrap_or_else(|p| panic!("deleting the stored nas: {p:?}"));
     assert!(r.impact.contains("isn't in effect"), "{r:?}");
     assert!(s.stored(client).is_empty() && s.has_device("nas") && !s.falls_back());
+}
+
+/// REQ: API-010, CLU-003 (ADR-040; issue #113) — a stored device that a device of the base hides
+/// (the files', or one of the version a promoted primary builds on) can be renamed to a free name
+/// with an address no other device has, as it could before: the write is accepted, the stored row
+/// takes the new name, and after the reload both devices are in effect, the base's one unchanged.
+#[tokio::test]
+async fn api_010_renaming_a_hidden_stored_device_to_a_free_name_applies_as_before() {
+    let client = crate::managed::CLIENT;
+    let standalone = Node::standalone(config(
+        r#"
+[[client]]
+name = "nas"
+match = ["192.168.1.10"]
+"#,
+    ));
+    standalone.store(client, "nas", &device_row("nas", &["192.168.1.12"]));
+    let promoted = newt_primary();
+    promoted.store(client, "Newt", &device_row("Newt", &["192.168.0.56"]));
+    for (node, n, from, to, address, kept, kept_address) in [
+        (
+            "standalone",
+            &standalone,
+            "nas",
+            "nas-old",
+            "192.168.1.12",
+            "nas",
+            "192.168.1.10",
+        ),
+        (
+            "promoted",
+            &promoted,
+            "Newt",
+            "Newt-old",
+            "192.168.0.56",
+            "Newt",
+            "192.168.0.55",
+        ),
+    ] {
+        assert!(!n.falls_back(), "{node}");
+        let version = n.version();
+        let r = n
+            .device(from, Some(input(Some(to), &[address])), false)
+            .await;
+        let done = r.unwrap_or_else(|p| panic!("{node}: the rename was refused: {p:?}"));
+        assert!(
+            done.applied && done.config_version > version,
+            "{node}: {done:?}"
+        );
+        assert!(n.stored(client).iter().any(|s| s == to), "{node}");
+        assert!(!n.stored(client).iter().any(|s| s == from), "{node}");
+        assert!(!n.falls_back(), "{node}: the stored devices apply");
+        let running = n.running();
+        let has = |name: &str, key: &str| {
+            running
+                .client
+                .iter()
+                .any(|c| c.name.as_str() == name && c.match_keys.iter().any(|k| k.as_str() == key))
+        };
+        assert!(
+            has(to, address) && has(kept, kept_address),
+            "{node}: both in effect: {:?}",
+            running.client
+        );
+    }
+}
+
+/// An API token for `user`, with `scope`, and, for an agent, its scopes and group.
+fn token(auth: &Auth, user: i64, scope: &str, agent: Option<(&str, Option<&str>)>) -> String {
+    let (id, secret) = (auth::crypto::random_id(), auth::crypto::random_secret());
+    let now = super::local_access_tests::now();
+    auth.state()
+        .create_token(
+            &id,
+            user,
+            "tests",
+            &auth::crypto::secret_hash(&secret),
+            scope,
+            None,
+            now,
+        )
+        .unwrap();
+    if let Some((scopes, group)) = agent {
+        auth.state()
+            .set_token_agent(&id, scopes, group, None)
+            .unwrap();
+    }
+    format!("Bearer tt_{id}_{secret}")
+}
+
+/// REQ: AGT-004, API-010 (ADR-064; issue #113) — an agent token limited to a group may add a
+/// device in its group, and a dry run stores nothing; a refusal for a match key that a device
+/// outside its view holds doesn't name that device to it (its detail gives the merge's reasons,
+/// its hint stays plain), even with `querylog:read`. A person (here an operator) is told which
+/// device holds the key, and where it is defined.
+#[tokio::test]
+async fn agt_004_a_group_agent_is_not_told_which_device_holds_a_key() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt as _;
+    let n = Node::standalone(config(
+        r#"
+[[group]]
+name = "kids"
+
+[[client]]
+name = "nas"
+match = ["192.168.1.10"]
+"#,
+    ));
+    let app = telltale_api::router(
+        Arc::new(ApiBackend {
+            src: Arc::clone(&n.src),
+        }),
+        Arc::clone(&n.auth),
+    );
+    let olga = n
+        .auth
+        .create_user(
+            "olga",
+            "an operator password",
+            auth::Role::Operator,
+            false,
+            super::local_access_tests::now(),
+        )
+        .unwrap();
+    let operator = token(&n.auth, olga.id, "write", None);
+    let group_agent = token(
+        &n.auth,
+        olga.id,
+        "write",
+        Some(("config:write:clients querylog:read", Some("kids"))),
+    );
+    for (who, creds, told) in [
+        ("operator", &operator, true),
+        ("agent limited to kids", &group_agent, false),
+    ] {
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/api/v1/clients/probe?dryRun=true")
+            .header("authorization", creds.as_str())
+            .header("x-telltale-reason", "managed base tests")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "match": ["192.168.1.10"], "groups": ["kids"] }).to_string(),
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        assert_eq!(status.as_u16(), 422, "{who}: {v}");
+        assert!(
+            v["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("`192.168.1.10`")),
+            "{who}: the reason: {v}"
+        );
+        assert_eq!(v.to_string().contains("`nas`"), told, "{who}: {v}");
+        if told {
+            assert!(
+                v["hint"]
+                    .as_str()
+                    .is_some_and(|h| h.contains("in the config files")),
+                "{who}: {v}"
+            );
+        }
+    }
+    assert_eq!(
+        n.stored(crate::managed::CLIENT),
+        Vec::<String>::new(),
+        "a dry run stores nothing"
+    );
+}
+
+/// REQ: CLU-003, FLT-005 (ADR-051, ADR-067; issue #113) — on a primary promoted from replica, the
+/// quick rules of the version it builds on are that version's, not this node's API's: listed with
+/// `source` `file`, so the UI doesn't offer them for editing and the expiry sweep (which removes
+/// expired rules whose `source` is `api`) leaves an expired one alone, instead of trying again
+/// every 5 s. Changing one is refused with words that say where it comes from. A rule made here
+/// since the promotion is `api`, and swept once it has expired.
+#[tokio::test]
+async fn clu_003_an_inherited_quick_rule_is_not_offered_as_api_and_is_not_swept() {
+    let inherited = config(&format!(
+        r#"{INHERITED}
+[[rule]]
+id = "r-old"
+action = "block"
+domain = "old.example.com"
+expires = "2026-01-01T00:00:00Z"
+
+[[rule]]
+id = "r-inh"
+action = "block"
+domain = "games.example.com"
+"#
+    ));
+    let n = Node::promoted(config(OWN), &inherited);
+    n.store(
+        crate::managed::RULE,
+        "r-mine",
+        &json!({ "id": "r-mine", "action": "block", "domain": "mine.example.com",
+            "expires": "2026-01-01T00:00:00Z" }),
+    );
+    assert!(!n.falls_back());
+    let rules = n.api.rules();
+    let source = |id: &str| {
+        rules
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.source.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        (source("r-old"), source("r-inh"), source("r-mine")),
+        ("file".to_owned(), "file".to_owned(), "api".to_owned()),
+        "{rules:?}"
+    );
+    // The sweep's choice (`spawn_rule_sweep`): expired, and made through the API.
+    let swept: Vec<&str> = rules
+        .iter()
+        .filter(|r| r.source == "api" && r.expires_in_seconds == Some(0))
+        .map(|r| r.id.as_str())
+        .collect();
+    assert_eq!(swept, ["r-mine"]);
+    let p = n
+        .write(
+            ManagedKind::Rule,
+            "r-inh",
+            Some(json!({ "action": "allow", "domain": "games.example.com" })),
+        )
+        .await
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(p.status, 409, "{p:?}");
+    assert!(
+        p.detail.contains("the cluster version this node builds on"),
+        "says where the rule comes from: {p:?}"
+    );
+}
+
+/// REQ: OBS-024, API-002 (ADR-115; issue #113) — a dry run's simulation compares the change with
+/// what the stored entries make on the base now (the base alone while they don't apply), for a
+/// device change as for any other kind. A device change's comparison includes a device stored but
+/// not yet in the running configuration (its reload hadn't run); a quick rule's delete that makes
+/// the stored entries apply again is simulated, not answered with an error.
+#[tokio::test]
+async fn api_002_a_dry_run_compares_with_what_the_stored_entries_make_now() {
+    let n = newt_primary();
+    n.auth
+        .state()
+        .put_managed(
+            crate::managed::CLIENT,
+            "quiet",
+            &device_row("quiet", &["192.168.0.81"]).to_string(),
+            None,
+            None,
+            0,
+            "a write whose reload hasn't run",
+        )
+        .unwrap();
+    assert!(
+        !n.has_device("quiet"),
+        "not in the running configuration yet"
+    );
+    let w = ClientWrite {
+        name: "speaker".to_owned(),
+        input: Some(input(None, &["192.168.0.80"])),
+        dry_run: true,
+        expect: None,
+        by: "tests".to_owned(),
+        simulate: Some(telltale_api::SimulateOpts::default()),
+    };
+    let plan = super::plan_client(&n.src, n.auth.state(), &w)
+        .unwrap_or_else(|p| panic!("the plan: {p:?}"));
+    let names = |c: &Config| {
+        let mut v: Vec<String> = c.client.iter().map(|c| c.name.to_string()).collect();
+        v.sort();
+        v
+    };
+    let mut expected = names(&plan.candidate);
+    expected.retain(|x| x != "speaker");
+    assert_eq!(
+        names(&plan.baseline),
+        expected,
+        "the comparison is the candidate without the change"
+    );
+
+    // A stored rule that names a device the base doesn't have: the stored entries don't apply.
+    let m = newt_primary();
+    m.store(
+        crate::managed::RULE,
+        "r-gone",
+        &json!({ "id": "r-gone", "action": "block", "domain": "x.example.com", "devices": ["gone"] }),
+    );
+    assert!(m.falls_back());
+    let r = m
+        .api
+        .write_managed(ManagedWrite {
+            kind: ManagedKind::Rule,
+            name: "r-gone".to_owned(),
+            body: None,
+            dry_run: true,
+            expect: None,
+            by: "tests".to_owned(),
+            simulate: Some(telltale_api::SimulateOpts::default()),
+            by_admin: true,
+        })
+        .await;
+    let r = r.unwrap_or_else(|p| panic!("the dry run of the repair: {p:?}"));
+    assert!(!r.applied && r.simulation.is_some(), "{r:?}");
 }

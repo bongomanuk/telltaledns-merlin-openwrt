@@ -3334,7 +3334,10 @@ impl Backend for ApiBackend {
     // REQ: FLT-005 (T6.12) — quick rules in effect, with how long each has left.
     fn rules(&self) -> Vec<telltale_api::model::RuleInfo> {
         let cfg = self.src.config.load();
-        let file = self.src.file_config.load();
+        // REQ: CLU-003 (GitHub issue #113) — on a primary promoted from replica, the rules of the
+        // version it builds on are that version's (`file`), not the API's: not offered for editing,
+        // and left alone by the expiry sweep.
+        let file = managed_base(&self.src);
         let now = unix_now_secs();
         let mut out: Vec<telltale_api::model::RuleInfo> = cfg
             .rule
@@ -3741,6 +3744,20 @@ fn managed_base(src: &Sources) -> Arc<telltale_config::Config> {
         .unwrap_or_else(|| src.file_config.load_full())
 }
 
+/// REQ: OBS-024, API-002 (GitHub issue #113) — what a dry run's simulation compares a change with,
+/// for a device change as for any other kind: what the stored entries make on the base now, or,
+/// while they don't apply, the base alone (what is in effect then).
+fn dry_run_baseline(
+    src: &Sources,
+    state: &telltale_store::state::State,
+) -> Arc<telltale_config::Config> {
+    let base = managed_base(src);
+    match crate::managed::merge(&base, &crate::managed::entries(state)) {
+        Ok(c) => Arc::new(c),
+        Err(_) => base,
+    }
+}
+
 /// REQ: API-010 (ADR-040; GitHub issue #113) — a device of the base is read-only here: the config
 /// files' one, or on a primary promoted from replica (`inherited`) one of the version it builds on.
 fn defined_in_base(name: &str, inherited: bool) -> Problem {
@@ -3783,30 +3800,31 @@ fn base_holder<'a>(
 }
 
 /// REQ: API-010 (GitHub issue #113) — a device change after which the merge a reload applies
-/// doesn't validate: the reasons (422, as before), and the device of the base that already holds a
-/// key the change uses, by name.
+/// doesn't validate: the reasons (422, as before). REQ: AGT-004 — which device of the base
+/// already holds a key the change uses is said in the fuller hint only, which the node that
+/// answers gives to whoever may read every device (`sanitize_problem`); the plain hint names none.
 fn device_refusal(
     base: &telltale_config::Config,
     inherited: bool,
     after: Option<&telltale_config::ClientConfig>,
     errs: &[String],
 ) -> Problem {
-    let mut detail = errs.join("; ");
-    let hint = match after.and_then(|c| base_holder(base, c)) {
+    let refusal = Problem::new(Code::InvalidConfig, errs.join("; "));
+    match after.and_then(|c| base_holder(base, c)) {
         Some((key, holder)) => {
             let from = if inherited {
                 "in the cluster version this node builds on (the one it last applied as a replica)"
             } else {
                 "in the config files"
             };
-            detail = format!("{detail}; `{key}` already identifies `{holder}` {from}");
-            format!(
-                "A match key identifies one device: give this one a key `{holder}` doesn't use."
-            )
+            refusal
+                .hint("A match key identifies one device: give this one a key the other device doesn't use.")
+                .fuller_hint(format!(
+                    "`{key}` already identifies `{holder}` {from}. A match key identifies one device: give this one a key `{holder}` doesn't use."
+                ))
         }
-        None => "GET /api/v1/groups lists the groups a device can join.".to_owned(),
-    };
-    Problem::new(Code::InvalidConfig, detail).hint(hint)
+        None => refusal.hint("GET /api/v1/groups lists the groups a device can join."),
+    }
 }
 
 /// The stored devices as a write leaves them: the row `from`, and the one `after` is stored as,
@@ -3966,10 +3984,15 @@ fn plan_client(
         Some(b) => b.client.iter().any(|c| c.name.as_str() == n),
         None => cfg.client.iter().any(|c| c.name.as_str() == n) && !is_managed(n),
     };
-    // A stored device with a name the base has isn't in effect (the base's is): deleting the
-    // stored one is still allowed.
+    // A stored device with a name the base has isn't in effect (the base's is): the stored one can
+    // still be deleted, or renamed to another name, as before (the merge then decides).
     let removes_a_row = w.input.is_none() && is_managed(&w.name);
-    if in_files(&w.name) && !removes_a_row {
+    let new_name = w
+        .input
+        .as_ref()
+        .map(|i| i.name.as_deref().unwrap_or(&w.name).trim());
+    let leaves_its_name = is_managed(&w.name) && new_name != Some(w.name.as_str());
+    if in_files(&w.name) && !leaves_its_name {
         return Err(defined_in_base(&w.name, inherited));
     }
     // REQ: API-010 (GitHub issue #113) — a stored device the configuration in effect has no
@@ -4038,7 +4061,12 @@ fn plan_client(
         impact,
         warnings: planned.warnings,
         candidate: Arc::new(planned.config),
-        baseline: cfg,
+        // REQ: OBS-024 (GitHub issue #113) — read only by a dry run's simulation.
+        baseline: if w.dry_run && w.simulate.is_some() {
+            dry_run_baseline(src, state)
+        } else {
+            cfg
+        },
     })
 }
 
@@ -4719,19 +4747,30 @@ fn plan_managed(
     // REQ: API-002, CLU-003 (GitHub issue #113) — what the reload merges the entries onto: the
     // config files, or on a primary promoted from replica the files plus the version it builds on.
     let file = managed_base(src);
-    let in_files = match w.kind {
-        ManagedKind::Record => file
+    let defines = |cfg: &telltale_config::Config| match w.kind {
+        ManagedKind::Record => cfg
             .record
             .iter()
             .any(|r| r.name.eq_ignore_ascii_case(&name)),
-        ManagedKind::Forward => file
+        ManagedKind::Forward => cfg
             .route
             .iter()
             .any(|r| r.match_suffix.iter().any(|s| s.eq_ignore_ascii_case(&name))),
-        ManagedKind::Rule => file.rule.iter().any(|r| r.id.eq_ignore_ascii_case(&name)),
+        ManagedKind::Rule => cfg.rule.iter().any(|r| r.id.eq_ignore_ascii_case(&name)),
         _ => false,
     };
-    if in_files {
+    if defines(&file) {
+        // REQ: CLU-003 (GitHub issue #113) — on a primary promoted from replica, an entry of the
+        // version it builds on that its own files don't define says where it comes from.
+        if src.managed_base.load().is_some() && !defines(&src.file_config.load()) {
+            return Err(Problem::new(
+                Code::Conflict,
+                format!(
+                    "`{name}` is in the cluster version this node builds on as primary (the one it last applied as a replica)"
+                ),
+            )
+            .hint("The entries of that version can't be changed through the API on this node."));
+        }
         return Err(Problem::new(
             Code::Conflict,
             format!("`{name}` is defined in the config files"),
@@ -6039,11 +6078,9 @@ async fn dry_run_simulation(
     opts: &telltale_api::SimulateOpts,
     by_admin: bool,
 ) -> Result<Option<telltale_api::model::Simulation>, Problem> {
-    // REQ: API-002, CLU-003 (GitHub issue #113) — on the base the candidate was merged onto.
-    let baseline = Arc::new(
-        crate::managed::merge(&managed_base(src), &crate::managed::entries(state))
-            .map_err(|errs| Problem::internal(errs.join("; ")))?,
-    );
+    // REQ: API-002, CLU-003 (GitHub issue #113) — on the base the candidate was merged onto (the
+    // base alone while the stored entries don't apply: what is in effect then).
+    let baseline = dry_run_baseline(src, state);
     let candidate = Arc::new(candidate.clone());
     // REQ: OBS-024 (ADR-180) — the rule of `POST /api/v1/simulate`, before anything is read:
     // here the plan still answers, and its simulation says it wasn't run.
