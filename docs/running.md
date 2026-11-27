@@ -729,6 +729,40 @@ ecs = "client"                    # each client's /24 (IPv4) or /56 (IPv6)
 - Answers from an upstream group with a `"client"` member are cached per subnet, so one subnet's answer never reaches another. They're also left out of the cache file kept across restarts.
 - The subnet comes from the client's address (after PROXY protocol, if enabled). ECS options your clients send are still never forwarded.
 
+### Forwarding loops
+Every query TelltaleDNS forwards to an upstream carries an EDNS option (code 65429, from the range RFC 6891 keeps for local use) with a random tag the node picks when it starts. A query that arrives with the node's own tag has come back through an upstream that forwards to TelltaleDNS: it's dropped and an error is logged (`forwarding loop detected`), so it doesn't go round until it times out. If the log reports one, fix the upstream that sends queries back.
+
+A few resolvers drop every query that carries an EDNS option they don't know (RFC 6891 asks them to ignore it), so every query to them times out (over DoH, fails with an HTTP error) and their breaker stays open, while `dig` from the same host gets answers. Leave the option out for such an upstream:
+```toml
+[[upstream]]
+name = "strict-resolver"
+url = "udp://198.51.100.53"
+loop_tag = false                  # default: true
+```
+- Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it: if they drop it too, give the upstream its own `bootstrap`.
+- **`loop_tag = false` doesn't fix a loop, it hides one**: a query that comes back is no longer dropped, and goes round. Keep the option on for any upstream that can reach this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address. Don't turn it off to quiet `forwarding loop detected`.
+- The configuration refuses `loop_tag = false` toward this node, as far as it can tell, when a URL or a `bootstrap` server is:
+  - a loopback address (127.0.0.0/8, `::1`, or one mapped into IPv6);
+  - an unspecified address (`0.0.0.0`, `::`);
+  - the name `localhost`, or a name under it;
+  - or an address a `[[listen]]` entry uses, **on any port**, so a forwarder on another port of this host (say `127.0.0.1:5353`) is refused too.
+
+  It's also refused on a `recursive://` upstream, which never sends the option.
+- It still accepts, because it doesn't check them:
+  - a DNS stamp (`sdns://`) whose address is this node;
+  - this node's `[api]`, `[metrics]` and `[cluster]` addresses;
+  - the machine's other addresses (a node listening on `0.0.0.0` doesn't name its LAN address, and nothing reads them from the host);
+  - another name for this node;
+  - a resolver that forwards back.
+
+  **Test it** (`POST /api/v1/checks/upstream`) asks a draft without these checks, so it can say "Works" for an upstream that saving refuses. In a cluster each node checks against its own listeners: see [Setting `loop_tag` in a cluster](#setting-loop_tag-in-a-cluster).
+- A domain forwarded in the UI or the API keeps the option. To forward a domain to such a resolver, define an `[[upstream]]` with `loop_tag = false`, an `[[upstream_group]]` for it, and a `[[route]]` with its `match_suffix`.
+
+#### Setting `loop_tag` in a cluster
+- **Upgrade every node before you set `loop_tag` on a shared upstream.** A node on an earlier version can't read a shared configuration that has the key (only `false` is written there). It refuses that version and keeps serving the configuration it has. It refuses every later version too while the key is in it, so it stops following the cluster's changes until it's upgraded or the key is removed. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set the key is shared exactly as before.
+- **Each node checks the shared upstreams against its own listeners.** The primary accepts `loop_tag = false` on an upstream at a replica's `[[listen]]` address. That replica refuses the version in the same way, and every later one while the upstream stays.
+- **A node that refuses a version** logs `cluster configuration not applied`, shows the error in its sync status, and adds a `sync_failed` event to the cluster's timeline. After setting the key, check on [the Cluster page](#clusters) that every node is on the new version.
+
 ### Through a proxy (Tor)
 Send an upstream's traffic through a SOCKS5 or HTTP proxy, for example Tor, so the resolver never sees your address:
 ```toml
@@ -803,7 +837,7 @@ flowchart LR
   These answers have the status `refreshed`, so `stale` keeps meaning "upstreams failed or were slow" (or the resolver was too busy to start the refresh). They cost about as much as a fresh cache hit. The trade-off is that a name whose address changed within the hour is answered once with the old address (for 30 s) while the new one is fetched. `[cache]` is per node: set it on every node of a cluster.
 - **What the dashboard counts:** the **Cache hits** tile is every answer given from the cache: fresh, `refreshed`, or `stale`, out of the answers that weren't blocked or local. In the Advanced view its second line splits it ("41% fresh · 22% refreshed") and the status chart shows `refreshed` on its own. The Cache page's "Answered from the cache" is the same number per node, with the fresh share beside it. Prometheus counts a refreshed or stale answer as a cache miss plus one `telltale_cache_stale_served_total`; the Grafana dashboard's **Answered from cache** panel shows both lines.
 - **Privacy:** queries to upstreams carry a fresh random ID and source port, and none of the client's EDNS options (no client subnet, cookies, or MAC addresses are forwarded).
-- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever.
+- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever. An upstream that drops queries carrying it can go without it: see [Forwarding loops](#forwarding-loops).
 
 ## Local records
 Names on your network, answered by TelltaleDNS itself (authoritatively, before cache and upstreams):
