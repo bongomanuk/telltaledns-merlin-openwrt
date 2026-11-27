@@ -9,6 +9,7 @@
 // only what it read, while the key still holds it, so a tab left open never replaces or deletes a pack
 // another tab loaded since.
 import { DEVPACK_KEY } from '../i18n/devpack';
+import { canonical } from '../i18n/match';
 
 /** The one-load flag (session storage, removed when read): `1` after "Show the test pack on this page",
  * `away` after the pack left a page because someone went away, `in` after a page reloaded for a sign-in. */
@@ -53,6 +54,10 @@ export type PackRecord = {
 export type Notice = { readonly v: 1; readonly gone: Gone; readonly name: string; readonly at: number };
 export type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
+/** A tag as the card stores it: a language tag in its canonical form, not for private use (the card's check of the
+ * tag says the same before Use; the rest of it needs the plural table, which a page load does not fetch). */
+const isTag = (t: string) => canonical(t) === t && !/(^|-)x-/i.test(t);
+
 const isRecord = (x: Record<string, unknown>): boolean =>
   typeof x.ui === 'string' &&
   !!x.server &&
@@ -64,6 +69,7 @@ const isRecord = (x: Record<string, unknown>): boolean =>
   typeof x.sha === 'string' &&
   /^[0-9a-f]{64}$/.test(x.sha) &&
   typeof x.tag === 'string' &&
+  isTag(x.tag) &&
   (x.dir === 'ltr' || x.dir === 'rtl') &&
   Number.isInteger(x.fails) &&
   (x.fails as number) >= 0 &&

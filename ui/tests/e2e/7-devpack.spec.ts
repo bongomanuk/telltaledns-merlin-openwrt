@@ -931,6 +931,27 @@ test('api_013 a stored pack is cleared on another build after seven days and whe
   expect(fake.calls).toEqual([]);
 });
 
+test('api_013 a kept record whose tag the card could not have stored is damaged', async () => {
+  // The card stores a language tag in its canonical form, never one for private use. A kept record with any other tag
+  // (with its table, so no check runs) is removed with the notice of a copy that can't be read, as any damaged value.
+  const keptAs = (tag: string) => JSON.stringify({ ...REC, tag, checked: { ui: UI_A, sha: REC.sha, table: { deadbeef: 'Hält' } } });
+  const canonicalHere = (t: string) => {
+    try {
+      return Intl.getCanonicalLocales(t)[0] === t;
+    } catch {
+      return false;
+    }
+  };
+  for (const tag of ['x', 'en_US', '', 'a'.repeat(300), 'i-klingon', 'DE', 'fr-', 'de-x-private']) {
+    const s = holding(keptAs(tag));
+    const out = await decide(keptAs(tag), deps({ store: s }));
+    expect(out.view, `${tag.slice(0, 24)} (canonical on this engine: ${canonicalHere(tag)})`).toEqual({ kind: 'notice', gone: 'damaged', name: '' });
+    expect(stored(s).gone).toBe('damaged');
+  }
+  // The tags the card stores stay records and are shown.
+  for (const tag of ['de', 'pt-BR', 'zh-Hant', 'sr-Latn']) expect((await decide(keptAs(tag), deps())).view.kind, tag).toBe('active');
+});
+
 test('api_013 a check that throws twice in a row retires the pack', async () => {
   const store = new MemStore();
   store.setItem(DEVPACK_KEY, JSON.stringify(REC));
