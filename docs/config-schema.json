@@ -4015,6 +4015,10 @@
             "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$"
           }
         },
+        "loop_tag": {
+          "description": "REQ: UPS-009 (ADR-192) — send the loop-detection EDNS option (code 65429, with this node's\nrandom tag) in every query to this upstream and to its own `bootstrap` servers, so a query\nthat comes back to this node is dropped instead of going round. On by default. `false`\nleaves it out, for a resolver that drops every query carrying an EDNS option it doesn't\nknow; a loop through this upstream is then not detected, so keep it on for any upstream\nthat can send queries back to this node. Not written while it is on. Don't write this key\nuntil every node runs this version: an older node refuses it in its own file, and in a\nshared configuration (where only `false` is written).",
+          "type": "boolean"
+        },
         "name": {
           "description": "Unique name referenced by upstream groups.",
           "type": "string",
