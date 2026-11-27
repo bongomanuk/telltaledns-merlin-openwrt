@@ -578,6 +578,45 @@ test('api_013 a session that ends while the sign-out waits for its answer reload
   }
 });
 
+test('api_013 a second sign-out while the first waits for its answer leaves the page on its way to the provider', async ({ browser }) => {
+  // REQ: API-004 — Sign out is clicked twice while the server's answer to the first waits (a double click, a slow
+  // server). The first answer gives a provider's address, and the provider's page is slow to come; an answer to a
+  // second request would come after it, with no address. The second click asks nothing and changes nothing: the page
+  // reaches the provider's address, loads once (there), and that page is paused.
+  const s = await fresh(browser, { signedOut: true });
+  await storePack(s.page, FR_TEXT);
+  await s.page.goto('/');
+  await signInHere(s.page);
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 30_000 });
+  let asked = 0;
+  await s.page.route('**/api/v1/auth/logout', async (r) => {
+    const first = ++asked === 1;
+    const res = await r.fetch();
+    await new Promise((go) => setTimeout(go, first ? 1000 : 1500));
+    await r.fulfill(first ? { response: res, status: 200, json: { logoutUrl: '/?devpack-test=provider-logout' } } : { response: res });
+  });
+  await s.page.route(
+    (u) => u.searchParams.get('devpack-test') === 'provider-logout',
+    async (r) => {
+      await new Promise((go) => setTimeout(go, 2000));
+      await r.continue().catch(() => undefined);
+    },
+  );
+  let loads = 0;
+  s.page.on('load', () => loads++);
+  const out = s.page.getByRole('button', { name: 'Sign out' });
+  await out.click();
+  await out.click();
+  await expect(s.page).toHaveURL(/\?devpack-test=provider-logout(#|$)/, { timeout: 15_000 });
+  await expect(s.page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await expect(s.page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(banner(s.page)).toContainText('The test language pack fr.json is paused on this page.');
+  await s.page.waitForTimeout(1000);
+  expect(loads, 'the page loads once, at the provider').toBe(1);
+  expect(asked, 'one sign-out request').toBe(1);
+  await done(s);
+});
+
 test('api_013 a session that ends takes the pack off the page', async ({ browser }) => {
   // A request that finds the session gone draws the sign-in page: after one reload, in the usual language, and
   // the pack paused. Here the status still says signed in (as two nodes that disagree could): that load stays

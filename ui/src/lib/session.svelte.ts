@@ -41,7 +41,15 @@ export function signedIn(r: S['LoginResponse']) {
   session.setupRequired = false;
 }
 
-export async function signOut() {
+let out: Promise<void> | undefined;
+
+/** REQ: API-013 (ADR-190) — one sign-out at a time: a call while one is under way (a second click before the answer)
+ * gets that one's promise and does nothing else, so it never undoes where the first one sends the page. */
+export function signOut() {
+  return (out ??= leave().finally(() => (out = undefined)));
+}
+
+async function leave() {
   let next: string | undefined;
   // REQ: API-013 (ADR-190) — a sign-out under way: a test pack's code reloads no page until the answer says whether
   // the page leaves for the provider.

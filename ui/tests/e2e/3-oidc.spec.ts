@@ -183,6 +183,57 @@ for (const id of providers) {
     await page.close();
   });
 
+  test(`${id}: with a test language pack in use, a second sign-out while the first waits still signs out at the provider`, async ({ browser }) => {
+    // REQ: API-004, API-013 (ADR-190) — Sign out is clicked twice while TelltaleDNS's answer to the first waits a
+    // second, and the provider's page is slow to come: the second click changes nothing, the page reaches the
+    // provider's sign-out, and signing in again asks for the password.
+    const page = await browser.newPage();
+    listen(page);
+    await signIn(page, id, name, 'alice');
+    await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
+    const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
+    const commit = (await (await page.request.get('/api/v1/system/info')).json()).build.commit as string;
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), ['telltale.devpack', JSON.stringify(devpack(who, commit))]);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 20_000 });
+    const here = new URL(page.url()).origin;
+    let asked = 0;
+    await page.route('**/api/v1/auth/logout', async (r) => {
+      const first = ++asked === 1;
+      const res = await r.fetch();
+      await new Promise((go) => setTimeout(go, first ? 1000 : 1500));
+      await r.fulfill({ response: res });
+    });
+    let slowed = false;
+    await page.route(
+      (u) => u.origin !== here,
+      async (r) => {
+        if (!slowed && r.request().isNavigationRequest()) {
+          slowed = true;
+          await new Promise((go) => setTimeout(go, 2000));
+        }
+        await r.continue().catch(() => undefined);
+      },
+    );
+    const out = page.getByRole('button', { name: 'Sign out' });
+    await out.click();
+    await out.click();
+    await page.waitForURL((u) => u.origin !== here, { timeout: 20_000 });
+    const confirm = page.getByRole('button', { name: /^(Logout|Log out)$/i });
+    if (await confirm.waitFor({ state: 'visible', timeout: 8000 }).then(() => true, () => false)) await confirm.click();
+    await expect(
+      page.getByRole('heading', { name: 'Sign in' }).or(page.getByRole('heading', { name: /logged out of TelltaleDNS/ })),
+    ).toBeVisible({ timeout: 20_000 });
+    expect(asked, 'one sign-out request').toBe(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await page.goto('/#/');
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await page.getByRole('link', { name: `Sign in with ${name}` }).click();
+    await expect(id === 'keycloak' ? page.locator('#username') : page.locator('input[name="uidField"]')).toBeVisible({ timeout: 20_000 });
+    await page.close();
+  });
+
   test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async () => {
     // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
     // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
