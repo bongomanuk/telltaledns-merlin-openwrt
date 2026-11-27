@@ -1419,13 +1419,28 @@ domain = "games.example.com"
     );
 }
 
+/// Runs `test` on a runtime of its own while no other test that may take the node's one simulation
+/// slot runs (the slot is a static, one per test binary, and `simulate::tests` need it free).
+fn holding_the_slot(test: impl std::future::Future<Output = ()>) {
+    let _one = crate::simulate::slot_tests();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(test);
+}
+
 /// REQ: OBS-024, API-002 (ADR-115; issue #113) — a dry run's simulation compares the change with
 /// what the stored entries make on the base now (the base alone while they don't apply), for a
 /// device change as for any other kind. A device change's comparison includes a device stored but
 /// not yet in the running configuration (its reload hadn't run); a quick rule's delete that makes
 /// the stored entries apply again is simulated, not answered with an error.
-#[tokio::test]
-async fn api_002_a_dry_run_compares_with_what_the_stored_entries_make_now() {
+#[test]
+fn api_002_a_dry_run_compares_with_what_the_stored_entries_make_now() {
+    holding_the_slot(a_dry_run_compares_with_what_the_stored_entries_make_now());
+}
+
+async fn a_dry_run_compares_with_what_the_stored_entries_make_now() {
     let n = newt_primary();
     n.auth
         .state()
