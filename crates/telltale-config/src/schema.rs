@@ -1972,7 +1972,7 @@ impl Default for SupportConfig {
 
 /// REQ: OPS-012 (ADR-163, GitHub issue #7) — the watchdog. A thread outside the runtime checks
 /// every 5 s that the runtime runs a task and that this node's own UDP listener answers; when
-/// neither has passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with
+/// either one hasn't passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with
 /// `action = "restart"`, exits (status 70) so the supervisor (systemd, Compose, Kubernetes)
 /// starts the node again. Restart-only. Node-local.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

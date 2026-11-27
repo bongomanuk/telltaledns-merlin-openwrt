@@ -4226,7 +4226,7 @@
       ]
     },
     "WatchdogConfig": {
-      "description": "REQ: OPS-012 (ADR-163, GitHub issue #7) — the watchdog. A thread outside the runtime checks\nevery 5 s that the runtime runs a task and that this node's own UDP listener answers; when\nneither has passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with\n`action = \"restart\"`, exits (status 70) so the supervisor (systemd, Compose, Kubernetes)\nstarts the node again. Restart-only. Node-local.",
+      "description": "REQ: OPS-012 (ADR-163, GitHub issue #7) — the watchdog. A thread outside the runtime checks\nevery 5 s that the runtime runs a task and that this node's own UDP listener answers; when\neither one hasn't passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with\n`action = \"restart\"`, exits (status 70) so the supervisor (systemd, Compose, Kubernetes)\nstarts the node again. Restart-only. Node-local.",
       "type": "object",
       "properties": {
         "action": {
