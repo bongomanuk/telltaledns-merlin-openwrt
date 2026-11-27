@@ -712,6 +712,20 @@ ecs = "client"                    # each client's /24 (IPv4) or /56 (IPv6)
 - Answers from an upstream group with a `"client"` member are cached per subnet, so one subnet's answer never reaches another. They're also left out of the cache file kept across restarts.
 - The subnet comes from the client's address (after PROXY protocol, if enabled). ECS options your clients send are still never forwarded.
 
+### Forwarding loops
+Every query TelltaleDNS sends an upstream carries an EDNS option (code 65429, from the range RFC 6891 keeps for local use) with a random tag the node picks when it starts. A query that arrives with the node's own tag has come back through an upstream that forwards to TelltaleDNS: it's dropped and an error is logged (`forwarding loop detected`), so it doesn't go round until it times out.
+
+A few resolvers drop every query that carries an EDNS option they don't know (RFC 6891 asks them to ignore it), so every query to them times out and their breaker stays open, while `dig` from the same host gets answers. Leave the option out for such an upstream:
+```toml
+[[upstream]]
+name = "strict-resolver"
+url = "udp://198.51.100.53"
+loop_tag = false                  # default: true
+```
+- Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it.
+- A loop through this upstream is no longer detected. Keep the option on for any upstream that can send queries back to this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address.
+- In a cluster, upgrade every node before you set `loop_tag` on a shared upstream: a node on an earlier version refuses a shared configuration that has the key (only `false` is written there) and keeps serving the one it has. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set it is shared exactly as before.
+
 ### Through a proxy (Tor)
 Send an upstream's traffic through a SOCKS5 or HTTP proxy, for example Tor, so the resolver never sees your address:
 ```toml
@@ -786,7 +800,7 @@ flowchart LR
   These answers have the status `refreshed`, so `stale` keeps meaning "upstreams failed or were slow" (or the resolver was too busy to start the refresh). They cost about as much as a fresh cache hit. The trade-off is that a name whose address changed within the hour is answered once with the old address (for 30 s) while the new one is fetched. `[cache]` is per node: set it on every node of a cluster.
 - **What the dashboard counts:** the **Cache hits** tile is every answer given from the cache: fresh, `refreshed`, or `stale`, out of the answers that weren't blocked or local. In the Advanced view its second line splits it ("41% fresh · 22% refreshed") and the status chart shows `refreshed` on its own. The Cache page's "Answered from the cache" is the same number per node, with the fresh share beside it. Prometheus counts a refreshed or stale answer as a cache miss plus one `telltale_cache_stale_served_total`; the Grafana dashboard's **Answered from cache** panel shows both lines.
 - **Privacy:** queries to upstreams carry a fresh random ID and source port, and none of the client's EDNS options (no client subnet, cookies, or MAC addresses are forwarded).
-- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever.
+- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever. An upstream that drops queries carrying it can go without it: see [Forwarding loops](#forwarding-loops).
 
 ## Local records
 Names on your network, answered by TelltaleDNS itself (authoritatively, before cache and upstreams):

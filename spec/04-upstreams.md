@@ -55,7 +55,7 @@ stub_servers = ["10.0.0.53", "10.0.0.54"]
 | `unix:///run/x.sock`, `exec://...` | Custom plugin upstream | §6 |
 | any + `proxy = "socks5://127.0.0.1:9050"` | Via proxy | TCP-based protocols only; UDP via SOCKS5 UDP ASSOCIATE (P2) |
 
-Common options per upstream: `timeout_ms`, `tls_server_name`, `tls_ca`, `tls_client_cert`/`tls_client_key` (mTLS), `tls_insecure_skip_verify` (with a loud warning), `spki_pins`, `headers` (DoH), `ecs = "strip"|"pass"|"<cidr>"`, `edns_payload`, `pool_size`, `idle_timeout`, `weight`, `labels`.
+Common options per upstream: `timeout_ms`, `tls_server_name`, `tls_ca`, `tls_client_cert`/`tls_client_key` (mTLS), `tls_insecure_skip_verify` (with a loud warning), `spki_pins`, `headers` (DoH), `ecs = "strip"|"pass"|"<cidr>"`, `edns_payload`, `pool_size`, `idle_timeout`, `weight`, `labels`, `loop_tag` (§7).
 
 ## 3. Preset catalog (UPS-004)
 - Ship `presets/upstreams.toml` as data. It must include **all Pi-hole UI presets**: Google, OpenDNS, Level3, Comodo, Quad9 (filtered, unfiltered, filtered+ECS), Cloudflare (incl. DNSSEC), each with v4 and v6 addresses. It must also include the major encrypted resolvers Technitium users commonly pick: Cloudflare (+family/security), Google, Quad9, AdGuard (default/family/unfiltered), NextDNS (templated with profile ID), Mullvad, and ControlD (templated), with DoT, DoH, and DoQ URLs where offered.
@@ -99,6 +99,7 @@ pub trait Upstream: Send + Sync {
 ## 7. Bootstrap and loops (UPS-009)
 - Hostname upstreams resolve through `bootstrap` IPs (per upstream or global; default: the system resolver from `/etc/resolv.conf`, **excluding** our own listen addresses). Results are cached and re-resolved at TTL.
 - Loop detection: tag outbound queries with an EDNS option (local-use code 65429) carrying the node ID. Drop and alert on receipt of our own tag.
+- Per upstream, `loop_tag = false` (default `true`) leaves the option out of every query to that upstream and to its own `bootstrap` servers, for resolvers that drop queries carrying an option they don't know; the shared system bootstrap keeps it, self-probes still never carry it (OBS-020), and a loop through that upstream goes undetected (ADR-192).
 
 ## 9. Answer quality and second opinions (OBS-019, ADR-108)
 - **Always:** after an upstream answers (the asynchronous path only), its first OPT EDE code is counted per (upstream, code) (at most 2,048 pairs) and, when validating, the DNSSEC verdict per upstream (atomic counters, 256 upstream IDs).

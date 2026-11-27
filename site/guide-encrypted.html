@@ -135,6 +135,10 @@ url = "sdns://AQMAAAAAAAAAETk0LjE0MC4xNC4xNDo1NDQzINErR_JS3PLCu_iZEIbq95zkSV2LFs
       <p>Your devices' subnets are never sent. <code>ecs = "203.0.113.0/24"</code> sends a subnet you choose, for better CDN answers; <code>ecs = "client"</code> suits clients on public addresses. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#client-subnet-ecs">Details</a>.</p>
     </div>
     <div class="card">
+      <h3>Forwarding loops</h3>
+      <p>Queries to upstreams carry a loop-detection option, so a query that comes back to TelltaleDNS is dropped instead of going round. For a resolver that drops every query with an option it doesn't know, set <code>loop_tag = false</code> on it; keep it on for any upstream that can forward to TelltaleDNS. In a cluster, upgrade every node first. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#forwarding-loops">Details</a>.</p>
+    </div>
+    <div class="card">
       <h3>Through a proxy (Tor)</h3>
       <p><code>proxy = "socks5://127.0.0.1:9050"</code> sends an upstream's traffic through SOCKS5 or HTTP, so the resolver never sees your address. Use <code>tcp://</code> or <code>tls://</code> with Tor. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#through-a-proxy-tor">Details</a>.</p>
     </div>
@@ -378,6 +382,7 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed<
       <tr><td>Encrypted connections refused behind a load balancer</td><td>If the balancer hides client addresses, every client looks like the balancer: raise <code>max_connections_per_address</code> or set it to <code>0</code>, or use <code>proxy_protocol</code> if the balancer sends it.</td></tr>
       <tr><td>A renewed certificate isn't used</td><td>A broken renewal keeps the old certificate and logs a warning. Check the log and the new files.</td></tr>
       <tr><td>The log reports a loop</td><td>An upstream forwards back to TelltaleDNS. Point it somewhere else.</td></tr>
+      <tr><td>An upstream times out on every query, while <code>dig</code> from the same host gets answers</td><td>It may drop queries that carry an EDNS option it doesn't know. Set <code>loop_tag = false</code> on it (see <a href="#encrypt-upstreams">Forwarding loops</a>).</td></tr>
     </tbody>
   </table></div>
 </section>
