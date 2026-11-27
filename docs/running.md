@@ -1816,8 +1816,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   NS and neither SOA nor DS; or, in an NSEC3 Opt-Out zone such as `.com` or `.org`, the
   record of the name's parent (which must not itself be a delegation) and an Opt-Out record
   covering the name. This corrects the validation library's verdict on CNAME chains in
-  unsigned zones (`www.netflix.com`, `www.amazon.com`) and on names below parked domains
-  whose servers answer an SOA for every name (`www.smithsonianmag.org`). From v0.3.0 to
+  unsigned zones (`www.netflix.com`, `www.amazon.com`). Names below parked domains whose
+  servers answer an SOA for every name (`www.smithsonianmag.org`) were corrected the same
+  way; since hickory-net 0.26.4 the library judges them insecure itself. From v0.3.0 to
   v0.7.0 the proof didn't succeed under NSEC3 Opt-Out parents. Proven zones are remembered
   per upstream group, as long as the proof's records' TTL allows and at most 15 minutes
   (ADR-098, ADR-184). A name queried while TelltaleDNS hasn't cached its parent zone's keys
@@ -1829,6 +1830,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   at most 8 proofs run at once, and a name that couldn't be proven isn't tried again for a
   minute: when it can't be proven, the answer stays bogus (or, with no answer at all, stale
   or SERVFAIL as for any upstream failure).
+- **Memory:** each upstream group's validation cache keeps at most 8,192 record-set proofs,
+  about 13 MiB at most; the least recently used go first (ADR-196). A record set validated
+  again while its proof is still kept costs no key lookups.
 - **Denials behind a CNAME:** the validation library checks a "no such record" or "no such
   name" proof against the name that was asked, but after a CNAME the proof is about the chain's
   last name (`www.paypal.com AAAA`). Before refusing such an answer, TelltaleDNS validates it

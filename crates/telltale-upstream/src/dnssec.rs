@@ -154,6 +154,14 @@ impl DnsHandle for GroupHandle {
 /// A group's validating handle, and the last upstream that answered through it.
 type Checked = (DnssecDnsHandle<GroupHandle>, Arc<Mutex<(u16, u8)>>);
 
+/// REQ: DNS-011, NFR-001 (ADR-196) — the most record-set proofs the validation library keeps per
+/// upstream group. Its own default is 1,048,576, and an entry leaves only when the cache is full
+/// (an expired one is skipped, not removed), so without a bound the cache grows with every
+/// distinct record set validated; since hickory-net 0.26.4 an entry also holds a copy of its
+/// record set and signatures (about 1.6 KiB measured). 8,192 entries: about 13 MiB at most per
+/// group; the least recently used go first.
+const VALIDATION_CACHE_ENTRIES: usize = 8_192;
+
 /// Validates forwarded answers (one per pipeline state).
 pub struct Validator {
     anchors: Arc<TrustAnchors>,
@@ -175,6 +183,8 @@ pub struct Validator {
     /// REQ: DNS-011, NFR-004 (ADR-188) — bounds on link-by-link validation, apart from `proofs`
     /// (which the proofs its links need take from).
     links: ProofGate,
+    /// REQ: DNS-011, NFR-001 (ADR-196) — entries of each group's validation cache.
+    cache_entries: usize,
     pub stats: Arc<Stats>,
 }
 
@@ -202,6 +212,7 @@ impl Validator {
             insecure: Mutex::new(HashMap::new()),
             proofs: ProofGate::default(),
             links: ProofGate::with_slots(MAX_LINK_WALKS),
+            cache_entries: VALIDATION_CACHE_ENTRIES,
             stats,
         }
     }
@@ -259,6 +270,15 @@ impl Validator {
         self.links.hold(leave)
     }
 
+    /// Test support (`tests/`): each group's validation cache keeps at most `entries` record-set
+    /// proofs, in place of `VALIDATION_CACHE_ENTRIES` (ADR-196). Set before the first question.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_validation_cache_entries(mut self, entries: usize) -> Self {
+        self.cache_entries = entries;
+        self
+    }
+
     /// Whether `name` (presentation form) is validated: not under a negative trust anchor.
     pub fn covers(&self, name: &str) -> bool {
         let n = name.trim_end_matches('.').to_ascii_lowercase();
@@ -287,7 +307,9 @@ impl Validator {
                     last: Arc::clone(&last),
                 };
                 (
-                    DnssecDnsHandle::with_trust_anchor(inner, Arc::clone(&self.anchors)),
+                    // REQ: DNS-011, NFR-001 (ADR-196) — a bounded validation cache.
+                    DnssecDnsHandle::with_trust_anchor(inner, Arc::clone(&self.anchors))
+                        .validation_cache_size(self.cache_entries),
                     last,
                 )
             })
@@ -1432,7 +1454,8 @@ fn denies_ds_at_cut(authorities: &[Record], apex: &Name) -> bool {
 ///
 /// A closest encloser further up (an Opt-Out empty non-terminal between them) isn't accepted:
 /// not proven. Seen with names below parked domains (`www.smithsonianmag.org`), whose servers
-/// answer an SOA for every name, which the validation library judges bogus.
+/// answer an SOA for every name, which the validation library judged bogus up to hickory-net
+/// 0.26.3.
 fn denies_ds_by_opt_out(authorities: &[Record], apex: &Name) -> bool {
     if apex.is_root() {
         return false;
@@ -1974,14 +1997,15 @@ mod depth_tests {
             m.authorities[0] = nsec("k.z.test.", "l.z.test.");
         });
         refused("an NSEC3 beside it", &|m| {
-            let n3 = NSEC3::new(
+            let n3 = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 0,
                 Vec::new(),
                 vec![0; 20],
                 [A],
-            );
+            )
+            .unwrap();
             m.authorities
                 .push(secure("x.z.test.", RData::DNSSEC(DNSSECRData::NSEC3(n3))));
         });
@@ -2109,14 +2133,15 @@ mod depth_tests {
             owned("m.z.test.", data, proof)
         };
         let nsec3 = |owner: &str, proof: Proof| {
-            let data = NSEC3::new(
+            let data = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 0,
                 Vec::new(),
                 vec![0; 20],
                 [A],
-            );
+            )
+            .unwrap();
             owned(owner, RData::DNSSEC(DNSSECRData::NSEC3(data)), proof)
         };
         // `m.z.test. A` with the given signatures, and the authority section.
@@ -2393,14 +2418,15 @@ mod depth_tests {
         let hash = Nsec3HashAlgorithm::SHA1.hash(salt, &apex, 5).unwrap();
         let owner = Name::from_ascii(format!("{}.example.", base32hex(hash.as_ref()))).unwrap();
         let nsec3 = |owner: &Name, types: &[RecordType]| {
-            let n = NSEC3::new(
+            let n = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 5,
                 salt.to_vec(),
                 vec![0; 20],
                 types.iter().copied(),
-            );
+            )
+            .unwrap();
             let mut r =
                 Record::from_rdata(owner.clone(), 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
             r.proof = Proof::Secure;
@@ -2454,14 +2480,15 @@ mod depth_tests {
             v
         };
         let rec = |owner_hash: &[u8], next: Vec<u8>, opt_out: bool, types: &[RecordType], proof| {
-            let n = NSEC3::new(
+            let n = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 opt_out,
                 0,
                 salt.to_vec(),
                 next,
                 types.iter().copied(),
-            );
+            )
+            .unwrap();
             let owner = Name::from_ascii(format!("{}.org.", base32hex(owner_hash))).unwrap();
             let mut r = Record::from_rdata(owner, 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
             r.proof = proof;
@@ -2620,14 +2647,15 @@ mod ds_proof_tests {
         types: &[RecordType],
         (salt, iterations): (&[u8], u16),
     ) -> Record {
-        let n = NSEC3::new(
+        let n = NSEC3::try_new(
             Nsec3HashAlgorithm::SHA1,
             opt_out,
             iterations,
             salt.to_vec(),
             next,
             types.iter().copied(),
-        );
+        )
+        .unwrap();
         let owner = name(&format!("{}.{zone}", base32hex(hash)));
         let mut r = Record::from_rdata(owner, 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
         r.proof = Proof::Secure;
@@ -3681,7 +3709,7 @@ mod order_tests {
     fn dns_011_order_several_types_at_the_end_of_a_chain() {
         let txt = record(
             "x.example.",
-            RData::TXT(rdata::TXT::new(vec!["v=1".to_owned()])),
+            RData::TXT(rdata::TXT::try_new(["v=1"].iter().map(|t| t.as_bytes())).unwrap()),
         );
         let v = vec![
             sig("x.example.", RecordType::AAAA),
