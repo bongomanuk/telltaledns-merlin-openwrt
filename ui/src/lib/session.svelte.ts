@@ -43,15 +43,19 @@ export function signedIn(r: S['LoginResponse']) {
 
 export async function signOut() {
   let next: string | undefined;
+  // REQ: API-013 (ADR-190) — a sign-out under way: a test pack's code reloads no page until the answer says whether
+  // the page leaves for the provider.
+  devpack.leaving = true;
   try {
     // REQ: API-004 — OIDC sessions also sign out at the provider.
     next = (await api.logout())?.logoutUrl ?? undefined;
   } finally {
     setCsrf(undefined);
-    // REQ: API-013 (ADR-190) — set before the user is cleared: a test pack's code never reloads a page that
-    // leaves for the provider.
+    // Set before the user is cleared: a test pack's code never reloads a page that leaves for the provider, and
+    // reloads one now that it held back meanwhile.
     devpack.leaving = !!next;
     session.user = null;
+    if (!next) devpack.settled?.();
   }
   if (next) location.href = next;
 }

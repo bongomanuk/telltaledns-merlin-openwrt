@@ -133,11 +133,20 @@ const shownAgain = (e: PageTransitionEvent) => e.persisted && reload();
  * page leaves for the provider's sign-out, which a reload would cancel). */
 function watchUser(r: PackRecord, out: Decision) {
   let last: string | null | undefined;
+  // A reload held back while a sign-out waited for the server's answer (a request found the session gone meanwhile).
+  let held = false;
+  devpack.settled = () => {
+    if (!held) return;
+    held = false;
+    removeEventListener('pageshow', shownAgain);
+    reload();
+  };
   devpack.seen = (who) => {
     // Someone is signed in again: a page that was to leave for the provider's sign-out did not (its address never
     // replaced the page), and the next sign-out or session end takes the pack away as any does.
-    if (who !== null && devpack.leaving) {
+    if (who !== null && who !== last && devpack.leaving) {
       devpack.leaving = false;
+      held = false;
       removeEventListener('pageshow', shownAgain);
     }
     const act = whenSeen(out, who, { installed, last, leaving: !!devpack.leaving });
@@ -152,6 +161,7 @@ function watchUser(r: PackRecord, out: Decision) {
     // Back to this page may show it again as it is, from the browser's back-forward cache, with the pack and nobody
     // signed in: it reloads then, into a paused load.
     if (act === 'leave') {
+      held = true;
       addEventListener('pageshow', shownAgain, { once: true });
       return;
     }

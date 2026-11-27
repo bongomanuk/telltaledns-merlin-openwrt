@@ -140,6 +140,49 @@ for (const id of providers) {
     await page.close();
   });
 
+  test(`${id}: with a test language pack in use, a session that ends while signing out still signs out at the provider`, async ({ browser }) => {
+    // REQ: API-004, API-013 (ADR-190) — TelltaleDNS's answer to Sign out is held back for a second while a request
+    // finds the session gone: nothing reloads meanwhile, and the page then leaves for the provider's sign-out.
+    const page = await browser.newPage();
+    listen(page);
+    await signIn(page, id, name, 'alice');
+    await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
+    const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
+    const commit = (await (await page.request.get('/api/v1/system/info')).json()).build.commit as string;
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), ['telltale.devpack', JSON.stringify(devpack(who, commit))]);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr', { timeout: 20_000 });
+    let answer: () => void = () => undefined;
+    const answered = new Promise<void>((go) => (answer = go));
+    await page.route('**/api/v1/auth/logout', async (r) => {
+      const res = await r.fetch();
+      await answered;
+      await r.fulfill({ response: res });
+    });
+    let loads = 0;
+    page.on('load', () => loads++);
+    const here = new URL(page.url()).origin;
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.route(
+      (u) => u.origin === here && u.pathname.startsWith('/api/v1/') && !u.pathname.startsWith('/api/v1/auth/'),
+      (r) => r.fulfill({ status: 401, json: { type: 'about:blank', title: 'Unauthorized', status: 401, code: 'unauthorized', detail: 'the session is gone' } }),
+    );
+    await page.evaluate(() => (location.hash = '#/settings'));
+    await page.waitForTimeout(1000);
+    expect(loads, 'nothing reloads while the answer waits').toBe(0);
+    answer();
+    await page.waitForURL((u) => u.origin !== here, { timeout: 20_000 });
+    const confirm = page.getByRole('button', { name: /^(Logout|Log out)$/i });
+    if (await confirm.waitFor({ state: 'visible', timeout: 8000 }).then(() => true, () => false)) await confirm.click();
+    await expect(
+      page.getByRole('heading', { name: 'Sign in' }).or(page.getByRole('heading', { name: /logged out of TelltaleDNS/ })),
+    ).toBeVisible({ timeout: 20_000 });
+    await page.goto('/#/');
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await page.close();
+  });
+
   test(`${id}: with a test language pack in use, back from the provider's sign-out shows no pack`, async () => {
     // REQ: API-004, API-013 (ADR-190) — the page that left for the provider's sign-out was not reloaded. Back from the
     // provider returns to it, and the browser may show it again as it was, from its back-forward cache: it shows the
