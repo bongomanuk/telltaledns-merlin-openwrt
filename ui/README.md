@@ -165,6 +165,8 @@ purpose: they hold no message, under `translate="no"` and `lang="en"`. The pack'
 (`src/lib/devpack/`) loads only when the card is opened or a pack is in use, and a page load whose pack
 keeps the table checked for that build and file fetches neither the template nor the checking code.
 Developers with a checkout keep `sync`, a manifest entry with `offered: false` and `?lang=<tag>`.
+The project site's page [Write a language pack](https://paimonsoror.github.io/telltaledns/dev-languages.html)
+walks a translator through all of it, with examples.
 
 **Exemptions.** A translation that adds a time, a ratio, a date pattern, a list joined by slashes,
 a grouped number or a price (`24:00`, `16:9`, `TT/MM/JJJJ`, `1.000.000.000`, `$5`) fails as an added
