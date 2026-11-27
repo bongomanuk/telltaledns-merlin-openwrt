@@ -724,9 +724,27 @@ loop_tag = false                  # default: true
 ```
 - Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it: if they drop it too, give the upstream its own `bootstrap`.
 - **`loop_tag = false` doesn't fix a loop, it hides one**: a query that comes back is no longer dropped, and goes round. Keep the option on for any upstream that can reach this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address. Don't turn it off to quiet `forwarding loop detected`.
-- The configuration refuses `loop_tag = false` toward this node, as far as it can tell: a URL or `bootstrap` server that is a loopback address (127.0.0.0/8, `::1`), an unspecified one (`0.0.0.0`, `::`), the name `localhost`, or an address a `[[listen]]` entry uses. It can't tell the machine's other addresses (a node listening on `0.0.0.0` doesn't name its LAN address, and nothing reads them from the host), another name for this node, a DNS stamp's address, or a resolver that forwards back. In a cluster each node checks the shared upstreams against its own listeners, and a node that would send queries to itself this way refuses that version and keeps serving the one it has. It's also refused on a `recursive://` upstream, which never sends the option.
+- The configuration refuses `loop_tag = false` toward this node, as far as it can tell, when a URL or a `bootstrap` server is:
+  - a loopback address (127.0.0.0/8, `::1`, or one mapped into IPv6);
+  - an unspecified address (`0.0.0.0`, `::`);
+  - the name `localhost`, or a name under it;
+  - or an address a `[[listen]]` entry uses, **on any port**, so a forwarder on another port of this host (say `127.0.0.1:5353`) is refused too.
+
+  It's also refused on a `recursive://` upstream, which never sends the option.
+- It still accepts, because it doesn't check them:
+  - a DNS stamp (`sdns://`) whose address is this node;
+  - this node's `[api]`, `[metrics]` and `[cluster]` addresses;
+  - the machine's other addresses (a node listening on `0.0.0.0` doesn't name its LAN address, and nothing reads them from the host);
+  - another name for this node;
+  - a resolver that forwards back.
+
+  **Test it** (`POST /api/v1/checks/upstream`) asks a draft without these checks, so it can say "Works" for an upstream that saving refuses. In a cluster each node checks against its own listeners: see [Setting `loop_tag` in a cluster](#setting-loop_tag-in-a-cluster).
 - A domain forwarded in the UI or the API keeps the option. To forward a domain to such a resolver, define an `[[upstream]]` with `loop_tag = false`, an `[[upstream_group]]` for it, and a `[[route]]` with its `match_suffix`.
-- In a cluster, upgrade every node before you set `loop_tag` on a shared upstream: a node on an earlier version refuses a shared configuration that has the key (only `false` is written there) and keeps serving the one it has. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set it is shared exactly as before.
+
+#### Setting `loop_tag` in a cluster
+- **Upgrade every node before you set `loop_tag` on a shared upstream.** A node on an earlier version can't read a shared configuration that has the key (only `false` is written there). It refuses that version and keeps serving the configuration it has. It refuses every later version too while the key is in it, so it stops following the cluster's changes until it's upgraded or the key is removed. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set the key is shared exactly as before.
+- **Each node checks the shared upstreams against its own listeners.** The primary accepts `loop_tag = false` on an upstream at a replica's `[[listen]]` address. That replica refuses the version in the same way, and every later one while the upstream stays.
+- **A node that refuses a version** logs `cluster configuration not applied`, shows the error in its sync status, and adds a `sync_failed` event to the cluster's timeline. After setting the key, check on [the Cluster page](#clusters) that every node is on the new version.
 
 ### Through a proxy (Tor)
 Send an upstream's traffic through a SOCKS5 or HTTP proxy, for example Tor, so the resolver never sees your address:
