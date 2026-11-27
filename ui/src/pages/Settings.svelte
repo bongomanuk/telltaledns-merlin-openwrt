@@ -848,7 +848,7 @@
           <table class="compact">
             <thead><tr>{#if probes.some((p) => p.node)}<th>{t('Node')}</th>{/if}<th>{t('Asked')}</th><th>{t('Result')}</th><th class="num">{t('Time')}</th><th>{t('Notes')}</th></tr></thead>
             <tbody>
-              {#each probes as p (`${p.node ?? ''}|${p.target}`)}
+              {#each probes as p, i (i)}
                 <tr>
                   {#if probes.some((x) => x.node)}<td translate="no">{p.node ?? ''}</td>{/if}
                   <td>{#if p.proto === 'api'}<div class="web-ui">{words.webUi}</div>{/if}<span class="mono" translate="no">{p.target}</span>{#if !p.listener}<span class="muted small"> {words.extraTarget}</span>{/if}</td>

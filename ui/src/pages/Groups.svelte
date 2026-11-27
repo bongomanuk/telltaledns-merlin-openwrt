@@ -11,6 +11,8 @@
   import ClientChip from '../lib/components/ClientChip.svelte';
   import { loadWorkloads, workloads } from '../lib/workloads.svelte';
   import { tr } from '../lib/i18n';
+  // REQ: API-005 — a group's top names are keyed by the name and its occurrence: two names can read alike.
+  import { keyed } from '../lib/keys';
   import T from '../lib/i18n/T.svelte';
   const { t } = tr('groups');
 
@@ -182,7 +184,7 @@
         {/if}
         {#if g.schedules.length}
           <div class="small" data-testid="group-schedules">
-            {card.schedules} {#each g.schedules as s, i (s)}{i ? ', ' : ''}<span translate="no">{s}</span>{#if g.schedulesOn.includes(s)}
+            {card.schedules} {#each g.schedules as s, i (i)}{i ? ', ' : ''}<span translate="no">{s}</span>{#if g.schedulesOn.includes(s)}
                 <span class="badge warn">{onNow}</span>{/if}{/each}<HelpButton id="schedules" />
           </div>
         {/if}
@@ -229,12 +231,12 @@
           <div class="tops small">
             <div>
               <div class="muted">{card.topNames}</div>
-              <ol>{#each tops[g.name].domains as top (top.key)}<li class="mono" translate="no">{top.key} <span class="muted">{num(top.count)}</span></li>{/each}</ol>
+              <ol>{#each keyed(tops[g.name].domains, (x) => x.key) as { item: top, key } (key)}<li class="mono" translate="no">{top.key} <span class="muted">{num(top.count)}</span></li>{/each}</ol>
             </div>
             <div>
               <div class="muted">{card.topBlocked}</div>
               {#if tops[g.name].blocked.length}
-                <ol>{#each tops[g.name].blocked as top (top.key)}<li class="mono" translate="no">{top.key} <span class="muted">{num(top.count)}</span></li>{/each}</ol>
+                <ol>{#each keyed(tops[g.name].blocked, (x) => x.key) as { item: top, key } (key)}<li class="mono" translate="no">{top.key} <span class="muted">{num(top.count)}</span></li>{/each}</ol>
               {:else}<span class="muted">{card.nothingBlocked}</span>{/if}
             </div>
           </div>

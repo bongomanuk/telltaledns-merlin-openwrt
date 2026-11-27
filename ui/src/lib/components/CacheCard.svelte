@@ -86,7 +86,7 @@
           <tr><th>{t('Node')}</th><th class="num">{t('Entries')}</th><th class="num">{t('Memory')}</th><th class="num" title={t('Answered from the cache: fresh, or refreshed in the background')}>{t('From cache')}</th><th class="num">{t('Stale served')}</th><th class="num">{t('Prefetches')}</th><th class="num">{t('Evictions')}</th></tr>
         </thead>
         <tbody>
-          {#each stats as s, i (s.node ?? i)}
+          {#each stats as s, i (i)}
             <tr>
               <td>{s.node ?? t('this node')}</td>
               <td class="num">{num(s.entries)}</td>
@@ -139,7 +139,7 @@
       {#if stats.length > 1}
         <select aria-label={t('Node')} bind:value={node}>
           <option value="">{t('every node')}</option>
-          {#each stats as s, i (s.node ?? i)}<option value={s.node ?? ''}>{s.node}</option>{/each}
+          {#each stats as s, i (i)}<option value={s.node ?? ''}>{s.node}</option>{/each}
         </select>
       {/if}
       <button disabled={busy || !name.trim()} onclick={() => flush(false)}>{t('Flush this name')}</button>

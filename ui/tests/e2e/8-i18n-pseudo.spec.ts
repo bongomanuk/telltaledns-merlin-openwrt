@@ -15,6 +15,10 @@ import { join } from 'node:path';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { DATA, PSEUDO, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 import { UI } from './i18n-fixture';
+import { failOnPageErrors } from './page-errors';
+
+// REQ: API-005 — a page error fails the test, as in 1-ui.spec.ts.
+failOnPageErrors(test);
 
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
 // The help glossary is English data outside the layer (ADR-189: help stays English in part A).

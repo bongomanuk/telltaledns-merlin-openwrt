@@ -113,7 +113,7 @@
   /** The page behind a node: its group, the lists for blocked, the query log for a status or
    * a response code, the upstreams. */
   function nodeLink(n: PlacedNode | FlowNode): string | undefined {
-    if (n.name === 'other') return undefined;
+    if (n.folded) return undefined;
     const c = device ? client : undefined;
     switch (n.stage) {
       case 'group':
@@ -127,8 +127,9 @@
     }
     return undefined;
   }
-  // The folded node is the only one the UI names itself (`other`); every other name is the server's.
-  const nodeName = (n: { name: string } | undefined) => (n?.name === 'other' ? t('other') : n?.name);
+  // The folded node is the only one the UI names itself (`other`); every other name is the server's (REQ: API-005 — a node is
+  // the folded one by its mark, not by its name: a group called `other` is the server's).
+  const nodeName = (n: { name: string; folded?: boolean } | undefined) => (n?.folded ? t('other') : n?.name);
   function linkText(l: FlowLink): string {
     const from = byId.get(l.source);
     const to = byId.get(l.target);
@@ -292,7 +293,7 @@
               {@const lb = label(n)}
               <a href={to} data-testid="flow-node" data-id={n.id} data-x={n.x} data-y={n.y} data-w={n.w} data-h={n.h} data-col={n.col} aria-label={nodeText(n)} onmousemove={(e) => hoverNode(e, n)} onmouseleave={() => (tip = null)}>
                 <rect x={n.x} y={n.y} width={Math.max(1, n.w)} height={Math.max(1, n.h)} rx="2" style:fill={color(n)}></rect>
-                {#if lb}<text x={lb.x} y={lb.y} text-anchor={lb.anchor} translate={n.name === 'other' ? undefined : 'no'}>{nodeName(n)} <tspan class="count">{num(n.count)}</tspan></text>{/if}
+                {#if lb}<text x={lb.x} y={lb.y} text-anchor={lb.anchor} translate={n.folded ? undefined : 'no'}>{nodeName(n)} <tspan class="count">{num(n.count)}</tspan></text>{/if}
               </a>
             {/each}
           </g>

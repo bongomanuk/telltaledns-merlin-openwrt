@@ -7,6 +7,7 @@
   import { bytes, duration, logDate, logTime, num, pct } from '../lib/format';
   import Chart from '../lib/components/Chart.svelte';
   import { changes } from '../lib/annotations.svelte';
+  import { occurrenceKeys } from '../lib/keys';
 
   type Series = { label: string; color: string; values: number[] };
   import CacheCard from '../lib/components/CacheCard.svelte';
@@ -64,6 +65,9 @@
   const thisNode = t('this node');
   const rowWords = { lookItUp: t('Look it up below'), dnssecOk: t('(DO)'), validated: t('validated') };
   const label = (s: { node?: string | null }) => s.node ?? thisNode;
+  // REQ: API-005 — a node's card is keyed by its name and the name's occurrence: two nodes can share a name (a site), and
+  // a card's open Settings stays with its node.
+  const statKeys = $derived(occurrenceKeys(stats.map((s) => s.node ?? '')));
   const colors = ['--s-cached', '--s-forwarded', '--s-local', '--s-blocked', '--s-other'];
 
   // History points are per node, every 15 s: aligned on 15 s steps, gaps where a node has none.
@@ -192,7 +196,7 @@
   <ErrorNote {error} />
 
   <section class="nodes">
-    {#each stats as s, i (s.node ?? i)}
+    {#each stats as s, i (statKeys[i])}
       {@const used = s.settings ? (s.bytes * 100) / s.settings.maxBytes : null}
       <section class="card node" data-testid="cache-node">
         <h2>{label(s)}</h2>
@@ -288,7 +292,7 @@
         <label class="pill-field">{t('Showing')}
           <select bind:value={node} aria-label={t('Node')}>
             <option value="">{t('every node')}</option>
-            {#each stats as s, i (s.node ?? i)}<option value={s.node ?? ''}>{label(s)}</option>{/each}
+            {#each stats as s, i (i)}<option value={s.node ?? ''}>{label(s)}</option>{/each}
           </select>
         </label>
       {/if}
@@ -316,7 +320,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each shownNodes as n, i (n.node ?? i)}
+            {#each shownNodes as n, i (i)}
               {@const all = total(n.makeup)}
               <tr>
                 {#if entries.length > 1}<td>{label(n)}</td>{/if}
@@ -380,7 +384,7 @@
                   <tr class="detail">
                     <td colspan="7">
                       <ul class="per-node">
-                        {#each m.nodes as d (d.node)}
+                        {#each m.nodes as d, i (i)}
                           <li><strong translate="no">{d.node}</strong> · {ttl(d.entry.ttlLeftSeconds)} · {hitsOf(d.entry.hits)}</li>
                         {/each}
                       </ul>

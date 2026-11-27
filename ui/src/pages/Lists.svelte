@@ -157,7 +157,7 @@
             </span>
           </div>
           {#if s.topNames.length}
-            <div class="small names">{#each s.topNames.slice(0, 10) as n (n.name)}<span class="name mono" translate="no">{n.name} <span class="muted">{num(n.count)}</span></span>{/each}</div>
+            <div class="small names">{#each s.topNames.slice(0, 10) as n, i (i)}<span class="name mono" translate="no">{n.name} <span class="muted">{num(n.count)}</span></span>{/each}</div>
           {:else}
             <p class="muted small">{words.nothingYet}</p>
           {/if}

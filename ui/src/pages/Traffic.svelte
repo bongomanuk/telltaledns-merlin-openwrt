@@ -10,6 +10,8 @@
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import HelpButton from '../lib/components/HelpButton.svelte';
   import { tr } from '../lib/i18n';
+  // REQ: API-005 — a tile's names are keyed by their text and its occurrence: two names can read alike.
+  import { keyed } from '../lib/keys';
   const { t } = tr('traffic');
 
   type Mode = 'service' | 'site' | 'name';
@@ -39,7 +41,8 @@
   let allowed = $state<S['TopItem'][]>([]);
   let blocked = $state<S['TopItem'][]>([]);
   let deltas = $state(new Map<string, number>());
-  let services = new Map<string, string>();
+  // A catalog domain's service: its id (what the tile is) and its name (what the tile says).
+  let services = new Map<string, { id: string; name: string }>();
   let refreshed = $state<Date | null>(null);
   let error = $state<unknown>(null);
   let hover = $state<Tile | null>(null);
@@ -70,8 +73,8 @@
     try {
       if (services.size === 0) {
         const s = await api.services().catch(() => null);
-        const m = new Map<string, string>();
-        for (const svc of s?.items ?? []) for (const d of svc.domains) m.set(d.toLowerCase(), svc.name);
+        const m = new Map<string, { id: string; name: string }>();
+        for (const svc of s?.items ?? []) for (const d of svc.domains) m.set(d.toLowerCase(), { id: svc.id, name: svc.name });
         services = m;
       }
       const [a, b] = await Promise.all([
@@ -122,7 +125,7 @@
     const n = l[l.length - 1].length === 2 && SECOND_LEVEL.has(l[l.length - 2]) ? 3 : 2;
     return l.slice(-n).join('.');
   }
-  function service(name: string): string | undefined {
+  function service(name: string): { id: string; name: string } | undefined {
     const l = name.toLowerCase().replace(/\.$/, '').split('.');
     for (let i = 0; i < l.length - 1; i++) {
       const s = services.get(l.slice(i).join('.'));
@@ -136,16 +139,17 @@
     const add = (status: Status, items: S['TopItem'][]) => {
       for (const i of items) {
         let label = i.key;
-        let svc = false;
+        let svc: { id: string; name: string } | undefined;
         if (mode === 'service') {
-          const s = service(i.key);
-          label = s ?? site(i.key);
-          svc = s !== undefined;
+          svc = service(i.key);
+          label = svc?.name ?? site(i.key);
         } else if (mode === 'site') {
           label = site(i.key);
         }
-        const id = `${status}:${label}`;
-        const tile = out.get(id) ?? { id, status, label, service: svc, count: 0, delta: 0, members: [] };
+        // REQ: OBS-026, API-005 — a service's tile is the service (its id), a site's or a name's tile is its text; a
+        // service's name is only what the tile says, so two services with one name stay two tiles.
+        const id = svc ? `${status}:s:${svc.id}` : `${status}:n:${label}`;
+        const tile = out.get(id) ?? { id, status, label, service: svc !== undefined, count: 0, delta: 0, members: [] };
         tile.count += i.count;
         tile.delta += deltas.get(`${status}:${i.key}`) ?? 0;
         tile.members.push({ name: i.key, count: i.count });
@@ -284,7 +288,7 @@
       </p>
       {#if mode !== 'name'}
         <ul class="members">
-          {#each tile.members.slice(0, 8) as m (m.name)}
+          {#each keyed(tile.members.slice(0, 8), (x) => x.name) as { item: m, key } (key)}
             <li><a href={href('/queries', { name: m.name, match: 'exact' })}>{m.name}</a><span><a class="when" href={href('/heatmap', { kind: 'name', key: m.name })} aria-label={t('When {name} is asked for', { name: m.name })}>{t('when')}</a> {num(m.count)}</span></li>
           {/each}
           {#if tile.members.length > 8}<li class="muted">{t('and {n} more', { n: tile.members.length - 8 })}</li>{/if}

@@ -242,7 +242,7 @@
                   <td class="mono"><ClientChip ip={c.key} onchanged={load} /></td>
                   <td><span translate="no">{c.name ?? ''}</span><IdentityLine identity={identities[c.key]} /></td>
                   <td class="small">
-                    {#each c.groups ?? [] as g (g)}<span class="group-chip" translate="no" style:--gc={groupColor(g)}>{g}</span>{/each}
+                    {#each c.groups ?? [] as g, i (i)}<span class="group-chip" translate="no" style:--gc={groupColor(g)}>{g}</span>{/each}
                   </td>
                   {#if showAffinity}
                     {@const a = affinity[c.key]}
@@ -273,7 +273,7 @@
                   <td class="mono small" translate="no">{c.match.join(', ')}</td>
                   <td class="small">
                     <!-- REQ: FLT-005 — the groups that apply, and where they come from (ADR-050). -->
-                    {#each c.effectiveGroups ?? [] as g (g)}<span class="group-chip" translate="no" style:--gc={groupColor(g)}>{g}</span>{/each}
+                    {#each c.effectiveGroups ?? [] as g, i (i)}<span class="group-chip" translate="no" style:--gc={groupColor(g)}>{g}</span>{/each}
                     {#if (c.effectiveGroups ?? []).length === 0}
                       <span class="muted">{rowWords.ownGroup}</span>
                     {:else if own(fromText, c.groupsFrom)}

@@ -26,6 +26,9 @@
     }
   }
   $effect(() => poll(load, 15_000));
+  // REQ: API-005 — a firing alert is its rule and its subject (the server has one per pair, and rule names are unique). Both
+  // are free text, so no separator is sure not to occur in them: the rule's length in front makes the key one per pair.
+  const firingKey = (f: S['FiringAlert']) => `${f.rule.length}:${f.rule}${f.subject}`;
 
   // The words of the delivery rows are read once, here: the language is fixed for the life of the page.
   const words = { delivered: t('delivered'), failed: t('failed') };
@@ -84,14 +87,14 @@
         <table>
           <thead><tr><th>{t('Rule')}</th><th>{t('About')}</th><th>{t('What')}</th></tr></thead>
           <tbody>
-            {#each status.firing as f (f.rule + f.subject)}
+            {#each status.firing as f (firingKey(f))}
               <tr><td><span class="badge bad" translate="no">{f.rule}</span></td><td class="mono small" translate="no">{f.subject}</td><td>{f.summary}</td></tr>
             {/each}
           </tbody>
         </table>
       </div>
     {/if}
-    {#each status?.maintenance ?? [] as m (m.node)}
+    {#each status?.maintenance ?? [] as m, i (i)}
       <!-- REQ: OPS-010 — alerts about a node in maintenance are paused. -->
       <p class="small muted" data-testid="alerts-maintenance">
         <T ctx="alerts" msg={'Alerts for <strong>{node}</strong> are paused during maintenance until {until} ({reason}).'} params={{ node: m.node, until: dateTime(Date.parse(m.until) / 1000), reason: m.reason }} {strong} />

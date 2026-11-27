@@ -18,6 +18,7 @@
   import { num } from '../format';
   import { parseName, workloadName, type Parsed } from './names';
   import { tk, tr } from '../i18n';
+  import { occurrenceKeys } from '../keys';
   import T from '../i18n/T.svelte';
   const { t, m } = tr('topList');
 
@@ -50,6 +51,10 @@
     count: number;
     /** The names merged into this row (more than one only for search-suffix expansions). */
     variants: { key: string; count: number }[];
+    /** REQ: API-005 — the row's key and its open state's: the name with its occurrence (two names can read alike). */
+    key: string;
+    /** The variants' keys, the same way. */
+    variantKeys: string[];
   }
   // A pod's search list turns one lookup into several (`api.example.com.<ns>.svc.cluster.local`,
   // `….svc.cluster.local`, `….cluster.local`): they are one question, so they get one row.
@@ -65,14 +70,20 @@
           g.variants.push({ key: it.key, count: it.count });
           continue;
         }
-        const r: Row = { it, p, count: it.count, variants: [{ key: it.key, count: it.count }] };
+        const r: Row = { it, p, count: it.count, variants: [{ key: it.key, count: it.count }], key: '', variantKeys: [] };
         byMain.set(p.main, r);
         out.push(r);
         continue;
       }
-      out.push({ it, p, count: it.count, variants: [] });
+      out.push({ it, p, count: it.count, variants: [], key: '', variantKeys: [] });
     }
-    return out.sort((a, b) => b.count - a.count);
+    out.sort((a, b) => b.count - a.count);
+    const keys = occurrenceKeys(out.map((r) => r.it.key));
+    out.forEach((r, i) => {
+      r.key = keys[i];
+      if (r.variants.length) r.variantKeys = occurrenceKeys(r.variants.map((v) => v.key));
+    });
+    return out;
   });
   const shown = $derived(rows.slice(0, limit));
   const max = $derived(Math.max(1, ...rows.map((r) => r.count)));
@@ -123,7 +134,7 @@
   <p class="empty">{t('Nothing yet.')}</p>
 {:else}
   <ol class="tl">
-    {#each shown as r (r.it.key)}
+    {#each shown as r (r.key)}
       {@const it = r.it}
       {@const p = r.p}
       {@const merged = r.variants.length > 1}
@@ -132,12 +143,12 @@
       {@const [head, tail] = ends(base)}
       {@const tag = merged ? t('search suffix ×{n}', { n: r.variants.length }) : (p?.tag ?? '')}
       {@const sp = kind === 'clients' ? splitOf(it, r.count) : null}
-      <li class:open={open[it.key]} style:--w={`${(r.count / max) * 100}%`}>
+      <li class:open={open[r.key]} style:--w={`${(r.count / max) * 100}%`}>
         <div class="line">
           <span class="who">
             {#if kind === 'clients'}
               <span class="dev"><ClientChip ip={it.key} name={it.name} display={it.name ? workloadName(it.name) : undefined} {onchanged} /></span>
-              {#each it.groups ?? [] as g (g)}<i class="gdot" style:--gc={groupColor(g)} title={g} translate="no"></i>{/each}
+              {#each it.groups ?? [] as g, i (i)}<i class="gdot" style:--gc={groupColor(g)} title={g} translate="no"></i>{/each}
             {:else}
               <!-- REQ: OBS-039 (ADR-167) — the name's mark; nothing when icons are off. -->
               <DomainIcon name={target} quiet={kind === 'blocked'} />
@@ -145,7 +156,7 @@
               {#if tag}<span class="tag">{tag}</span>{/if}
             {/if}
           </span>
-          <button class="n" aria-expanded={!!open[it.key]} aria-label={t('Details for {name}', { name: it.name ?? p?.main ?? it.key })} onclick={() => (open[it.key] = !open[it.key])}>
+          <button class="n" aria-expanded={!!open[r.key]} aria-label={t('Details for {name}', { name: it.name ?? p?.main ?? it.key })} onclick={() => (open[r.key] = !open[r.key])}>
             <span class="num">{num(r.count)}</span><span class="chev" aria-hidden="true"></span>
           </button>
         </div>
@@ -154,7 +165,7 @@
             {#each sp as q (q.k)}<span style:flex-grow={q.n} style:background={`var(${q.color})`}></span>{/each}
           </div>
         {/if}
-        {#if open[it.key]}
+        {#if open[r.key]}
           <div class="more">
             {#if merged}
               <p class="small muted">
@@ -163,7 +174,7 @@
                 >
               </p>
               <ul class="vars">
-                {#each r.variants as v (v.key)}
+                {#each r.variants as v, vi (r.variantKeys[vi])}
                   <li><code translate="no">{v.key}</code><b>{num(v.count)}</b></li>
                 {/each}
               </ul>

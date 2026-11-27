@@ -10,6 +10,9 @@
   import Chart from '../lib/components/Chart.svelte';
   import Tip from '../lib/components/Tip.svelte';
   import Donut from '../lib/components/Donut.svelte';
+  import { partsOf } from '../lib/donut';
+  // REQ: API-005 — a top list's rows are keyed by the name and its occurrence: two names can read alike.
+  import { keyed } from '../lib/keys';
   import ErrorNote from '../lib/components/ErrorNote.svelte';
   import BreakerBadge from '../lib/components/BreakerBadge.svelte';
   import ClientChip from '../lib/components/ClientChip.svelte';
@@ -242,7 +245,7 @@
   };
   const times = $derived(buckets.map((b) => b.startUnixSeconds));
   const statusSeries = $derived.by(() => {
-    const series = [...main, 'other'].map((k) => ({ label: statusText[k], color: colors[k], values: [] as number[] }));
+    const series = [...main, 'other'].map((k) => ({ id: k, label: statusText[k], color: colors[k], values: [] as number[] }));
     for (const b of buckets) {
       let rest = b.total;
       main.forEach((k, i) => {
@@ -304,10 +307,8 @@
   );
   const sparkFailures = $derived(buckets.map((b) => b.upstreamFailures));
 
-  // T6.8 — the same statuses as the chart, as totals over the range.
-  const statusParts = $derived(
-    statusSeries.map((s) => ({ label: s.label, color: s.color, value: s.values.reduce((a, v) => a + v, 0) })),
-  );
+  // T6.8 — the same statuses as the chart, as totals over the range (REQ: API-005 — each part keeps its status id).
+  const statusParts = $derived(partsOf(statusSeries));
 
   const totalUpstream = $derived(upstreams.reduce((a, u) => a + u.requests, 0));
   const maxTop = (items: S['TopItem'][]) => Math.max(1, ...items.map((i) => i.count));
@@ -493,13 +494,13 @@
           <p class="empty">{t('Nothing yet.')}</p>
         {:else}
           <ol class="bars">
-            {#each l.items as i (i.key)}
+            {#each keyed(l.items, (x) => x.key) as { item: i, key } (key)}
               <li>
                 <div class="row">
                   {#if l.id === 'clients'}
                     <span class="name"><ClientChip ip={i.key} name={i.name} onchanged={() => void load()} /></span>
                     <!-- ADR-050 — the groups whose settings apply to the device. -->
-                    {#each i.groups ?? [] as g (g)}<span class="group-chip small" style:--gc={groupColor(g)} translate="no">{g}</span>{/each}
+                    {#each i.groups ?? [] as g, gi (gi)}<span class="group-chip small" style:--gc={groupColor(g)} translate="no">{g}</span>{/each}
                   {:else}
                     <a class="name" href={l.link(i.key)}>{i.key}</a>
                   {/if}

@@ -182,7 +182,7 @@
             <table>
               <thead><tr><th>{t('Node')}</th><th>{t('Answered')}</th><th class="num">{t('Files')}</th><th class="num">{t('Size')}</th><th>{t('Note')}</th></tr></thead>
               <tbody>
-                {#each m.nodes as n (n.node)}
+                {#each m.nodes as n, i (i)}
                   <tr data-testid="support-node">
                     <td class="mono" translate="no">{n.node}</td>
                     <td class="small">{#if n.status === 'ok'}<span class="badge ok">{t('yes')}</span>{:else}<span class="badge warn">{t('missing')}</span>{/if}</td>
@@ -221,7 +221,7 @@
         {#if (m.config_fields_unclassified ?? []).length > 0}
           <p class="small"><span class="badge warn">{t('Please report')}</span> {t('These settings had no rule and were removed: {fields}.', { fields: (m.config_fields_unclassified ?? []).join(', ') })}</p>
         {/if}
-        {#each m.notes as n (n)}<p class="small muted">{n}</p>{/each}
+        {#each m.notes as n, i (i)}<p class="small muted">{n}</p>{/each}
       </div>
     {/if}
   {/if}

@@ -12,6 +12,7 @@
   import ChangePreview from '../lib/components/ChangePreview.svelte';
   import Drawer from '../lib/components/Drawer.svelte';
   import { own, tr } from '../lib/i18n';
+  import { occurrenceKeys } from '../lib/keys';
   import T from '../lib/i18n/T.svelte';
   const { t } = tr('localDns');
 
@@ -168,6 +169,8 @@
       busy = false;
     }
   }
+  // REQ: API-005 — a forwarded domain's row stays with its domain (its Remove acts at once), and one routed twice stays two rows.
+  const forwardKeys = $derived(occurrenceKeys(forwards.map((f) => f.domain)));
   async function removeForward(d: string) {
     try {
       await api.deleteForward(d);
@@ -249,7 +252,7 @@
         <table>
           <thead><tr><th>{t('Zone')}</th><th class="num">{t('Records')}</th><th>{t('Seen by')}</th><th>{t('From')}</th><th></th></tr></thead>
           <tbody>
-            {#each zones as z (z.name)}
+            {#each zones as z, i (i)}
               <tr>
                 <td class="mono" translate="no">{z.name}</td>
                 <td class="num">{z.records}</td>
@@ -273,7 +276,7 @@
         <table>
           <thead><tr><th>{t('Domain')}</th><th>{t('Servers')}</th><th>{t('Defined in')}</th><th></th></tr></thead>
           <tbody>
-            {#each forwards as f (f.domain)}
+            {#each forwards as f, i (forwardKeys[i])}
               <tr>
                 <td class="mono" translate="no">{f.domain}</td>
                 <td class="mono small"><span translate="no">{f.servers.join(', ')}</span>{#if f.stub}<span class="muted">{t('(stub zone)')}</span>{/if}</td>
