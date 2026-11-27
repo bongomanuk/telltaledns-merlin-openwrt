@@ -119,10 +119,10 @@ async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number;
     viewport: o.width ? { width: o.width, height: 700 } : undefined,
   });
   if (o.init) await context.addInitScript(o.init);
-  // The same two change markers in the last hour on every chart, in place of what earlier spec files changed: so the
-  // charts draw their marker buttons under a pack. Forty or fewer give one column each; above forty a chart can
-  // repeat a column's key, which the `each-keys` branch fixes in Chart.svelte (this fixed list can then go).
-  // Requests are still seen: the request event fires for a routed request.
+  // The same two change markers in the last hour on every chart, whatever earlier spec files changed: a server that has
+  // run only this file has none in a chart's data, and a test that looks at a chart under a pack needs a marker button
+  // there. (The test of a pack that reads one word gives its own, many more.) Requests are still seen: the request event
+  // fires for a routed request.
   await context.route(
     (u) => u.pathname === '/api/v1/annotations',
     (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: MARKERS(), truncated: false } }) : q.fallback()),
