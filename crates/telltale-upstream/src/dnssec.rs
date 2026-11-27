@@ -1432,7 +1432,8 @@ fn denies_ds_at_cut(authorities: &[Record], apex: &Name) -> bool {
 ///
 /// A closest encloser further up (an Opt-Out empty non-terminal between them) isn't accepted:
 /// not proven. Seen with names below parked domains (`www.smithsonianmag.org`), whose servers
-/// answer an SOA for every name, which the validation library judges bogus.
+/// answer an SOA for every name, which the validation library judged bogus up to hickory-net
+/// 0.26.3.
 fn denies_ds_by_opt_out(authorities: &[Record], apex: &Name) -> bool {
     if apex.is_root() {
         return false;
@@ -1974,14 +1975,15 @@ mod depth_tests {
             m.authorities[0] = nsec("k.z.test.", "l.z.test.");
         });
         refused("an NSEC3 beside it", &|m| {
-            let n3 = NSEC3::new(
+            let n3 = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 0,
                 Vec::new(),
                 vec![0; 20],
                 [A],
-            );
+            )
+            .unwrap();
             m.authorities
                 .push(secure("x.z.test.", RData::DNSSEC(DNSSECRData::NSEC3(n3))));
         });
@@ -2109,14 +2111,15 @@ mod depth_tests {
             owned("m.z.test.", data, proof)
         };
         let nsec3 = |owner: &str, proof: Proof| {
-            let data = NSEC3::new(
+            let data = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 0,
                 Vec::new(),
                 vec![0; 20],
                 [A],
-            );
+            )
+            .unwrap();
             owned(owner, RData::DNSSEC(DNSSECRData::NSEC3(data)), proof)
         };
         // `m.z.test. A` with the given signatures, and the authority section.
@@ -2393,14 +2396,15 @@ mod depth_tests {
         let hash = Nsec3HashAlgorithm::SHA1.hash(salt, &apex, 5).unwrap();
         let owner = Name::from_ascii(format!("{}.example.", base32hex(hash.as_ref()))).unwrap();
         let nsec3 = |owner: &Name, types: &[RecordType]| {
-            let n = NSEC3::new(
+            let n = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 false,
                 5,
                 salt.to_vec(),
                 vec![0; 20],
                 types.iter().copied(),
-            );
+            )
+            .unwrap();
             let mut r =
                 Record::from_rdata(owner.clone(), 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
             r.proof = Proof::Secure;
@@ -2454,14 +2458,15 @@ mod depth_tests {
             v
         };
         let rec = |owner_hash: &[u8], next: Vec<u8>, opt_out: bool, types: &[RecordType], proof| {
-            let n = NSEC3::new(
+            let n = NSEC3::try_new(
                 Nsec3HashAlgorithm::SHA1,
                 opt_out,
                 0,
                 salt.to_vec(),
                 next,
                 types.iter().copied(),
-            );
+            )
+            .unwrap();
             let owner = Name::from_ascii(format!("{}.org.", base32hex(owner_hash))).unwrap();
             let mut r = Record::from_rdata(owner, 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
             r.proof = proof;
@@ -2620,14 +2625,15 @@ mod ds_proof_tests {
         types: &[RecordType],
         (salt, iterations): (&[u8], u16),
     ) -> Record {
-        let n = NSEC3::new(
+        let n = NSEC3::try_new(
             Nsec3HashAlgorithm::SHA1,
             opt_out,
             iterations,
             salt.to_vec(),
             next,
             types.iter().copied(),
-        );
+        )
+        .unwrap();
         let owner = name(&format!("{}.{zone}", base32hex(hash)));
         let mut r = Record::from_rdata(owner, 300, RData::DNSSEC(DNSSECRData::NSEC3(n)));
         r.proof = Proof::Secure;
@@ -3681,7 +3687,7 @@ mod order_tests {
     fn dns_011_order_several_types_at_the_end_of_a_chain() {
         let txt = record(
             "x.example.",
-            RData::TXT(rdata::TXT::new(vec!["v=1".to_owned()])),
+            RData::TXT(rdata::TXT::try_new(["v=1"].iter().map(|t| t.as_bytes())).unwrap()),
         );
         let v = vec![
             sig("x.example.", RecordType::AAAA),
