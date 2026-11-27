@@ -6,7 +6,9 @@
   var list = document.getElementById("adr-list");
   var tools = document.querySelector(".adr-tools");
   if (!list || !tools) return;
-  var items = Array.prototype.slice.call(list.querySelectorAll(".adr"));
+  // The records only: the "Builds on" and "Referenced by" link chips inside a part page's
+  // records carry the `adr` class too, and are not decisions.
+  var items = Array.prototype.slice.call(list.querySelectorAll("article.adr, details.adr"));
   var isIndex = items.length > 0 && items[0].tagName !== "DETAILS";
   var q = document.getElementById("adr-q");
   var area = document.getElementById("adr-area");
