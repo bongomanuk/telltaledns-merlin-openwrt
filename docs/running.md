@@ -713,17 +713,19 @@ ecs = "client"                    # each client's /24 (IPv4) or /56 (IPv6)
 - The subnet comes from the client's address (after PROXY protocol, if enabled). ECS options your clients send are still never forwarded.
 
 ### Forwarding loops
-Every query TelltaleDNS sends an upstream carries an EDNS option (code 65429, from the range RFC 6891 keeps for local use) with a random tag the node picks when it starts. A query that arrives with the node's own tag has come back through an upstream that forwards to TelltaleDNS: it's dropped and an error is logged (`forwarding loop detected`), so it doesn't go round until it times out.
+Every query TelltaleDNS forwards to an upstream carries an EDNS option (code 65429, from the range RFC 6891 keeps for local use) with a random tag the node picks when it starts. A query that arrives with the node's own tag has come back through an upstream that forwards to TelltaleDNS: it's dropped and an error is logged (`forwarding loop detected`), so it doesn't go round until it times out. If the log reports one, fix the upstream that sends queries back.
 
-A few resolvers drop every query that carries an EDNS option they don't know (RFC 6891 asks them to ignore it), so every query to them times out and their breaker stays open, while `dig` from the same host gets answers. Leave the option out for such an upstream:
+A few resolvers drop every query that carries an EDNS option they don't know (RFC 6891 asks them to ignore it), so every query to them times out (over DoH, fails with an HTTP error) and their breaker stays open, while `dig` from the same host gets answers. Leave the option out for such an upstream:
 ```toml
 [[upstream]]
 name = "strict-resolver"
 url = "udp://198.51.100.53"
 loop_tag = false                  # default: true
 ```
-- Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it.
-- A loop through this upstream is no longer detected. Keep the option on for any upstream that can send queries back to this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address.
+- Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it: if they drop it too, give the upstream its own `bootstrap`.
+- **`loop_tag = false` doesn't fix a loop, it hides one**: a query that comes back is no longer dropped, and goes round. Keep the option on for any upstream that can reach this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address. Don't turn it off to quiet `forwarding loop detected`.
+- The configuration refuses `loop_tag = false` toward this node, as far as it can tell: a URL or `bootstrap` server that is a loopback address (127.0.0.0/8, `::1`), an unspecified one (`0.0.0.0`, `::`), the name `localhost`, or an address a `[[listen]]` entry uses. It can't tell the machine's other addresses (a node listening on `0.0.0.0` doesn't name its LAN address, and nothing reads them from the host), another name for this node, a DNS stamp's address, or a resolver that forwards back. In a cluster each node checks the shared upstreams against its own listeners, and a node that would send queries to itself this way refuses that version and keeps serving the one it has. It's also refused on a `recursive://` upstream, which never sends the option.
+- A domain forwarded in the UI or the API keeps the option. To forward a domain to such a resolver, define an `[[upstream]]` with `loop_tag = false`, an `[[upstream_group]]` for it, and a `[[route]]` with its `match_suffix`.
 - In a cluster, upgrade every node before you set `loop_tag` on a shared upstream: a node on an earlier version refuses a shared configuration that has the key (only `false` is written there) and keeps serving the one it has. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set it is shared exactly as before.
 
 ### Through a proxy (Tor)

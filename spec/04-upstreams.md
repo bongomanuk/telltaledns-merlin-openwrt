@@ -99,7 +99,7 @@ pub trait Upstream: Send + Sync {
 ## 7. Bootstrap and loops (UPS-009)
 - Hostname upstreams resolve through `bootstrap` IPs (per upstream or global; default: the system resolver from `/etc/resolv.conf`, **excluding** our own listen addresses). Results are cached and re-resolved at TTL.
 - Loop detection: tag outbound queries with an EDNS option (local-use code 65429) carrying the node ID. Drop and alert on receipt of our own tag.
-- Per upstream, `loop_tag = false` (default `true`) leaves the option out of every query to that upstream and to its own `bootstrap` servers, for resolvers that drop queries carrying an option they don't know; the shared system bootstrap keeps it, self-probes still never carry it (OBS-020), and a loop through that upstream goes undetected (ADR-192).
+- Per upstream, `loop_tag = false` (default `true`) leaves the option out of every query forwarded to that upstream and to its own `bootstrap` servers, for resolvers that drop queries carrying an option they don't know; the shared system bootstrap keeps it, and self-probes still never carry it (OBS-020). It hides a loop through that upstream rather than fixing it, so it is refused toward this node as far as the configuration tells (a loopback or unspecified address, `localhost`, or a `[[listen]]` address, in the URL or `bootstrap`), and on `recursive://`, which never sends the option (ADR-192).
 
 ## 9. Answer quality and second opinions (OBS-019, ADR-108)
 - **Always:** after an upstream answers (the asynchronous path only), its first OPT EDE code is counted per (upstream, code) (at most 2,048 pairs) and, when validating, the DNSSEC verdict per upstream (atomic counters, 256 upstream IDs).
