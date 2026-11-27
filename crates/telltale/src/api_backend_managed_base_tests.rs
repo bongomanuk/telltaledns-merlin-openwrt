@@ -1075,3 +1075,91 @@ match = ["192.168.1.10"]
         }
     }
 }
+
+/// REQ: API-010, CLU-003 (ADR-040; issue #113) — the way back through the API: a stored device
+/// the configuration in effect doesn't use can be deleted. After the rename of the issue
+/// (`Newt-pve1` stored with `Newt`'s address), the stored devices don't apply, and `Newt-pve1` is
+/// in effect nowhere. Deleting it (a dry run first, which stores nothing) says what it was and that
+/// it isn't in effect, removes the row, and the stored devices apply again. A stored copy of a
+/// device the base has can be deleted too, and the base's device stays; so on a standalone node
+/// with the files' device. With two rows that keep the stored devices from applying, each delete
+/// is accepted: after the first they still don't apply, and its warnings say why; after the
+/// second they do. A name with no stored row and no device is still not found.
+#[tokio::test]
+async fn api_010_delete_removes_a_stored_device_not_in_effect() {
+    let client = crate::managed::CLIENT;
+    let n = newt_primary();
+    n.unstore(client, "Newt");
+    n.store(
+        client,
+        "Newt-pve1",
+        &device_row("Newt-pve1", &["192.168.0.55"]),
+    );
+    assert!(n.falls_back() && !n.has_device("tablet") && !n.has_device("Newt-pve1"));
+    let version = n.version();
+    let dry = n.device("Newt-pve1", None, true).await;
+    let dry = dry.unwrap_or_else(|p| panic!("the dry run of the delete: {p:?}"));
+    assert!(!dry.applied, "{dry:?}");
+    assert_eq!(
+        n.stored(client),
+        ["Newt-pve1", "tablet"],
+        "a dry run stores nothing"
+    );
+    assert_eq!(n.version(), version);
+    assert_eq!(
+        dry.before.as_ref().map(|b| b.name.as_str()),
+        Some("Newt-pve1"),
+        "{dry:?}"
+    );
+    assert!(dry.impact.contains("isn't in effect"), "{dry:?}");
+    let done = n.device("Newt-pve1", None, false).await;
+    let done = done.unwrap_or_else(|p| panic!("the delete: {p:?}"));
+    assert!(done.applied && done.config_version > version, "{done:?}");
+    assert_eq!(n.stored(client), ["tablet"]);
+    assert!(
+        !n.falls_back() && n.has_device("tablet") && n.has_device("Newt"),
+        "the stored devices apply again"
+    );
+
+    // A stored copy of a device of the version this node builds on.
+    n.store(client, "Newt", &device_row("Newt", &["192.168.0.55"]));
+    let copy = n.device("Newt", None, false).await;
+    let copy = copy.unwrap_or_else(|p| panic!("deleting the stored copy: {p:?}"));
+    assert!(copy.impact.contains("isn't in effect"), "{copy:?}");
+    assert_eq!(n.stored(client), ["tablet"]);
+    assert!(n.has_device("Newt") && n.has_device("tablet") && !n.falls_back());
+
+    // Two rows that keep the stored devices from applying (`Newt`'s and `homeassistant`'s addresses).
+    n.store(client, "a", &device_row("a", &["192.168.0.55"]));
+    n.store(client, "b", &device_row("b", &["192.168.0.5"]));
+    assert!(n.falls_back());
+    let first = n.device("a", None, false).await;
+    let first = first.unwrap_or_else(|p| panic!("the first delete: {p:?}"));
+    assert!(
+        first.warnings.iter().any(|w| w.contains("`192.168.0.5`")),
+        "says what still keeps them from applying: {first:?}"
+    );
+    assert!(n.falls_back() && n.stored(client) == ["b", "tablet"]);
+    if let Err(p) = n.device("b", None, false).await {
+        panic!("the second delete: {p:?}");
+    }
+    assert_eq!(n.stored(client), ["tablet"]);
+    assert!(!n.falls_back() && n.has_device("tablet"));
+
+    let missing = n.device("nobody", None, false).await;
+    assert_eq!(missing.map(|_| ()).unwrap_err().status, 404);
+
+    // A standalone node: the files' `nas` hides the stored one.
+    let s = Node::standalone(config(
+        r#"
+[[client]]
+name = "nas"
+match = ["192.168.1.10"]
+"#,
+    ));
+    s.store(client, "nas", &device_row("nas", &["192.168.1.10"]));
+    let r = s.device("nas", None, false).await;
+    let r = r.unwrap_or_else(|p| panic!("deleting the stored nas: {p:?}"));
+    assert!(r.impact.contains("isn't in effect"), "{r:?}");
+    assert!(s.stored(client).is_empty() && s.has_device("nas") && !s.falls_back());
+}

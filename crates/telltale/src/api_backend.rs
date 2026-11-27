@@ -3832,11 +3832,22 @@ fn with_device_change(
     kept.into_iter().map(|(_, c)| c).collect()
 }
 
+/// What a device write leaves: the configuration (for `simulate`), its warnings, and whether the
+/// stored entries apply in it.
+struct DeviceCandidate {
+    config: telltale_config::Config,
+    warnings: Vec<String>,
+    applies: bool,
+}
+
 /// The configuration a device write (of the device named `from`) leaves, and its warnings.
 /// REQ: API-010, API-002, CLU-003 (ADR-040; GitHub issue #113) — the merge a reload applies onto
 /// `base`, with the stored devices as the write leaves them: a change the reload would set aside
-/// is refused here, before anything is stored. Without a base (the files couldn't be read at
-/// start-up), the running configuration `cfg` with the change, as before.
+/// is refused here, before anything is stored. One exception: while the stored entries don't
+/// apply (the node uses its base alone), deleting a stored device takes nothing in effect away,
+/// and such rows must be removable one at a time, so the delete is accepted even when they still
+/// don't apply after it, with warnings that say why. Without a base (the files couldn't be read
+/// at start-up), the running configuration `cfg` with the change, as before.
 fn device_candidate(
     state: &telltale_store::state::State,
     rows: &[telltale_store::state::Managed],
@@ -3845,7 +3856,7 @@ fn device_candidate(
     inherited: bool,
     from: &str,
     after: Option<&telltale_config::ClientConfig>,
-) -> Result<(telltale_config::Config, Vec<String>), Problem> {
+) -> Result<DeviceCandidate, Problem> {
     let Some(base) = base else {
         let mut candidate = cfg.clone();
         let new_name = after.map(|c| c.name.to_string());
@@ -3865,14 +3876,70 @@ fn device_candidate(
             )
             .hint("GET /api/v1/groups lists the groups a device can join.")
         })?;
-        return Ok((candidate, warnings));
+        return Ok(DeviceCandidate {
+            config: candidate,
+            warnings,
+            applies: true,
+        });
     };
     let mut entries = crate::managed::entries(state);
-    entries.clients = with_device_change(rows, from, after);
-    let merged = crate::managed::merge(base, &entries)
-        .map_err(|errs| device_refusal(base, inherited, after, &errs))?;
-    let warnings = telltale_config::validate_config(&merged).unwrap_or_default();
-    Ok((merged, warnings))
+    let now = std::mem::replace(&mut entries.clients, with_device_change(rows, from, after));
+    match crate::managed::merge(base, &entries) {
+        Ok(merged) => Ok(DeviceCandidate {
+            warnings: telltale_config::validate_config(&merged).unwrap_or_default(),
+            config: merged,
+            applies: true,
+        }),
+        Err(errs) => {
+            let deletes_a_row = after.is_none() && rows.iter().any(|m| m.name == from);
+            entries.clients = now;
+            if deletes_a_row && crate::managed::merge(base, &entries).is_err() {
+                return Ok(DeviceCandidate {
+                    config: base.clone(),
+                    warnings: vec![format!(
+                        "the devices and settings made through the API still don't apply: {}",
+                        errs.join("; ")
+                    )],
+                    applies: false,
+                });
+            }
+            Err(device_refusal(base, inherited, after, &errs))
+        }
+    }
+}
+
+/// REQ: API-010 (GitHub issue #113) — what deleting the stored device `name` does when it isn't
+/// in effect: `base` has a device of its name, or the stored entries don't apply (`applies`: they
+/// do once it's gone). `None`: it is in effect, and the usual sentence says what deleting it does.
+fn unused_device_impact(
+    state: &telltale_store::state::State,
+    base: &telltale_config::Config,
+    inherited: bool,
+    name: &str,
+    applies: bool,
+) -> Option<String> {
+    if base.client.iter().any(|c| c.name.as_str() == name) {
+        let from = if inherited {
+            "the cluster version this node builds on"
+        } else {
+            "the config files"
+        };
+        return Some(format!(
+            "Removes the stored `{name}`, which isn't in effect: the device of that name in {from} is, and stays."
+        ));
+    }
+    if crate::managed::merge(base, &crate::managed::entries(state)).is_ok() {
+        return None;
+    }
+    Some(if applies {
+        format!(
+            "Removes the stored `{name}`, which isn't in effect (the devices and settings made through the API don't apply); without it they apply again."
+        )
+    } else {
+        format!(
+            "Removes the stored `{name}`, which isn't in effect; the devices and settings made through the API still don't apply after it (the warnings say why)."
+        )
+    })
 }
 
 /// Checks a device write against the merge a reload applies (ADR-040, ADR-051): what it merges the
@@ -3905,14 +3972,22 @@ fn plan_client(
     if in_files(&w.name) && !removes_a_row {
         return Err(defined_in_base(&w.name, inherited));
     }
+    // REQ: API-010 (GitHub issue #113) — a stored device the configuration in effect has no
+    // device of: what a delete removes is the stored one.
     let before = cfg
         .client
         .iter()
         .find(|c| c.name.as_str() == w.name)
-        .map(|c| client_info(c, &managed));
+        .map(|c| client_info(c, &managed))
+        .or_else(|| {
+            rows.iter()
+                .find(|m| removes_a_row && m.name == w.name)
+                .and_then(|m| serde_json::from_str::<telltale_config::ClientConfig>(&m.body).ok())
+                .map(|c| client_info(&c, &managed))
+        });
     let after = match &w.input {
         None => {
-            if before.is_none() {
+            if before.is_none() && !removes_a_row {
                 return Err(Problem::not_found(format!(
                     "no device named `{}` was created through the API",
                     w.name
@@ -3940,7 +4015,7 @@ fn plan_client(
             Some(c)
         }
     };
-    let (candidate, warnings) = device_candidate(
+    let planned = device_candidate(
         state,
         &rows,
         &cfg,
@@ -3949,14 +4024,20 @@ fn plan_client(
         &w.name,
         after.as_ref(),
     )?;
-    let (recent_queries, impact) = client_impact(src, &w.name, before.as_ref(), after.as_ref());
+    let (recent_queries, mut impact) = client_impact(src, &w.name, before.as_ref(), after.as_ref());
+    if removes_a_row
+        && let Some(b) = &base
+        && let Some(i) = unused_device_impact(state, b, inherited, &w.name, planned.applies)
+    {
+        impact = i;
+    }
     Ok(ClientPlan {
         before,
         after,
         recent_queries,
         impact,
-        warnings,
-        candidate: Arc::new(candidate),
+        warnings: planned.warnings,
+        candidate: Arc::new(planned.config),
         baseline: cfg,
     })
 }
