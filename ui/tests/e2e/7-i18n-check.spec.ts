@@ -482,10 +482,12 @@ test('api_012 check and sync take plural categories from the committed table', (
   expect(() => lib.sync(missing, 'qaa')).toThrow('ask a maintainer to add the language');
 });
 
-test('api_012 the ui ships no language yet', () => {
-  // The made-up locale lives in the fixtures only; the UI's manifest lists no language.
+test('api_012 the ui offers no language yet', () => {
+  // The made-up locale lives in the fixtures only. The manifest may list a language that is shipped and
+  // tried with `?lang=<tag>`, but until the language setting exists none of them is offered.
   expect(existsSync(join(UI, 'src/locales/qaa.json'))).toBe(false);
-  expect(JSON.parse(readFileSync(join(UI, 'src/locales/manifest.json'), 'utf8'))).toEqual({});
+  const manifest = JSON.parse(readFileSync(join(UI, 'src/locales/manifest.json'), 'utf8')) as Record<string, { offered?: boolean }>;
+  expect(Object.entries(manifest).filter(([, e]) => e.offered !== false).map(([tag]) => tag)).toEqual([]);
 });
 
 test('api_012 the languages tool says which node it needs', () => {
