@@ -14,6 +14,10 @@ import { gunzipSync } from 'node:zlib';
 import * as lib from '../../scripts/i18n-lib.mjs';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
+import { failOnPageErrors, listen } from './page-errors';
+
+// A page error on any page a test opens (`fresh` listens to each) fails the test.
+failOnPageErrors(test);
 
 const UI = resolve(import.meta.dirname, '../..');
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
@@ -103,8 +107,8 @@ const MARKERS = () => {
   ];
 };
 
-/** A fresh context (signed in unless `signedOut`), its page, and the problems the page reports (page errors and
- * console errors but a 401 or 403, as 1-ui.spec.ts; `allow` names others the test expects). */
+/** A fresh context (signed in unless `signedOut`), its page, and the problems the page reports: console errors but a
+ * 401 or 403, as 1-ui.spec.ts (`allow` names others the test expects). Its page errors fail the test (page-errors.ts). */
 async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number; allow?: RegExp; init?: () => void } = {}) {
   const context = await browser.newContext({
     baseURL: test.info().project.use.baseURL,
@@ -121,8 +125,8 @@ async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number;
     (q) => (q.request().method() === 'GET' ? q.fulfill({ json: { items: MARKERS(), truncated: false } }) : q.fallback()),
   );
   const page = await context.newPage();
+  listen(page);
   const problems: string[] = [];
-  page.on('pageerror', (e) => problems.push(`page error: ${e.message} (${page.url()}; ${(e.stack ?? '').split('\n').slice(1, 3).join(' | ').slice(0, 200)})`));
   page.on('console', (m) => {
     if (m.type() !== 'error' || /status of 40[13]/.test(m.text()) || o.allow?.test(m.text())) return;
     problems.push(`console: ${m.text()}`);
@@ -130,7 +134,7 @@ async function fresh(browser: Browser, o: { signedOut?: boolean; width?: number;
   return { context, page, problems };
 }
 const done = async (s: { context: BrowserContext; problems: string[] }) => {
-  expect(s.problems, 'no page errors or CSP violations').toEqual([]);
+  expect(s.problems, 'no console errors (CSP violations among them)').toEqual([]);
   await s.context.close();
 };
 
@@ -820,6 +824,7 @@ test('api_013 a tab left open neither removes nor replaces a newer pack', async 
   const s = await fresh(browser);
   await storePack(s.page, FR_TEXT, { name: 'older.json' });
   const b = await s.context.newPage();
+  listen(b);
   await b.goto('/#/');
   await expect(banner(b)).toContainText('Test language pack: older.json');
   const newer = await storePack(s.page, ALL_TEXT, { name: 'newer.json' });

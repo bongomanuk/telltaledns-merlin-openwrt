@@ -7,10 +7,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
+import { failOnPageErrors, listen } from './page-errors';
 
 const providers = (process.env.OIDC_E2E ?? '').split(',').filter(Boolean);
 test.skip(providers.length === 0, 'set OIDC_E2E=keycloak,authentik with the providers running');
 test.describe.configure({ mode: 'serial' });
+// A page error on a page a test listens to (the pages of the tests with a test language pack) fails the test.
+failOnPageErrors(test);
 
 const USERS = {
   alice: { pass: 'alice-password', role: 'admin' },
@@ -105,6 +108,7 @@ for (const id of providers) {
     // REQ: API-004, API-013 (ADR-190) — the page that leaves for the provider's sign-out is never also reloaded by
     // the pack's code: the provider's page is reached, and signing in again asks for the password.
     const page = await browser.newPage();
+    listen(page);
     await signIn(page, id, name, 'alice');
     await expect(page.getByRole('heading', { name: 'Query log' })).toBeVisible({ timeout: 20_000 });
     const who = (await (await page.request.get('/api/v1/auth/status')).json()).user.username as string;
@@ -147,6 +151,7 @@ for (const id of providers) {
       const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
       await context.addInitScript(NOTE_RESTORED);
       const page = await context.newPage();
+      listen(page);
       // Does this browser show a page of TelltaleDNS again from that cache?
       const probe = await restoresPages(page);
       console.log(`DVP_BFCACHE ${id} probe ${own.version()} ${note}${JSON.stringify(probe)}`);
