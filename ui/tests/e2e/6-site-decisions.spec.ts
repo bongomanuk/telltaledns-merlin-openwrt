@@ -184,3 +184,36 @@ test('doc_005 a link to a record on another part page goes on to the page that h
   await expect(page).toHaveURL(new RegExp(`/${last.name.replace('.', '\\.')}#${target}$`));
   await expect(page.locator(`#${target}`)).toHaveJSProperty('open', true);
 });
+
+// REQ: DOC-005 (ADR-136) — a decision named in a record's text links to the part page that holds it (an anchor when it is
+// on the same page), so the link works without JavaScript; only an old link from outside needs the forward above.
+test('doc_005 a decision named in a record links to the page that holds it, without JavaScript', async ({ browser }) => {
+  const holder = new Map(parts.flatMap((p) => p.records.map((r): [string, string] => [r.id, p.name])));
+  const wrong: string[] = [];
+  let across: { from: string; href: string } | undefined;
+  for (const p of parts) {
+    const html = readFileSync(join(OUT, p.name), 'utf8');
+    for (const [, page, id] of html.matchAll(/<a href="((?:decisions-\d+\.html)?)#(adr-\d{3})">ADR-\d{3}<\/a>/g)) {
+      if ((page || p.name) !== holder.get(id)) wrong.push(`${p.name}: ${page}#${id} (${holder.get(id)} holds it)`);
+      else if (page && !across) across = { from: p.name, href: `${page}#${id}` };
+    }
+  }
+  expect(wrong.length, `mentions that name the wrong page, for instance:\n${wrong.slice(0, 5).join('\n')}`).toBe(0);
+  expect(across, 'a record names a decision on another part page').toBeDefined();
+  if (!across) return;
+  // Without JavaScript: open the record that names it, and follow the link.
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  const nojs = await context.newPage();
+  nojs.on('console', (m) => {
+    if (m.type() === 'error') consoleErrors.push(`${nojs.url()}: ${m.text()}`);
+  });
+  await nojs.goto(pathToFileURL(join(OUT, across.from)).href);
+  const link = `a[href="${across.href}"]`;
+  const record = nojs.locator('#adr-list details.adr', { has: nojs.locator(link) }).first();
+  await record.locator('summary').click();
+  await record.locator(link).first().click();
+  const [file, id] = across.href.split('#');
+  await expect(nojs).toHaveURL(new RegExp(`/${file.replace('.', '\\.')}#${id}$`));
+  await expect(nojs.locator(`details#${id}`)).toHaveCount(1);
+  await context.close();
+});
