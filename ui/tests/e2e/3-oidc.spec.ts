@@ -58,6 +58,15 @@ function devpack(user: string, commit: string) {
   return { v: 1, ui, server: { commit }, user, loadedAt, expires: loadedAt + 7 * 86_400_000, name: 'fr.json', sha, tag: 'fr', dir: 'ltr', fails: 0, text };
 }
 
+/** REQ: API-013 (ADR-190) — the tests with a test language pack run with Keycloak only. What they test of the pack
+ * (the page that leaves for the provider is never also reloaded, the page after it is paused, Back) does not depend
+ * on the provider: the Keycloak run covers it end to end, and the versions of 9-devpack.spec.ts, whose provider is an
+ * address on this server, run everywhere. Two of them also check that the provider's own session is over after its
+ * sign-out: Keycloak's sign-out ends it here, and the sign-out of this setup's Authentik provider
+ * (`default-provider-invalidation-flow`, ../oidc/authentik-blueprint.yaml) does not. */
+const PACK_TESTS =
+  'the language pack tests run with Keycloak: the pack does not depend on the provider, the Keycloak run covers it end to end and 9-devpack.spec.ts runs everywhere; the sign-out of this Authentik setup does not end its own session';
+
 for (const id of providers) {
   const name = id === 'keycloak' ? 'Keycloak' : 'Authentik';
 
@@ -107,6 +116,7 @@ for (const id of providers) {
   test(`${id}: with a test language pack in use, signing out also signs out at the provider`, async ({ browser }) => {
     // REQ: API-004, API-013 (ADR-190) — the page that leaves for the provider's sign-out is never also reloaded by
     // the pack's code: the provider's page is reached, and signing in again asks for the password.
+    test.skip(id !== 'keycloak', PACK_TESTS);
     const page = await browser.newPage();
     listen(page);
     await signIn(page, id, name, 'alice');
@@ -143,6 +153,7 @@ for (const id of providers) {
   test(`${id}: with a test language pack in use, a session that ends while signing out still signs out at the provider`, async ({ browser }) => {
     // REQ: API-004, API-013 (ADR-190) — TelltaleDNS's answer to Sign out is held back for a second while a request
     // finds the session gone: nothing reloads meanwhile, and the page then leaves for the provider's sign-out.
+    test.skip(id !== 'keycloak', PACK_TESTS);
     const page = await browser.newPage();
     listen(page);
     await signIn(page, id, name, 'alice');
@@ -187,6 +198,7 @@ for (const id of providers) {
     // REQ: API-004, API-013 (ADR-190) — Sign out is clicked twice while TelltaleDNS's answer to the first waits a
     // second, and the provider's page is slow to come: the second click changes nothing, the page reaches the
     // provider's sign-out, and signing in again asks for the password.
+    test.skip(id !== 'keycloak', PACK_TESTS);
     const page = await browser.newPage();
     listen(page);
     await signIn(page, id, name, 'alice');
@@ -240,6 +252,7 @@ for (const id of providers) {
     // usual language with the pack paused. This test's browser keeps that cache, which the suite's browser turns off:
     // a full Chromium (DVP_FULL_CHROME, or the installed `chromium` channel), else the suite's own browser. A browser
     // that never shows a page again from that cache cannot exercise the fix, and the test says so by skipping.
+    test.skip(id !== 'keycloak', PACK_TESTS);
     const { browser: own, note } = await cachingBrowser(test.info().project.use.launchOptions ?? {}, process.env.DVP_FULL_CHROME);
     try {
       const context = await own.newContext({ baseURL: test.info().project.use.baseURL });
