@@ -1907,7 +1907,13 @@ test('api_012 pseudo locale leaves no literal text: settings, users, where passw
   await page.locator('form.add-user input[autocomplete="off"]').fill('dee');
   await page.locator('form.add-user input[type="password"]').fill('a long enough password');
   await page.locator('form.add-user select').selectOption('operator');
+  // The first add is over once its answer has come and the page has emptied the form for the next user: only then
+  // is the next add refused and the form filled again.
+  const added = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/users');
   await page.locator('form.add-user button.primary').click();
+  await added;
+  await expect(page.locator('form.add-user input[autocomplete="off"]')).toHaveValue('');
+  await expect(page.locator('form.add-user input[type="password"]')).toHaveValue('');
   refuse = true;
   await page.locator('form.add-user input[autocomplete="off"]').fill('eve');
   await page.locator('form.add-user input[type="password"]').fill('another long password');
