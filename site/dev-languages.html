@@ -236,7 +236,9 @@ i18n: 2 failure(s)</code></pre>
     <li><b>Also removed</b> when it could not be checked twice in a row. That is an error in the check itself, not a finding about your file.</li>
     <li><b>Also removed</b> when a page cannot be drawn with it (the page then loads once more without it).</li>
     <li><b>Removed by you</b> with <b class="ui">Remove</b> in the banner or <b class="ui">Remove and reload</b> on the card.</li>
-    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load). After you sign out, after your session ends, or after a sign-out at a sign-in provider, the page the browser loads is in your usual language, with the pack paused. The pack returns when you sign in again. A page you return to with Back reloads first. The sign-in page already on screen as the browser leaves for the provider may still show the pack. If the provider never replaces the page, it may show the pack until the next page load or sign-in.</li>
+    <li><b>Paused</b> on the sign-in, setup and two-factor screens, which stay in your usual language unless you choose <b class="ui">Show the test pack on this page</b> (one page load).</li>
+    <li><b>Signing out.</b> After you sign out, after your session ends, or after a sign-out at a sign-in provider (an outside service that signs you in, such as a company's single sign-on), the page the browser loads is in your usual language, with the pack paused. The pack returns when you sign in again.</li>
+    <li><b>Back and the provider.</b> A page you return to with Back reloads first. The sign-in page already on screen as the browser leaves for the provider may still show the pack. If the provider never replaces the page, it may show the pack until the next page load or sign-in.</li>
     <li><b>Real English:</b> put <code>?lang=en</code> after the address and before any <code>#</code>, for one page load: <code>https://dns.example/?lang=en#/settings</code>. Any <code>?lang=</code> pauses the pack for that load.</li>
   </ul>
   <h3>What to look at</h3>
@@ -244,7 +246,7 @@ i18n: 2 failure(s)</code></pre>
     <li><b>Long text.</b> Buttons, table headings and menus at a phone's width of about 360 px.</li>
     <li><b>Counts.</b> A page that shows 0, 1, 2, 5 or 21 of something: does each form read right?</li>
     <li><b>Right to left.</b> Not ready. The card says <q>The layout isn't ready for right-to-left languages yet.</q> for such a language, so judge the words, not the layout.</li>
-    <li><b>Text that is still English.</b> Open the UI with <code>?lang=en-XA</code>. Every text on the translation layer shows with accented letters and a few dots at the end, about a third longer, so <code>Holds {n}</code> reads <code>Ĥóļðš {n}···</code>. A text in plain English is not on the layer yet, and a translation cannot reach it: tell the maintainers in an issue. Some English is plain on purpose, so leave it. That is the test pack's own banner, confirmation and buttons, what the server says (error details and alert text), the in-app help, and names and values.</li>
+    <li><b>Text that is still English.</b> Open the UI with <code>?lang=en-XA</code>. Every text that goes through the translation layer (the code that looks each text up in the language pack) shows with accented letters and a few dots at the end, about a third longer, so <code>Holds {n}</code> reads <code>Ĥóļðš {n}···</code>. A text in plain English is not on the layer yet, and a translation cannot reach it: tell the maintainers in an issue. Some English is plain on purpose, so leave it. That is the test pack's own banner, confirmation and buttons, what the server says (error details and alert text), the in-app help, and names and values.</li>
   </ul>
   <p>A developer with a checkout has a second way. A language that is in the manifest is built into the UI with <code>"offered": false</code>. Then <code>?lang=&lt;tag&gt;</code> shows it for one page load, though it is not offered. <code>ui/README.md</code> has the commands to run the UI from the repository.</p>
 </section>
@@ -340,7 +342,7 @@ i18n: 2 failure(s)</code></pre>
   <h3>What the banner says</h3>
   <p>The dots stand for the file's name. The banner is always in English.</p>
   <ul>
-    <li><q>The test language pack … is paused on this page.</q> Nobody is signed in on this page (the sign-in, setup and two-factor screens), or it is a display page. Choose <b class="ui">Show the test pack on this page</b> to see the pack for one page load.</li>
+    <li><q>The test language pack … is paused on this page.</q> Nobody is signed in on this page (the sign-in, setup and two-factor screens), or it is a wall display page (the full-screen dashboard for a monitor). Choose <b class="ui">Show the test pack on this page</b> to see the pack for one page load.</li>
     <li><q>The test language pack … is paused: another user of this browser loaded it.</q> The pack belongs to the user who loaded it. Choose <b class="ui">Show the test pack on this page</b>, or sign in as that user.</li>
     <li><q>The test language pack … is paused for this page load: the address asks for a language.</q> Take <code>?lang=</code> out of the address.</li>
     <li><q>The test language pack … could not be checked, so this page is in your usual language. Reload to try again.</q> Choose <b class="ui">Reload</b>. The pack stays.</li>
