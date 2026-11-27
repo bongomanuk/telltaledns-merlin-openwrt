@@ -76,7 +76,7 @@
     <dt id="q-port53">The container exits at start with "Address already in use". What now?</dt>
     <dd>
       <p>Another program already listens on port 53. TelltaleDNS listens on every address by default (<code>0.0.0.0</code> and <code>[::]</code>), and on Linux a program that listens on port 53 on just one address of the machine is enough to block that. The error names the listener and the port, and says on the same line what to do: <code>telltale: Udp 0.0.0.0:53: Address already in use (os error 98); another program on this machine already uses port 53 …</code></p>
-      <p>See which program it is, on the machine itself: <code>sudo ss -lunp 'sport = :53'</code> for UDP and <code>sudo ss -ltnp 'sport = :53'</code> for TCP. The usual ones are systemd-resolved's stub listener on <code>127.0.0.53</code>, <code>dnsmasq</code> (including the one libvirt starts for its virtual machine network, often on <code>192.168.122.1</code>), another resolver or ad blocker, and the built-in DNS service of a NAS or router. Stop it if TelltaleDNS replaces it. To run beside it, listen on this machine's own address: put these in the <code>telltale.toml</code> the container mounts (the Compose bundle's file has them commented out), then start it again.</p>
+      <p>See which program it is, on the machine itself: <code>sudo ss -lunp 'sport = :53'</code> for UDP and <code>sudo ss -ltnp 'sport = :53'</code> for TCP. The usual ones are systemd-resolved's stub listener on <code>127.0.0.53</code>, <code>dnsmasq</code> (including the one libvirt starts for its virtual machine network, often on <code>192.168.122.1</code>), another resolver or ad blocker, and the built-in DNS service of a NAS or router. Stop it if TelltaleDNS replaces it. To run beside it with host networking (the Compose bundle) or a native install, listen on this machine's own address: put these in the <code>telltale.toml</code> that TelltaleDNS reads (the Compose bundle's file has them commented out), then start it again.</p>
 <pre><code>[[listen]]
 proto = "udp"
 addr = "192.168.1.2:53"   # this machine's LAN address
@@ -84,7 +84,8 @@ addr = "192.168.1.2:53"   # this machine's LAN address
 [[listen]]
 proto = "tcp"
 addr = "192.168.1.2:53"</code></pre>
-      <p>Only the listed addresses answer then. A device that reaches the machine on another of its addresses, such as a virtual machine network, gets no answer, so list every address that should answer. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#raspberry-pi-and-linux">Details</a>.</p>
+      <p>Only the listed addresses answer then. The machine itself on <code>127.0.0.1</code>, and a device that reaches the machine on another of its addresses, such as a virtual machine network, get no answer, so list every address that should answer. The address must exist when TelltaleDNS starts (a static address, or a DHCP reservation in your router).</p>
+      <p>With published ports (<code>docker run -p</code>) instead of host networking, that address doesn't exist inside the container: leave <code>[[listen]]</code> as it is and publish on the one address instead, <code>-p 192.168.1.2:53:53/udp -p 192.168.1.2:53:53/tcp</code>. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#raspberry-pi-and-linux">Details</a>.</p>
     </dd>
   </dl>
 </section>
