@@ -48,9 +48,22 @@ struct Zone {
     /// NFR-004 (ADR-188) — milliseconds the answers to CNAME questions, which only link-by-link
     /// validation asks, are held back, without holding up the other questions.
     link_lag_ms: AtomicU64,
+    /// DNS-011 — the denials of [`UNRELATED_DENIALS`] carry only another zone's unsigned SOA, in
+    /// place of their own zone's SOA and NSEC records.
+    unrelated_soa: AtomicBool,
     /// ADR-184 — the NSEC3 Opt-Out top-level domain `t.` and the zones below it.
     tld: Tld,
 }
+
+/// `dns_011_offline_denial_beside_an_unrelated_unsigned_soa_is_bogus`: questions for names in the
+/// signed zones (the root, `s.t.`), each with the unsigned zone (`u.`, `v.t.`) whose SOA alone
+/// its denial carries with `unrelated_soa`, and whether that is an NXDOMAIN (else a NODATA).
+const UNRELATED_DENIALS: [(&str, RecordType, &str, bool); 4] = [
+    ("a.", RecordType::AAAA, "u.", false),
+    ("zz-nope.", RecordType::A, "u.", true),
+    ("www.s.t.", RecordType::AAAA, "v.t.", false),
+    ("nope.s.t.", RecordType::A, "v.t.", true),
+];
 
 fn b64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -217,6 +230,7 @@ fn zone_with(proof_ttl: u32) -> Zone {
         forge: AtomicBool::new(false),
         lag_ms: AtomicU64::new(0),
         link_lag_ms: AtomicU64::new(0),
+        unrelated_soa: AtomicBool::new(false),
         tld,
     }
 }
@@ -1073,6 +1087,20 @@ fn plain_answer(z: &Zone, m: &mut Message, qn: &Name, qt: RecordType) {
     }
 }
 
+/// DNS-011 — with `unrelated_soa`, the denial of a question of [`UNRELATED_DENIALS`]: the other
+/// zone's unsigned SOA, and whether it is an NXDOMAIN.
+fn unrelated_denial(z: &Zone, qn: &Name, qt: RecordType) -> Option<(Vec<Record>, bool)> {
+    if !z.unrelated_soa.load(Ordering::Relaxed) {
+        return None;
+    }
+    let &(_, _, zone, nxdomain) = UNRELATED_DENIALS
+        .iter()
+        .find(|&&(name, t, _, _)| *qn == n(name) && t == qt)?;
+    let key = (n(zone), RecordType::SOA);
+    let soa = z.plain.get(&key).or_else(|| z.tld.plain.get(&key))?;
+    Some((soa.clone(), nxdomain))
+}
+
 /// The fake root server: answers from the zone (with signatures), NODATA or NXDOMAIN with the
 /// SOA and the NSEC records that prove it. Counts the questions it gets.
 async fn serve(z: Arc<Zone>, asked: Arc<AtomicUsize>) -> std::net::SocketAddr {
@@ -1122,6 +1150,11 @@ async fn serve(z: Arc<Zone>, asked: Arc<AtomicUsize>) -> std::net::SocketAddr {
                     ))
                 };
                 m.add_answers(vec![Record::from_rdata(qn.clone(), 300, data)]);
+            } else if let Some((soa, nxdomain)) = unrelated_denial(&z, &qn, qt) {
+                if nxdomain {
+                    m.metadata.response_code = ResponseCode::NXDomain;
+                }
+                m.add_authorities(soa);
             } else if n("t.").zone_of(&qn) && !(qn == n("t.") && qt == RecordType::DS) {
                 tld_answer(&z.tld, &mut m, &qn, qt);
             } else if in_plain(&qn, qt) {
@@ -1608,6 +1641,60 @@ async fn dns_011_offline_signed_delegation_stays_validated() {
         );
         flag.store(false, Ordering::Relaxed);
     }
+}
+
+/// REQ: DNS-011 (RFC 4035 §5.4) — a denial is proven by the records of the name's own zone. A
+/// negative answer for a name in a signed zone whose authority section holds only another zone's
+/// unsigned SOA, and nothing of the name's zone, is bogus, never insecure: `validate` answers it
+/// with SERVFAIL. NODATA and NXDOMAIN in the signed root, beside the SOA of `u.` (an
+/// unsigned zone the root delegates), and in the signed zone `s.t.`, beside the SOA of `v.t.` (an
+/// unsigned zone in `t.`). The genuine denials of the same questions are secure. The case checked
+/// by hand in pull request #106, with a stub upstream.
+#[tokio::test]
+async fn dns_011_offline_denial_beside_an_unrelated_unsigned_soa_is_bogus() {
+    let budget = Duration::from_secs(5);
+    let z = Arc::new(zone());
+    let (v, g, _, _, _dir) = setup_zone(true, Arc::clone(&z)).await;
+    warm_tld(&v, &g).await;
+    let ask = |name: &str, qtype: RecordType| question(name.trim_end_matches('.'), qtype.into());
+    for (name, qtype, _, nxdomain) in UNRELATED_DENIALS {
+        let r = v
+            .resolve(&g, ask(name, qtype), budget, true, false)
+            .await
+            .unwrap();
+        let code = if nxdomain {
+            telltale_proto::rcode::NXDOMAIN
+        } else {
+            telltale_proto::rcode::NOERROR
+        };
+        assert_eq!(
+            (r.verdict, rcode(&r.bytes)),
+            (Verdict::Secure, code),
+            "{name} {qtype}, its own zone's signed denial"
+        );
+    }
+    z.unrelated_soa.store(true, Ordering::Relaxed);
+    let (v, g, _, stats, _dir) = setup_zone(true, Arc::clone(&z)).await;
+    warm_tld(&v, &g).await;
+    let secure = stats.secure.load(Ordering::Relaxed);
+    // Compared at the end, so that a failure shows every question's verdict.
+    let (mut got, mut want) = (Vec::new(), Vec::new());
+    for (name, qtype, other, _) in UNRELATED_DENIALS {
+        for round in 1..=2 {
+            let r = v.resolve(&g, ask(name, qtype), budget, true, false).await;
+            let what =
+                format!("{name} {qtype} beside the unsigned SOA of {other} (question {round})");
+            got.push((what.clone(), r.map(|r| r.verdict).ok()));
+            want.push((what, Some(Verdict::Bogus)));
+        }
+    }
+    assert_eq!(got, want);
+    assert_eq!(
+        stats.insecure.load(Ordering::Relaxed),
+        0,
+        "never judged insecure"
+    );
+    assert_eq!(stats.secure.load(Ordering::Relaxed), secure, "nor secure");
 }
 
 /// The answer's records, as (owner, type), without signatures and denials.
