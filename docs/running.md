@@ -1807,8 +1807,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   In `permissive` mode each bogus answer is also logged at INFO with its name, type, and
   EDE code (`DNSSEC: bogus answer served (permissive mode)`), so a trial shows which names
   `validate` would refuse.
-- **Indeterminate** (validation couldn't finish, such as the validator's depth limit): the
-  answer is fetched again without validation and served without AD, in both modes.
+- **Indeterminate** (validation couldn't finish, such as the validator's depth limit, or an
+  answer that doesn't reach its question, below): served without AD, in both modes; when
+  validation left nothing to serve, the answer is fetched again without validation.
 - **Unsigned zones:** before refusing an answer, TelltaleDNS proves whether its zone is
   simply unsigned, and if so serves it as insecure. The proof is the parent's signed denial
   of the zone's DS, made only of records of the parent zone (or of an unsigned top-level
@@ -1844,6 +1845,13 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   validations at once, within the same deadline. A link that doesn't validate, or gets no
   answer in time, leaves the answer bogus, and that question isn't validated this way again
   for a minute (ADR-188).
+- **Answers that reach their question:** an answer with records is secure only when it holds
+  the asked type at the name, or at the end of its CNAME chain, or a signed proof that that
+  name has none (for a CNAME, DS or ANY question: a CNAME, a DS or CNAME, or any record at the
+  name); otherwise it's served as it came, without AD, counted as indeterminate, and kept 300 s
+  at most (its answer records' TTLs are lowered to 300 s; `[cache] min_ttl` above that, or
+  serving stale answers, can keep it longer), in both modes. When validating link by link, a
+  last link that holds neither leaves the answer bogus (ADR-195).
 - **Wildcard answers:** every wildcard answer in a zone signed with NSEC is checked against
   RFC 4035 §5.3.4 before it is served: the zone's signed NSEC must show that no closer name
   exists, otherwise the answer is bogus and handled as any bogus answer (the unsigned-zone
@@ -1854,7 +1862,10 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   that isn't verified (during a key or algorithm rollover) is served without AD, as elsewhere.
   The check reads only the answer itself, on cache misses, in both modes. Zones signed with
   NSEC3 are left to the validation library: the check is skipped only beside a verified NSEC3
-  record of the zone that signed the answer (ADR-188).
+  record of the zone that signed the answer (ADR-188). In every zone, an answer with a record
+  of another name made from a wildcard is validated link by link, each name for its own
+  question; in a zone signed with NSEC3, a wildcard's record set at the name needs the zone's
+  NSEC3 record covering its own next closer name, otherwise the answer is bogus (ADR-195).
 - **Before switching to `validate`:** run `permissive` for a while and read the log; only
   names that are really broken (like `dnssec-failed.org`) should show up.
 - **Non-existent names answered locally** (RFC 8198, `aggressive_nsec`, on by default): a validated "no such name" from a zone signed with NSEC proves a whole range of names absent. A later question inside a proven range is answered from it: NXDOMAIN (or NODATA for a missing type), signed, with AD, and without asking upstream. A typical win is a home network's stray queries for made-up top-level names (`printer.lan`, `wpad.home`), which the root zone's NSEC records cover. Only proofs that validated as secure are used, only for as long as their TTL and the zone's negative TTL allow, and never below a delegation. Zones signed with NSEC3 (hashed names) still ask upstream. Counted in `telltale_dnssec_synthesized_total`; `[dnssec] aggressive_nsec = false` turns it off.
