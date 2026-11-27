@@ -266,7 +266,7 @@ i18n: 2 failure(s)</code></pre>
     "since": "0.9.0"
   }
 }</code></pre>
-      <code>owners</code> are the GitHub names of the people who answer for the language, without the at-sign. <code>dir</code> is <code>ltr</code> or <code>rtl</code>, as the notes file says. <code>offered</code> stays <code>false</code> for a new language. <code>since</code> is a release version, which a maintainer settles.</li>
+      <code>owners</code> are the GitHub names of the people who answer for the language, without the at-sign. <code>dir</code> is <code>ltr</code> or <code>rtl</code>, as the notes file says. <code>offered</code> stays <code>false</code> for a new language. <code>since</code> is a release version such as <code>0.9.0</code>, which a maintainer settles. All four fields are required. The check reads the layout byte for byte: two spaces of indent, the keys of an entry in alphabetical order, one owner to a line, and the languages in alphabetical order.</li>
     <li class="step">Open the pull request with <code>ui/src/locales/&lt;tag&gt;.json</code> and the manifest entry, and nothing else.</li>
     <li class="step">In its description, say the language and that you read every text (a machine translation is a draft only). Add a back-translation of each sensitive message you changed.</li>
     <li class="step">Wait for the checks and for the review of the language's owner.</li>
