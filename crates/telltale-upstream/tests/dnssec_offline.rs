@@ -242,6 +242,7 @@ fn zone_with(proof_ttl: u32) -> Zone {
 /// - `u.t.` and `v.t.` are delegations without a DS and without an NSEC3 of their own: they lie
 ///   inside Opt-Out spans (`v.t.`'s is the apex record's own span).
 /// - `x.t.` is an ordinary name, so that the span covering `u.t.` isn't the apex's record.
+/// - `s.t.` delegates `steer.s.t.` without a DS, and `dns.s.t.` is a CNAME to it (issue #115).
 ///
 /// `u.t.`'s server answers like a parked domain's: every name has an SOA and NS of its own (the
 /// validation library judged its answers bogus up to hickory-net 0.26.3). `old.u.t.`'s address
@@ -276,6 +277,14 @@ struct Tld {
     hashed: BTreeMap<(Name, RecordType), Vec<Record>>,
     /// That chain: each record's hash and owner, in hash order.
     hashed_chain: Vec<(Vec<u8>, Name)>,
+    /// Issue #115 (`dns.nextdns.io`) — `s.t.`'s records for its unsigned child `steer.s.t.`, with
+    /// their signatures: `dns.s.t.`'s CNAME to it, and the NSEC owned by the delegation (`NS RRSIG
+    /// NSEC`, a delegation without a DS) whose next name is `steer\000.s.t.`, the name right after
+    /// it. They stand outside the zone's NSEC chain, as an online signer's records covering just
+    /// one name do: no test asks for a name that the chain's records around them cover.
+    steer_cut: BTreeMap<(Name, RecordType), Vec<Record>>,
+    /// `steer.s.t.`'s zone, unsigned: its SOA and address, at its apex.
+    steer: BTreeMap<(Name, RecordType), Vec<Record>>,
 }
 
 /// Ways to tamper with `s.t.`'s answers.
@@ -676,6 +685,33 @@ fn tld(proof_ttl: u32) -> Tld {
         ));
     }
     let mut child = signed(child_sets, &child_signer, 3600);
+    // Issue #115 — the unsigned child `steer.s.t.`, and a signed CNAME into it.
+    let steer = n("steer.s.t.");
+    let after_steer = Name::from_labels([&b"steer\0"[..], &b"s"[..], &b"t"[..]]).unwrap();
+    let steer_cut = signed(
+        vec![
+            (n("dns.s.t."), vec![RData::CNAME(CNAME(steer.clone()))]),
+            (
+                steer.clone(),
+                vec![RData::DNSSEC(DNSSECRData::NSEC(NSEC::new(
+                    after_steer,
+                    [RecordType::NS, RecordType::RRSIG, RecordType::NSEC],
+                )))],
+            ),
+        ],
+        &child_signer,
+        3600,
+    );
+    let mut steer_zone = BTreeMap::new();
+    for d in [
+        RData::SOA(soa_of("steer.s.t.")),
+        RData::A(A::new(192, 0, 2, 60)),
+    ] {
+        steer_zone.insert(
+            (steer.clone(), d.record_type()),
+            vec![Record::from_rdata(steer.clone(), 3600, d)],
+        );
+    }
     // `forged.s.t.`'s signature doesn't verify.
     for r in child
         .get_mut(&(n("forged.s.t."), RecordType::CNAME))
@@ -737,6 +773,8 @@ fn tld(proof_ttl: u32) -> Tld {
         second_signature,
         hashed,
         hashed_chain,
+        steer_cut,
+        steer: steer_zone,
     }
 }
 
@@ -921,6 +959,15 @@ fn child_answer(z: &Tld, m: &mut Message, qn: &Name, qt: RecordType) {
             name = n("www.s.t.");
             continue;
         }
+        if n("steer.s.t.").zone_of(&name)
+            || z.steer_cut.contains_key(&(name.clone(), RecordType::CNAME))
+        {
+            let Some(target) = steer_link(z, m, &name, qt) else {
+                return;
+            };
+            name = target;
+            continue;
+        }
         let next = child_link(z, m, &name, qt, tamper);
         match next {
             Some(_)
@@ -955,6 +1002,34 @@ fn child_answer(z: &Tld, m: &mut Message, qn: &Name, qt: RecordType) {
             Some(target) => name = target,
             None => return,
         }
+    }
+}
+
+/// Issue #115 — `dns.s.t.`, or a name at or below `steer.s.t.`: what `s.t.` and its unsigned child
+/// answer (`steer.s.t. DS` is the parent's question); the CNAME's target when that is to be
+/// followed.
+fn steer_link(z: &Tld, m: &mut Message, qn: &Name, qt: RecordType) -> Option<Name> {
+    let steer = n("steer.s.t.");
+    if *qn == steer && qt == RecordType::DS {
+        // The parent's denial: its SOA, and the NSEC owned by the delegation.
+        m.add_authorities(z.child[&(n("s.t."), RecordType::SOA)].clone());
+        m.add_authorities(z.steer_cut[&(steer, RecordType::NSEC)].clone());
+        return None;
+    }
+    if steer.zone_of(qn) {
+        steer_answer(z, m, qn, qt);
+        return None;
+    }
+    m.add_answers(z.steer_cut[&(qn.clone(), RecordType::CNAME)].clone());
+    (qt != RecordType::CNAME).then_some(steer)
+}
+
+/// Issue #115 — `steer.s.t.`'s server, like `steering.nextdns.io`'s: its SOA and address at its
+/// apex, unsigned; any other question gets an empty NOERROR answer, as that server answers an NS
+/// question (the validation library looks for zone cuts with NS questions).
+fn steer_answer(z: &Tld, m: &mut Message, qn: &Name, qt: RecordType) {
+    if let Some(rs) = z.steer.get(&(qn.clone(), qt)) {
+        m.add_answers(rs.clone());
     }
 }
 
@@ -2480,6 +2555,89 @@ async fn dns_011_offline_signed_cname_into_misjudged_unsigned_zone_is_insecure()
     assert!(!telltale_proto::Header::parse(&r.bytes).unwrap().flags.ad());
     assert_eq!(stats.bogus.load(Ordering::Relaxed), 0);
     assert_eq!(stats.secure.load(Ordering::Relaxed), secure);
+}
+
+/// REQ: DNS-011 (ADR-098, ADR-184, ADR-188; issue #115, `dns.nextdns.io`) — a signed CNAME in a zone
+/// signed with NSEC, into a delegation without a DS that the parent's NSEC owned by the delegation
+/// proves (`NS RRSIG NSEC`, its next name right after the delegation's), whose server answers its
+/// SOA and address unsigned and nothing else: `dns.s.t.` to `steer.s.t.`. `dns.s.t. A` is insecure:
+/// NOERROR without AD, the CNAME then the address. `dns.s.t. AAAA` (`steer.s.t.` has none) is served the
+/// same way, the CNAME only and without AD, and is judged indeterminate (ADR-195): the chain stops short
+/// of the asked type and the target's zone is unsigned, so nothing proves it either way. Nothing is
+/// judged bogus or secure.
+#[tokio::test]
+async fn dns_011_offline_signed_cname_into_unsigned_child_of_nsec_zone_is_insecure() {
+    let budget = Duration::from_secs(5);
+    let (v, g, _, stats, _dir) = setup(true).await;
+    warm_tld(&v, &g).await;
+    let secure = stats.secure.load(Ordering::Relaxed);
+    let (mut got, mut want) = (Vec::new(), Vec::new());
+    for (what, qtype, verdict, records) in [
+        (
+            "dns.s.t. A",
+            rtype::A,
+            Verdict::Insecure,
+            vec![
+                ("dns.s.t.", RecordType::CNAME),
+                ("steer.s.t.", RecordType::A),
+            ],
+        ),
+        (
+            "dns.s.t. AAAA",
+            rtype::AAAA,
+            Verdict::Indeterminate,
+            vec![("dns.s.t.", RecordType::CNAME)],
+        ),
+    ] {
+        let r = v
+            .resolve(&g, question("dns.s.t", qtype), budget, true, false)
+            .await;
+        got.push((what, r.ok().map(|r| (r.verdict, served(&r.bytes)))));
+        let records: Vec<(String, RecordType)> = records
+            .into_iter()
+            .map(|(owner, kind)| (owner.to_owned(), kind))
+            .collect();
+        want.push((
+            what,
+            Some((
+                verdict,
+                Some((telltale_proto::rcode::NOERROR, false, records)),
+            )),
+        ));
+    }
+    assert_eq!(got, want);
+    assert_eq!(stats.bogus.load(Ordering::Relaxed), 0, "never judged bogus");
+    assert_eq!(stats.secure.load(Ordering::Relaxed), secure, "nor secure");
+}
+
+/// REQ: DNS-011 (ADR-188; issue #115) — the test above holds through link-by-link validation. With
+/// every slot of it taken, `dns.s.t. A` stays bogus (EDE 6): the validation library's verdict on the
+/// whole answer, which the unsigned-zone proof of its owners doesn't correct (`dns.s.t.` is a name of
+/// the signed `s.t.`). With the slots free again, the same question is insecure.
+#[tokio::test]
+async fn dns_011_offline_signed_cname_into_unsigned_child_needs_link_by_link() {
+    let budget = Duration::from_secs(5);
+    let (v, g, _, _, _dir) = setup(true).await;
+    warm_tld(&v, &g).await;
+    let held = v.hold_link_slots(0);
+    assert!(!held.is_empty(), "link-by-link slots held");
+    let r = v
+        .resolve(&g, question("dns.s.t", rtype::A), budget, true, false)
+        .await;
+    drop(held);
+    let without_a_walk = r.ok().map(|r| (r.verdict, r.ede));
+    let r = v
+        .resolve(&g, question("dns.s.t", rtype::A), budget, true, false)
+        .await;
+    let walked = r.ok().map(|r| r.verdict);
+    assert_eq!(
+        (without_a_walk, walked),
+        (
+            Some((Verdict::Bogus, telltale_proto::ede::DNSSEC_BOGUS)),
+            Some(Verdict::Insecure)
+        ),
+        "dns.s.t. A, without and with link-by-link validation"
+    );
 }
 
 /// REQ: DNS-011 (RFC 4035 §5.3.4) — a wildcard's address replayed for an empty non-terminal
