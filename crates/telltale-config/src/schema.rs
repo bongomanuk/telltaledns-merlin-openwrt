@@ -561,10 +561,12 @@ pub struct Upstream {
     /// doesn't know. It doesn't fix a loop, it hides one: keep it on for any upstream that can
     /// send queries back to this node. `false` is refused on a `recursive://` upstream (which
     /// never sends the option) and toward this node, as far as the configuration tells: a
-    /// loopback or unspecified address, `localhost`, or a `[[listen]]` address, in the URL or in
-    /// `bootstrap`. Not written while it is on. Don't write this key until every node runs this
-    /// version: an older node refuses it in its own file, and in a shared configuration (where
-    /// only `false` is written).
+    /// loopback or unspecified address, `localhost` or a name under it, or a `[[listen]]`
+    /// address on any port, in the URL or in `bootstrap`. Validation reads no host, so it
+    /// doesn't see the machine's other addresses or names, a DNS stamp's address, or a resolver
+    /// that forwards back. Not written while it is on. Don't write this key until every node
+    /// runs this version: an older node refuses it in its own file, and in a shared
+    /// configuration (where only `false` is written) it stops converging.
     #[serde(default = "default_true", skip_serializing_if = "is_default_loop_tag")]
     pub loop_tag: bool,
     /// Free-form labels.
