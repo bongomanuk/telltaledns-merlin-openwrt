@@ -1227,6 +1227,13 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         crate::maintenance::now_ms(),
     ));
     let (own_files, files_unread) = files_at_start(&files, &cfg);
+    // REQ: API-002, API-010, CLU-003 (GitHub issue #113) — what the API's entries were merged
+    // onto (none while the files couldn't be read: the running configuration stands in for them).
+    let managed_base = if files_unread {
+        None
+    } else {
+        crate::replication::managed_base(&own_files).map(Arc::new)
+    };
     let sources = Arc::new(http::Sources {
         metrics: Arc::clone(&pipeline.metrics),
         cache: Arc::clone(&cache),
@@ -1248,6 +1255,7 @@ pub(crate) async fn serve(files: Vec<PathBuf>, cfg: Config) -> io::Result<()> {
         qlog: qlog_stats,
         config: ArcSwap::from_pointee(cfg.clone()),
         file_config: ArcSwap::from_pointee(own_files),
+        managed_base: ArcSwapOption::new(managed_base),
         files_unread: std::sync::atomic::AtomicBool::new(files_unread),
         config_files: files.clone(),
         update: Arc::new(std::sync::Mutex::new(crate::updates::initial(
@@ -1705,8 +1713,9 @@ async fn reload(
         .set_privacy(new.telemetry.qlog.privacy_level);
     config_marker(sources, current, &new);
     // REQ: OBS-010 (ADR-179) — the files before the configuration made from them, so whoever
-    // reads the new configuration also reads its files (the alert check compares the two).
-    sources.file_config.store(Arc::new(file));
+    // reads the new configuration also reads its files (the alert check compares the two); and
+    // (REQ: API-002, CLU-003) what the API's entries were merged onto, for the write checks.
+    sources.store_files(file);
     sources
         .files_unread
         .store(false, std::sync::atomic::Ordering::Release);
