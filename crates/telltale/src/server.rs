@@ -544,6 +544,16 @@ enum Stream {
 }
 
 impl Stream {
+    /// The address it's bound to (the port the OS chose, for port 0).
+    fn local_addr(&self) -> SocketAddr {
+        match self {
+            Self::Tcp(s, _) => s.local_addr(),
+            Self::Doh(s, _) => s.local_addr(),
+            Self::Doq(s, _) => s.local_addr(),
+            Self::Doh3(s, _) => s.local_addr(),
+        }
+    }
+
     async fn shutdown(self) {
         match self {
             Self::Tcp(s, watch) => {
@@ -628,14 +638,66 @@ pub(crate) fn watch_cert(store: Arc<CertStore>) -> JoinHandle<()> {
     })
 }
 
+/// REQ: OPS-004 — a listener that can't bind: `Udp 0.0.0.0:53: Address already in use (os error
+/// 98)`, as before (scripts and log searches match it), then on the same line what to do, when
+/// the cause is certain enough to say. `own_port`: this server holds that port itself (see
+/// `Listeners::holds_port_of`). Start-up and reload only, never the query path.
+fn bind_error(l: &Listener, e: &io::Error, own_port: bool) -> io::Error {
+    let kind = e.kind();
+    let msg = match bind_hint(l, kind, own_port) {
+        Some(hint) => format!("{:?} {}: {e}; {hint}", l.proto, l.addr),
+        None => format!("{:?} {}: {e}", l.proto, l.addr),
+    };
+    io::Error::new(kind, msg)
+}
+
+fn bind_hint(l: &Listener, kind: io::ErrorKind, own_port: bool) -> Option<String> {
+    let port = l.addr.port();
+    let docs = "see \"Port 53 already in use\" in docs/running.md";
+    match kind {
+        // On Linux a program listening on any one address of the machine blocks the wildcard
+        // address on that port (systemd-resolved's stub, a dnsmasq such as libvirt's, ...).
+        io::ErrorKind::AddrInUse if !own_port => {
+            let ss = if l.proto.is_tcp_based() {
+                "ss -ltnp"
+            } else {
+                "ss -lunp"
+            };
+            Some(if l.addr.ip().is_unspecified() {
+                let any = if l.addr.is_ipv4() { "0.0.0.0" } else { "[::]" };
+                format!(
+                    "another program on this machine already uses port {port} (for {any}, one that \
+                     listens on a single address of the machine is enough): {ss} 'sport = :{port}' \
+                     shows which; to run beside it, set [[listen]] to this machine's own address \
+                     ({docs})"
+                )
+            } else {
+                format!(
+                    "another program on this machine already uses port {port} on this address or \
+                     on all of them: {ss} 'sport = :{port}' shows which ({docs})"
+                )
+            })
+        }
+        // Plain UDP and TCP only: a TLS listener's refusal can come from its certificate files.
+        io::ErrorKind::PermissionDenied
+            if port < 1024 && matches!(l.proto, ListenProto::Udp | ListenProto::Tcp) =>
+        {
+            Some(format!(
+                "ports below 1024 need root or the CAP_NET_BIND_SERVICE capability, or the host \
+                 setting net.ipv4.ip_unprivileged_port_start at {port} or lower (see \"Container \
+                 image\" in docs/running.md)"
+            ))
+        }
+        _ => None,
+    }
+}
+
 impl Listeners {
     /// Makes the running set match `listen`: binds additions first, then closes removals, so a
     /// changed address never leaves a gap (`spec/08` §5). A stream listener whose settings
     /// changed on the same address is closed just before its replacement binds.
     async fn apply(&mut self, listen: &[Listener]) -> io::Result<()> {
         for l in listen {
-            let ctx =
-                |e: io::Error| io::Error::new(e.kind(), format!("{:?} {}: {e}", l.proto, l.addr));
             match l.proto {
                 ListenProto::Udp if !self.udp.iter().any(|(a, _)| *a == l.addr) => {
                     let listener = UdpListener::spawn(
@@ -643,7 +705,7 @@ impl Listeners {
                         &self.handler,
                         &self.rt,
                     )
-                    .map_err(ctx)?;
+                    .map_err(|e| bind_error(l, &e, self.holds_port_of(l)))?;
                     info!(addr = %listener.local_addr(), workers = self.workers, "listening (udp)");
                     self.udp.push((l.addr, listener));
                 }
@@ -665,7 +727,7 @@ impl Listeners {
                     }
                     let stream = self
                         .bind_stream(l, alt_svc(listen).as_deref())
-                        .map_err(ctx)?;
+                        .map_err(|e| bind_error(l, &e, self.holds_port_of(l)))?;
                     self.streams.push((l.clone(), stream));
                 }
                 ListenProto::Udp
@@ -696,6 +758,24 @@ impl Listeners {
             tokio::spawn(s.shutdown()); // drains its connections in the background
         }
         Ok(())
+    }
+
+    /// REQ: OPS-004 — whether one of this server's own listeners holds `l`'s port on the same
+    /// transport (UDP or TCP) and address family. `apply` binds additions before it closes
+    /// removals, so a reload that moves a listener between the wildcard address and one address
+    /// on the same port finds the port busy with its own listener: the hint about another
+    /// program would be wrong there. Start-up and reload only.
+    fn holds_port_of(&self, l: &Listener) -> bool {
+        let clash = |tcp: bool, a: SocketAddr| {
+            tcp == l.proto.is_tcp_based()
+                && a.port() == l.addr.port()
+                && a.is_ipv4() == l.addr.is_ipv4()
+        };
+        self.udp.iter().any(|(_, u)| clash(false, u.local_addr()))
+            || self
+                .streams
+                .iter()
+                .any(|(c, s)| clash(c.proto.is_tcp_based(), s.local_addr()))
     }
 
     fn bind_stream(&self, l: &Listener, alt_svc: Option<&str>) -> io::Result<Stream> {
@@ -2196,5 +2276,213 @@ mod tests {
                 ..setting_off.clone()
             }
         ));
+    }
+
+    /// The DNS listeners as `serve` makes them (one UDP worker here), on an open pipeline.
+    fn ops_listeners() -> Listeners {
+        let p = build_pipeline(
+            &Config::default(),
+            Arc::new(Cache::new(telltale_cache::CachePolicy::default())),
+            Arc::new(Router::default()),
+            Policy::open(),
+        );
+        Listeners {
+            udp: Vec::new(),
+            streams: Vec::new(),
+            workers: 1,
+            handler: Arc::new(Handler(p)),
+            rt: tokio::runtime::Handle::current(),
+        }
+    }
+
+    fn listener(proto: ListenProto, addr: SocketAddr) -> Listener {
+        Listener {
+            proto,
+            addr,
+            path: None,
+            tls: None,
+            proxy_protocol: false,
+            max_connections: None,
+            max_connections_per_address: None,
+        }
+    }
+
+    /// The error `apply` (start-up and reload) gives when `l` can't bind.
+    async fn bind_failure(ls: &mut Listeners, l: Listener) -> io::Error {
+        match ls.apply(std::slice::from_ref(&l)).await {
+            Ok(()) => panic!("{:?} {} bound", l.proto, l.addr),
+            Err(e) => e,
+        }
+    }
+
+    // REQ: OPS-004 — another program holds the port on one address of the machine (127.0.0.1, a
+    // port the OS picks), which on Linux is enough to block the wildcard address. Binding 0.0.0.0
+    // on that port through the server's own listener code fails with the old text, unchanged and
+    // first (scripts and log searches match it), then on the same line a hint that names the
+    // failed port, how to see who holds it, and `[[listen]]`. UDP and TCP.
+    #[tokio::test]
+    async fn ops_004_busy_port_error_says_what_to_do() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let cases = [
+            (
+                ListenProto::Udp,
+                udp.local_addr().unwrap().port(),
+                "ss -lunp",
+            ),
+            (
+                ListenProto::Tcp,
+                tcp.local_addr().unwrap().port(),
+                "ss -ltnp",
+            ),
+        ];
+        for (proto, port, ss) in cases {
+            let wild = SocketAddr::from(([0, 0, 0, 0], port));
+            // The OS's own words for it, from a plain socket on the same address: the old text.
+            let os = if proto == ListenProto::Udp {
+                std::net::UdpSocket::bind(wild).map(drop)
+            } else {
+                std::net::TcpListener::bind(wild).map(drop)
+            }
+            .unwrap_err();
+            assert_eq!(os.kind(), io::ErrorKind::AddrInUse, "{proto:?}: {os}");
+            let mut ls = ops_listeners();
+            let e = bind_failure(&mut ls, listener(proto, wild)).await;
+            assert_eq!(
+                e.kind(),
+                io::ErrorKind::AddrInUse,
+                "{proto:?}: the kind is kept"
+            );
+            let msg = e.to_string();
+            let old = format!("{proto:?} {wild}: {os}");
+            assert!(
+                msg.starts_with(&format!("{old}; ")),
+                "{proto:?}: the old text first, unchanged, then the hint: {msg}"
+            );
+            for want in [
+                format!("already uses port {port}"),
+                format!("{ss} 'sport = :{port}'"),
+                "[[listen]]".to_owned(),
+                "this machine's own address".to_owned(),
+                "\"Port 53 already in use\" in docs/running.md".to_owned(),
+            ] {
+                assert!(msg.contains(&want), "{proto:?}: no `{want}` in: {msg}");
+            }
+            assert!(!msg.contains('\n'), "{proto:?}: one line: {msg}");
+            assert!(ls.udp.is_empty() && ls.streams.is_empty());
+        }
+    }
+
+    // REQ: OPS-004 — a reload binds new listeners before it closes old ones, so moving a TCP
+    // listener from the wildcard address to one address on the same port finds the port held by
+    // this server's own listener. A hint there would blame another program and suggest the very
+    // change that failed: the message stays the old text, and the old listener keeps serving.
+    #[tokio::test]
+    async fn ops_004_busy_port_held_by_this_server_has_no_hint() {
+        let mut ls = ops_listeners();
+        ls.apply(&[listener(ListenProto::Tcp, "0.0.0.0:0".parse().unwrap())])
+            .await
+            .unwrap();
+        let port = match &ls.streams[..] {
+            [(_, Stream::Tcp(s, _))] => s.local_addr().port(),
+            _ => panic!("one TCP listener"),
+        };
+        let one = SocketAddr::from(([127, 0, 0, 1], port));
+        let os = std::net::TcpListener::bind(one).unwrap_err();
+        assert_eq!(os.kind(), io::ErrorKind::AddrInUse, "{os}");
+        let e = bind_failure(&mut ls, listener(ListenProto::Tcp, one)).await;
+        assert_eq!(e.kind(), io::ErrorKind::AddrInUse);
+        assert_eq!(e.to_string(), format!("Tcp {one}: {os}"));
+        assert_eq!(ls.streams.len(), 1, "the wildcard listener still serves");
+        for (_, s) in ls.streams.drain(..) {
+            s.shutdown().await;
+        }
+    }
+
+    // REQ: OPS-004 — any other failure keeps exactly the old text: a link-local IPv6 address
+    // without an interface (the OS refuses it on any machine), and a DoT listener whose
+    // certificate files don't exist (on port 853, below 1024, but nothing was bound).
+    #[tokio::test]
+    async fn ops_004_other_bind_errors_have_no_hint() {
+        let mut ls = ops_listeners();
+        let link_local: SocketAddr = "[fe80::1]:0".parse().unwrap();
+        let os = std::net::UdpSocket::bind(link_local).unwrap_err();
+        let e = bind_failure(&mut ls, listener(ListenProto::Udp, link_local)).await;
+        assert_ne!(e.kind(), io::ErrorKind::AddrInUse, "{e}");
+        assert_eq!(e.kind(), os.kind(), "{e}");
+        assert_eq!(e.to_string(), format!("Udp {link_local}: {os}"));
+
+        let mut dot = listener(ListenProto::Dot, "127.0.0.1:853".parse().unwrap());
+        dot.tls = Some(telltale_config::TlsFiles {
+            cert: "ops_004_no_such_dir/cert.pem".into(),
+            key: "ops_004_no_such_dir/key.pem".into(),
+        });
+        let msg = bind_failure(&mut ls, dot).await.to_string();
+        assert!(msg.starts_with("Dot 127.0.0.1:853: "), "{msg}");
+        for hint in [
+            "already uses port",
+            "ss -l",
+            "[[listen]]",
+            "CAP_NET_BIND_SERVICE",
+            "docs/running.md",
+        ] {
+            assert!(!msg.contains(hint), "`{hint}` in: {msg}");
+        }
+        assert!(ls.udp.is_empty() && ls.streams.is_empty());
+    }
+
+    // REQ: OPS-004 — each hint only where it is exact. A port below 1024 refused to plain UDP or
+    // TCP: the capability or the sysctl, with the port; not above 1023, and not for a TLS
+    // listener (its certificate files can be what was refused). A busy port: the `ss` line for
+    // the listener's transport and port; `[[listen]]` advice only for a wildcard address; none
+    // when this server holds the port itself. A real refusal can't be made deterministically (as
+    // root, or with the sysctl lowered, every port binds), so this calls what `apply` calls.
+    #[test]
+    fn ops_004_bind_hints_only_where_exact() {
+        let msg = |proto, addr: &str, kind: io::ErrorKind, own| {
+            let l = listener(proto, addr.parse().unwrap());
+            bind_error(&l, &io::Error::from(kind), own).to_string()
+        };
+        let denied = io::ErrorKind::PermissionDenied;
+        let busy = io::ErrorKind::AddrInUse;
+        for (proto, addr) in [
+            (ListenProto::Udp, "0.0.0.0:53"),
+            (ListenProto::Tcp, "[::]:53"),
+        ] {
+            let m = msg(proto, addr, denied, false);
+            let old = format!("{proto:?} {addr}: {}", io::Error::from(denied));
+            assert!(m.starts_with(&format!("{old}; ")), "{m}");
+            for want in [
+                "CAP_NET_BIND_SERVICE",
+                "net.ipv4.ip_unprivileged_port_start at 53 or lower",
+            ] {
+                assert!(m.contains(want), "no `{want}` in: {m}");
+            }
+        }
+        for (proto, addr, kind) in [
+            (ListenProto::Udp, "0.0.0.0:5353", denied),
+            (ListenProto::Dot, "0.0.0.0:853", denied),
+            (ListenProto::Doh, "[::]:443", denied),
+            (
+                ListenProto::Udp,
+                "192.0.2.1:53",
+                io::ErrorKind::AddrNotAvailable,
+            ),
+            (ListenProto::Tcp, "0.0.0.0:53", io::ErrorKind::Other),
+        ] {
+            let want = format!("{proto:?} {addr}: {}", io::Error::from(kind));
+            assert_eq!(msg(proto, addr, kind, false), want);
+        }
+        let m = msg(ListenProto::Udp, "192.168.1.5:53", busy, false);
+        assert!(m.contains("ss -lunp 'sport = :53'"), "{m}");
+        assert!(!m.contains("[[listen]]"), "already one address: {m}");
+        let m = msg(ListenProto::Doq, "[::]:853", busy, false);
+        for want in ["ss -lunp 'sport = :853'", "for [::]", "[[listen]]"] {
+            assert!(m.contains(want), "no `{want}` in: {m}");
+        }
+        let m = msg(ListenProto::Dot, "0.0.0.0:853", busy, false);
+        assert!(m.contains("ss -ltnp 'sport = :853'"), "{m}");
+        let m = msg(ListenProto::Tcp, "127.0.0.1:53", busy, true);
+        assert_eq!(m, format!("Tcp 127.0.0.1:53: {}", io::Error::from(busy)));
     }
 }
