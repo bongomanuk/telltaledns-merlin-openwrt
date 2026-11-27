@@ -154,6 +154,14 @@ impl DnsHandle for GroupHandle {
 /// A group's validating handle, and the last upstream that answered through it.
 type Checked = (DnssecDnsHandle<GroupHandle>, Arc<Mutex<(u16, u8)>>);
 
+/// REQ: DNS-011, NFR-001 (ADR-196) — the most record-set proofs the validation library keeps per
+/// upstream group. Its own default is 1,048,576, and an entry leaves only when the cache is full
+/// (an expired one is skipped, not removed), so without a bound the cache grows with every
+/// distinct record set validated; since hickory-net 0.26.4 an entry also holds a copy of its
+/// record set and signatures (about 1.6 KiB measured). 8,192 entries: about 13 MiB at most per
+/// group; the least recently used go first.
+const VALIDATION_CACHE_ENTRIES: usize = 8_192;
+
 /// Validates forwarded answers (one per pipeline state).
 pub struct Validator {
     anchors: Arc<TrustAnchors>,
@@ -175,6 +183,8 @@ pub struct Validator {
     /// REQ: DNS-011, NFR-004 (ADR-188) — bounds on link-by-link validation, apart from `proofs`
     /// (which the proofs its links need take from).
     links: ProofGate,
+    /// REQ: DNS-011, NFR-001 (ADR-196) — entries of each group's validation cache.
+    cache_entries: usize,
     pub stats: Arc<Stats>,
 }
 
@@ -202,6 +212,7 @@ impl Validator {
             insecure: Mutex::new(HashMap::new()),
             proofs: ProofGate::default(),
             links: ProofGate::with_slots(MAX_LINK_WALKS),
+            cache_entries: VALIDATION_CACHE_ENTRIES,
             stats,
         }
     }
@@ -259,6 +270,15 @@ impl Validator {
         self.links.hold(leave)
     }
 
+    /// Test support (`tests/`): each group's validation cache keeps at most `entries` record-set
+    /// proofs, in place of `VALIDATION_CACHE_ENTRIES` (ADR-196). Set before the first question.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_validation_cache_entries(mut self, entries: usize) -> Self {
+        self.cache_entries = entries;
+        self
+    }
+
     /// Whether `name` (presentation form) is validated: not under a negative trust anchor.
     pub fn covers(&self, name: &str) -> bool {
         let n = name.trim_end_matches('.').to_ascii_lowercase();
@@ -287,7 +307,9 @@ impl Validator {
                     last: Arc::clone(&last),
                 };
                 (
-                    DnssecDnsHandle::with_trust_anchor(inner, Arc::clone(&self.anchors)),
+                    // REQ: DNS-011, NFR-001 (ADR-196) — a bounded validation cache.
+                    DnssecDnsHandle::with_trust_anchor(inner, Arc::clone(&self.anchors))
+                        .validation_cache_size(self.cache_entries),
                     last,
                 )
             })

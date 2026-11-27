@@ -1743,6 +1743,57 @@ async fn dns_011_offline_unsigned_zone_denials_stay_insecure() {
     assert_eq!(stats.bogus.load(Ordering::Relaxed), 0, "never judged bogus");
 }
 
+/// REQ: DNS-011, NFR-001 (ADR-196) — each upstream group's validation cache is bounded. Signed
+/// names (wildcard answers in `s.t.`, about two cache entries each) asked twice in turn: while
+/// their proofs fit, the second round costs one upstream question per name, the name's own; with
+/// more names than the cache holds, every name is validated from scratch again and its zone's
+/// keys are asked for again. The built-in bound holds the same names.
+#[tokio::test]
+async fn dns_011_offline_validation_cache_is_bounded() {
+    /// The upstream questions of each round, with a cache of `entries` (`None`: the built-in
+    /// bound).
+    async fn rounds(entries: Option<usize>, names: usize) -> [usize; 2] {
+        let (v, g, asked, _, _dir) = setup(true).await;
+        let v = v.with_aggressive_nsec(false);
+        let v = match entries {
+            Some(n) => v.with_validation_cache_entries(n),
+            None => v,
+        };
+        warm_tld(&v, &g).await;
+        let mut out = [0; 2];
+        for round in &mut out {
+            let before = asked.load(Ordering::Relaxed);
+            for i in 0..names {
+                let r = v
+                    .resolve(
+                        &g,
+                        question(&format!("c{i}.w.s.t"), rtype::A),
+                        Duration::from_secs(5),
+                        true,
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(r.verdict, Verdict::Secure, "c{i}.w.s.t. A");
+            }
+            *round = asked.load(Ordering::Relaxed) - before;
+        }
+        out
+    }
+    let [_, again] = rounds(Some(64), 4).await;
+    assert_eq!(
+        again, 4,
+        "4 names, a cache of 64 entries: their own questions only"
+    );
+    let [first, again] = rounds(Some(64), 100).await;
+    assert!(
+        again > 100,
+        "100 names, a cache of 64 entries: validated again ({again} questions, {first} the first time)"
+    );
+    let [_, again] = rounds(None, 100).await;
+    assert_eq!(again, 100, "100 names fit the built-in bound");
+}
+
 /// The answer's records, as (owner, type), without signatures and denials.
 fn answered(bytes: &[u8]) -> Vec<(String, RecordType)> {
     Message::from_vec(bytes)

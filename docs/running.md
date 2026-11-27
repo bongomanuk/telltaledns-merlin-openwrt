@@ -1830,6 +1830,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   at most 8 proofs run at once, and a name that couldn't be proven isn't tried again for a
   minute: when it can't be proven, the answer stays bogus (or, with no answer at all, stale
   or SERVFAIL as for any upstream failure).
+- **Memory:** each upstream group's validation cache keeps at most 8,192 record-set proofs,
+  about 13 MiB at most; the least recently used go first (ADR-196). A record set validated
+  again while its proof is still kept costs no key lookups.
 - **Denials behind a CNAME:** the validation library checks a "no such record" or "no such
   name" proof against the name that was asked, but after a CNAME the proof is about the chain's
   last name (`www.paypal.com AAAA`). Before refusing such an answer, TelltaleDNS validates it
