@@ -98,7 +98,24 @@ docker compose exec telltale telltale auth setup-token     # then open http://<h
 ```
 The container uses the host network, a read-only root filesystem, and only `NET_BIND_SERVICE`, as root inside the container by default. To run it as the image's unprivileged user, set `net.ipv4.ip_unprivileged_port_start=53` on the host (`echo net.ipv4.ip_unprivileged_port_start=53 | sudo tee /etc/sysctl.d/50-telltale.conf && sudo sysctl --system`) and switch `user:` in `compose.yaml`. Updates: `docker compose pull && docker compose up -d`. Reload the config without a restart: `docker compose kill -s HUP`.
 
-**Port 53 already in use:** on Ubuntu and some Debian setups, systemd-resolved's stub listener holds `127.0.0.53:53`. `install.sh` turns it off with the recommended settings of a new install in a terminal, asks in the walk-through (step 5), and asks `[Y/n]` on a re-run or with `--yes` in a terminal; without a terminal it leaves it as it is, unless `--interactive` feeds the answers of a new install; `--disable-resolved-stub` turns it off without asking (the walk-through still asks, and its answer wins). The machine then resolves through TelltaleDNS. After turning it off the installer waits up to 15 seconds for port 53 to be free before it starts the service; if something still holds it, the installer prints what (the `ss` line, with the process) and the next step; for Compose, add `DNSStubListener=no` under `[Resolve]` in `/etc/systemd/resolved.conf.d/telltale.conf` and `sudo systemctl restart systemd-resolved`. Alternatively listen on the LAN address only with `[[listen]]`. Pi-hole or another resolver on the same machine must be stopped first.
+**Port 53 already in use:** the default listeners are on `0.0.0.0` and `[::]`, and on Linux a program that listens on port 53 on any one address of the machine is enough to block them. The start then stops with, for example, `telltale: Udp 0.0.0.0:53: Address already in use (os error 98)`, followed on the same line by what to do. To see which program holds the port (`sudo` shows the processes of every user):
+```sh
+sudo ss -lunp 'sport = :53'    # UDP
+sudo ss -ltnp 'sport = :53'    # TCP
+```
+The usual ones are systemd-resolved's stub listener on `127.0.0.53` (below), `dnsmasq` (including the one libvirt starts for its virtual machine network, on the bridge's address, often `192.168.122.1` on `virbr0`), another resolver or ad blocker, and the built-in DNS service of a NAS or router. Stop the program if TelltaleDNS replaces it. To run beside it, listen on this machine's own address instead of on every address:
+```toml
+[[listen]]
+proto = "udp"
+addr = "192.168.1.2:53"   # this machine's LAN address
+
+[[listen]]
+proto = "tcp"
+addr = "192.168.1.2:53"
+```
+With Docker Compose this goes into the bundle's `telltale.toml`, which `compose.yaml` mounts as `/etc/telltale/telltale.toml` and which has this example commented out. With `[[listen]]` set, only the listed addresses answer: a device that reaches the machine on another of its addresses (a second network, a VPN, a virtual machine network) gets no answer, so list every address that should answer, IPv6 ones included. A reload applies listener changes, binding the new listeners before it closes the old ones; a TCP listener that moves between the wildcard address and one address on the same port therefore needs a restart, because the old listener still holds the port. After a failed start, a restart is the simplest way anyway (`sudo systemctl restart telltale`, `docker compose restart`).
+
+On Ubuntu and some Debian setups, systemd-resolved's stub listener holds `127.0.0.53:53`. `install.sh` turns it off with the recommended settings of a new install in a terminal, asks in the walk-through (step 5), and asks `[Y/n]` on a re-run or with `--yes` in a terminal; without a terminal it leaves it as it is, unless `--interactive` feeds the answers of a new install; `--disable-resolved-stub` turns it off without asking (the walk-through still asks, and its answer wins). The machine then resolves through TelltaleDNS. After turning it off the installer waits up to 15 seconds for port 53 to be free before it starts the service; if something still holds it, the installer prints what (the `ss` line, with the process) and the next step; for Compose, add `DNSStubListener=no` under `[Resolve]` in `/etc/systemd/resolved.conf.d/telltale.conf` and `sudo systemctl restart systemd-resolved`.
 
 **Small Pis and SD cards:** the query log writes continuously; keep `[telemetry.qlog] retention_days` short (the starter config uses 7) or put `/var/lib/telltale` on a USB SSD. On a Pi Zero 2 W (512 MB) also set `[node] workers = 2` and `[cache] max_bytes = "16MiB"`, and prefer smaller blocklists.
 
@@ -3773,7 +3790,7 @@ Keep the `head` hash somewhere else from time to time: a later `verify` with a d
 ## Reload without restarting
 Edit the config file, then send `SIGHUP` (`kill -HUP <pid>`, or `docker kill -s HUP telltale`). A `SIGHUP` sent while the node is still starting is kept, and the reload runs once it is up:
 - The whole config is validated first. If anything is wrong, the errors are logged and the **previous configuration keeps serving**.
-- Applied immediately, with no dropped queries: upstreams, groups, routes, local records and hosts files, `[access]`, `[ratelimit]`, `[special]`, and `[[listen]]` (new listeners are bound before removed ones are closed).
+- Applied immediately, with no dropped queries: upstreams, groups, routes, local records and hosts files, `[access]`, `[ratelimit]`, `[special]`, and `[[listen]]` (new listeners are bound before removed ones are closed, so a TCP listener that moves between the wildcard address and one address on the same port needs a restart; see "Port 53 already in use").
 - Applied at the next restart (a warning names them): `[cache]`, `[telemetry]`, `[node]`. The cache is kept across reloads, so warm answers aren't lost.
 - Upstream health starts fresh after a reload and is re-learned within a few queries.
 
