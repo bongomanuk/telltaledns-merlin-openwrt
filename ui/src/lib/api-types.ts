@@ -2102,9 +2102,9 @@ export interface paths {
          * @description Server-Sent Events, newest as they happen: `event: query` carries a `QueryRow` (same
          *     fields as GET /queries), `event: dropped` a `TailDropped` when matching queries were
          *     skipped (over `rate`, or this client fell behind). A comment comes as soon as the stream
-         *     opens, so a browser reports it open at once, and every 15 s after to keep the connection
-         *     open. Filters, and their `…Not` forms (`status=blocked&statusNot=true`), are applied on
-         *     the server. In a browser:
+         *     opens, so a browser reports it open at once, and again after 15 s without an event, to
+         *     keep the connection open. Filters, and their `…Not` forms (`status=blocked&statusNot=true`),
+         *     are applied on the server. In a browser:
          *     `new EventSource('/api/v1/queries/stream?status=blocked')` (the session cookie signs it
          *     in). Honors the query-log privacy level; at most 16 streams per node.
          */
