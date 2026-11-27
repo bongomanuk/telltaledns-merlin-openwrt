@@ -3,7 +3,7 @@
 //! every query to an upstream with `loop_tag = false`. Each upstream here is a UDP mock on
 //! 127.0.0.1 that records the queries it is sent.
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -57,14 +57,42 @@ async fn mock() -> (SocketAddr, UnboundedReceiver<Vec<u8>>) {
     (addr, rx)
 }
 
-fn router(toml: &str) -> Router {
-    let cfg = telltale_config::Loader::new()
+/// The next query a mock received, within a bounded wait: a test whose query never leaves fails
+/// instead of hanging.
+async fn next(rx: &mut UnboundedReceiver<Vec<u8>>) -> Vec<u8> {
+    tokio::time::timeout(WAIT, rx.recv())
+        .await
+        .expect("the mock received a query in time")
+        .unwrap()
+}
+
+fn load(toml: &str) -> telltale_config::Config {
+    telltale_config::Loader::new()
         .toml_str("t.toml", toml)
         .env(Vec::<(String, String)>::new())
         .load()
         .map_err(|e| format!("{e:?}"))
         .unwrap()
-        .config;
+        .config
+}
+
+fn router(toml: &str) -> Router {
+    Router::from_config(&load(toml)).unwrap()
+}
+
+/// A router from `toml` with the named upstreams sent to `at` (a mock) once the configuration
+/// is loaded and checked: validation refuses `loop_tag = false` toward a loopback address
+/// (`ups_009_loop_tag_off_is_refused_toward_this_node`), and the mocks listen on loopback.
+fn router_at(toml: &str, at: &[(&str, SocketAddr)]) -> Router {
+    let mut cfg = load(toml);
+    for (name, addr) in at {
+        let u = cfg
+            .upstream
+            .iter_mut()
+            .find(|u| u.name.as_str() == *name)
+            .unwrap();
+        u.url = telltale_config::SafeString::new(format!("udp://{addr}")).unwrap();
+    }
     Router::from_config(&cfg).unwrap()
 }
 
@@ -103,35 +131,41 @@ async fn ups_009_loop_tag_false_leaves_the_option_out() {
     let (plain_at, mut plain) = mock().await;
     let (ecs_at, mut ecs) = mock().await;
     let (tagged_at, mut tagged) = mock().await;
-    let r = router(&format!(
+    // Loaded with documentation addresses (TEST-NET-2), then sent to the mocks.
+    let r = router_at(
         r#"[[upstream]]
 name = "plain"
-url = "udp://{plain_at}"
+url = "udp://198.51.100.1"
 loop_tag = false
 
 [[upstream]]
 name = "plain-ecs"
-url = "udp://{ecs_at}"
+url = "udp://198.51.100.2"
 loop_tag = false
 ecs = "203.0.113.0/24"
 
 [[upstream]]
 name = "tagged"
-url = "udp://{tagged_at}"
+url = "udp://198.51.100.3"
 
 [[upstream_group]]
 name = "default"
 members = ["plain", "plain-ecs", "tagged"]
-"#
-    ));
+"#,
+        &[
+            ("plain", plain_at),
+            ("plain-ecs", ecs_at),
+            ("tagged", tagged_at),
+        ],
+    );
 
     let up = upstream(&r, "plain");
     up.exchange(&question("a.example"), WAIT).await.unwrap();
-    let o = options(&plain.recv().await.unwrap());
+    let o = options(&next(&mut plain).await);
     assert!(o.is_empty(), "a query carries no option: {o:?}");
     // The health check's question (the root's NS) goes the same way, whatever its outcome.
     up.health_check().await;
-    let o = options(&plain.recv().await.unwrap());
+    let o = options(&next(&mut plain).await);
     assert!(o.is_empty(), "a health check carries no option: {o:?}");
 
     upstream(&r, "plain-ecs")
@@ -140,7 +174,7 @@ members = ["plain", "plain-ecs", "tagged"]
         .unwrap();
     // Family 1, source /24, scope 0, and the subnet's three bytes.
     assert_eq!(
-        options(&ecs.recv().await.unwrap()),
+        options(&next(&mut ecs).await),
         [(ECS, vec![0, 1, 24, 0, 203, 0, 113])],
         "the subnet alone"
     );
@@ -149,7 +183,7 @@ members = ["plain", "plain-ecs", "tagged"]
         .exchange(&question("a.example"), WAIT)
         .await
         .unwrap();
-    assert_eq!(options(&tagged.recv().await.unwrap()), [our_tag()]);
+    assert_eq!(options(&next(&mut tagged).await), [our_tag()]);
 }
 
 /// REQ: UPS-009 (ADR-192) — the switch is on by default: an upstream from the configuration that
@@ -164,10 +198,10 @@ async fn ups_009_loop_tag_is_on_by_default() {
     ));
     let up = upstream(&r, "u");
     up.exchange(&question("a.example"), WAIT).await.unwrap();
-    assert_eq!(options(&seen.recv().await.unwrap()), [our_tag()], "a query");
+    assert_eq!(options(&next(&mut seen).await), [our_tag()], "a query");
     up.health_check().await;
     assert_eq!(
-        options(&seen.recv().await.unwrap()),
+        options(&next(&mut seen).await),
         [our_tag()],
         "a health check"
     );
@@ -176,7 +210,7 @@ async fn ups_009_loop_tag_is_on_by_default() {
     let code = Upstream::new(2, "code", ep, Duration::from_millis(400), 1).unwrap();
     code.exchange(&question("b.example"), WAIT).await.unwrap();
     assert_eq!(
-        options(&seen.recv().await.unwrap()),
+        options(&next(&mut seen).await),
         [our_tag()],
         "built in code"
     );
@@ -242,7 +276,7 @@ members = ["u", "with-ecs"]
         .await
         .unwrap();
     assert_eq!(
-        &seen.recv().await.unwrap()[2..],
+        &next(&mut seen).await[2..],
         GOLDEN,
         "from the configuration"
     );
@@ -251,7 +285,7 @@ members = ["u", "with-ecs"]
     code.exchange(&question("golden.example"), WAIT)
         .await
         .unwrap();
-    assert_eq!(&seen.recv().await.unwrap()[2..], GOLDEN, "built in code");
+    assert_eq!(&next(&mut seen).await[2..], GOLDEN, "built in code");
 
     // With an ECS subnet: the tag, then the subnet (option 8, length 7), in one OPT record.
     let mut golden_ecs = GOLDEN.to_vec();
@@ -262,7 +296,7 @@ members = ["u", "with-ecs"]
         .await
         .unwrap();
     assert_eq!(
-        &ecs_seen.recv().await.unwrap()[2..],
+        &next(&mut ecs_seen).await[2..],
         golden_ecs.as_slice(),
         "with an ECS subnet"
     );

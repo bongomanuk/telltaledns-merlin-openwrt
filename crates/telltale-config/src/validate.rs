@@ -1394,6 +1394,80 @@ fn relay(u: &crate::schema::Upstream, scheme: &str, p: &str, r: &mut Report<'_>)
     }
 }
 
+/// REQ: UPS-009 (ADR-192) — why `ip` is this node, as far as the configuration can tell: a
+/// loopback or unspecified address, or one a `[[listen]]` entry uses. The machine's other
+/// addresses aren't in the configuration, and validation doesn't read them from the host.
+fn this_node(cfg: &Config, ip: std::net::IpAddr) -> Option<&'static str> {
+    let ip = ip.to_canonical();
+    if ip.is_loopback() {
+        Some("a loopback address")
+    } else if ip.is_unspecified() {
+        Some("the unspecified address")
+    } else if cfg.listen.iter().any(|l| l.addr.ip().to_canonical() == ip) {
+        Some("an address a [[listen]] entry uses")
+    } else {
+        None
+    }
+}
+
+/// The host of an upstream URL's `host[:port][/path]` part, as written (without brackets).
+fn url_host(rest: &str) -> &str {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if let Some(v6) = authority.strip_prefix('[') {
+        return v6.split(']').next().unwrap_or_default();
+    }
+    match authority.split_once(':') {
+        Some((host, port)) if !port.contains(':') => host,
+        _ => authority,
+    }
+}
+
+/// REQ: UPS-009 (ADR-192) — `loop_tag = false` only where it does something, and never toward
+/// this node: there it doesn't fix a loop, it hides it, and the queries go round. Refused on a
+/// `recursive://` upstream (it asks authoritative servers without the option either way), and
+/// when the URL's host or a `bootstrap` server is this node as far as the configuration can
+/// tell ([`this_node`], or the name `localhost`). A host name other than `localhost`, a DNS
+/// stamp's address, the machine's other addresses, and a resolver that forwards back to this
+/// node can't be known here.
+fn loop_tag(cfg: &Config, u: &crate::schema::Upstream, scheme: &str, p: &str, r: &mut Report<'_>) {
+    if u.loop_tag {
+        return;
+    }
+    if scheme == "recursive" {
+        r.err(
+            format!("{p}.loop_tag"),
+            "only for upstreams that forward: a recursive:// upstream never sends the option",
+        );
+        return;
+    }
+    let mut why = None;
+    if matches!(scheme, "udp" | "tcp" | "tls" | "https" | "h3" | "quic") {
+        let host = url_host(&u.url.as_str()[scheme.len() + 3..]);
+        let name = host.trim_end_matches('.').to_ascii_lowercase();
+        why = if name == "localhost" || name.ends_with(".localhost") {
+            Some(format!("the url's host `{host}` is this node (localhost)"))
+        } else {
+            host.parse()
+                .ok()
+                .and_then(|ip| this_node(cfg, ip))
+                .map(|w| format!("the url's host `{host}` is this node ({w})"))
+        };
+    }
+    if why.is_none() {
+        why = u.bootstrap.iter().find_map(|ip| {
+            this_node(cfg, *ip).map(|w| format!("the bootstrap server `{ip}` is this node ({w})"))
+        });
+    }
+    if let Some(why) = why {
+        r.err(
+            format!("{p}.loop_tag"),
+            format!(
+                "can't be false toward this node: {why}, and without the option its queries would come back and go round undetected (point the upstream at another resolver, or leave loop_tag on)"
+            ),
+        );
+    }
+}
+
 /// Validates upstreams and returns the set of their names.
 fn upstreams<'c>(cfg: &'c Config, r: &mut Report<'_>) -> HashSet<&'c str> {
     let mut names = HashSet::new();
@@ -1452,6 +1526,8 @@ fn upstreams<'c>(cfg: &'c Config, r: &mut Report<'_>) -> HashSet<&'c str> {
                     r.err(format!("{p}.proxy"), "only for tcp://, tls://, and https:// upstreams, or udp:// through a socks5:// proxy (use tcp:// with an HTTP proxy or Tor)");
                 }
                 relay(u, s, &p, r);
+                // REQ: UPS-009 (ADR-192)
+                loop_tag(cfg, u, s, &p, r);
                 // REQ: DNS-012 (T7.15)
                 if s != "recursive" && u.recursive != crate::schema::RecursiveConfig::default() {
                     r.err(

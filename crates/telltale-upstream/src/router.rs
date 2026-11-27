@@ -651,19 +651,22 @@ members = ["plain", "tagged"]
                 let _ = s.send_to(&out[..len], from).await;
             }
         });
+        // A bounded wait for each recorded query: a lookup that never leaves fails, not hangs.
+        let mut next = async || {
+            tokio::time::timeout(Duration::from_secs(2), seen.recv())
+                .await
+                .expect("the bootstrap server received a query in time")
+                .unwrap()
+        };
         let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
         let plain = Bootstrap::new(vec![server]).with_loop_tag(false);
         assert_eq!(plain.resolve("plain.example").await.unwrap(), [ip]);
-        assert_eq!(seen.recv().await.unwrap(), None, "the A lookup, untagged");
-        assert_eq!(
-            seen.recv().await.unwrap(),
-            None,
-            "the AAAA lookup, untagged"
-        );
+        assert_eq!(next().await, None, "the A lookup, untagged");
+        assert_eq!(next().await, None, "the AAAA lookup, untagged");
         let tagged = Bootstrap::new(vec![server]);
         assert_eq!(tagged.resolve("tagged.example").await.unwrap(), [ip]);
         let ours = Some(0x5EED_u64.to_be_bytes().to_vec());
-        assert_eq!(seen.recv().await.unwrap(), ours, "the A lookup, tagged");
-        assert_eq!(seen.recv().await.unwrap(), ours, "the AAAA lookup, tagged");
+        assert_eq!(next().await, ours, "the A lookup, tagged");
+        assert_eq!(next().await, ours, "the AAAA lookup, tagged");
     }
 }

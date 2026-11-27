@@ -1,5 +1,7 @@
 //! OPS-005 acceptance tests: unknown keys error with path; env overrides apply.
 
+use std::fmt::Write as _;
+
 use telltale_config::{ByteSize, Config, ConfigError, Loader, Role, Strategy, TelemetryMode};
 
 const EXAMPLE: &str = include_str!("../../../docs/examples/telltale.toml");
@@ -1329,6 +1331,142 @@ stub_servers = ["10.0.0.53"]
     ] {
         assert!(p.contains(&want), "{want} missing from {p:?}");
     }
+}
+
+/// The listeners of the `loop_tag` tests: an IPv4 and an IPv6 address of this node.
+const LOOP_TAG_LISTENERS: &str = "[[listen]]
+proto = \"udp\"
+addr = \"192.168.1.5:53\"
+[[listen]]
+proto = \"tcp\"
+addr = \"[fd00::5]:5300\"
+";
+
+/// REQ: UPS-009 (ADR-192) — `loop_tag = false` is refused toward this node, as far as the
+/// configuration can tell: a loopback or unspecified address (IPv4, IPv6, or IPv4-mapped), the
+/// name `localhost`, or an address a `[[listen]]` entry uses (on any port), in the URL or among
+/// the `bootstrap` servers. Accepted: a public address, a LAN address no listener uses, a host
+/// name with public bootstrap servers, and loopback with the switch left on.
+#[test]
+fn ups_009_loop_tag_off_is_refused_toward_this_node() {
+    let refused = [
+        ("udp://127.0.0.1", ""),
+        ("udp://127.0.0.53:5353", ""),
+        ("tcp://[::1]:53", ""),
+        ("udp://0.0.0.0", ""),
+        ("udp://[::]:53", ""),
+        ("udp://[::ffff:127.0.0.1]", ""),
+        ("udp://localhost:5300", ""),
+        ("https://LocalHost./dns-query", ""),
+        ("tls://resolver.localhost", ""),
+        ("udp://192.168.1.5:5353", ""),
+        ("tcp://[fd00::5]", ""),
+        ("tls://dns.example", "bootstrap = [\"127.0.0.1\"]\n"),
+        (
+            "tls://dns.example",
+            "bootstrap = [\"9.9.9.9\", \"192.168.1.5\"]\n",
+        ),
+        ("https://dns.example/dns-query", "bootstrap = [\"::\"]\n"),
+    ];
+    let mut upstreams = String::new();
+    for (i, (url, extra)) in refused.iter().enumerate() {
+        write!(
+            upstreams,
+            "[[upstream]]\nname = \"u{i}\"\nurl = \"{url}\"\nloop_tag = false\n{extra}"
+        )
+        .unwrap();
+    }
+    let errs = load_str(&format!("{LOOP_TAG_LISTENERS}{upstreams}"))
+        .err()
+        .unwrap_or_default();
+    for (i, (url, extra)) in refused.iter().enumerate() {
+        let want = format!("upstream[{i}].loop_tag");
+        let e = errs.iter().find(|e| e.path == want);
+        assert!(
+            e.is_some_and(|e| e.message.contains("this node")),
+            "{url} {extra}: {want} not refused; errors: {errs:?}"
+        );
+    }
+    assert_eq!(errs.len(), refused.len(), "nothing else: {errs:?}");
+
+    let accepted = load_str(&format!(
+        "{LOOP_TAG_LISTENERS}[[upstream]]
+name = \"public\"
+url = \"udp://198.51.100.53\"
+loop_tag = false
+[[upstream]]
+name = \"lan\"
+url = \"udp://192.168.1.9\"
+loop_tag = false
+[[upstream]]
+name = \"named\"
+url = \"tls://dns.example\"
+bootstrap = [\"9.9.9.9\"]
+loop_tag = false
+[[upstream]]
+name = \"system-bootstrap\"
+url = \"https://dns.example/dns-query\"
+loop_tag = false
+[[upstream]]
+name = \"loopback-tagged\"
+url = \"udp://127.0.0.1:5335\"
+"
+    ));
+    assert!(accepted.is_ok(), "{:?}", accepted.err());
+}
+
+/// REQ: UPS-009 (ADR-192) — `loop_tag = false` only where it changes what is sent: refused on a
+/// `recursive://` upstream, stub zones included, which asks authoritative servers without the
+/// option either way; accepted on the kinds that send the query's bytes on (DNS stamps and
+/// plugins).
+#[test]
+fn ups_009_loop_tag_off_is_refused_where_it_does_nothing() {
+    let errs = load_str(
+        r#"
+[[upstream]]
+name = "root"
+url = "recursive://"
+loop_tag = false
+[[upstream]]
+name = "stub"
+url = "recursive://"
+loop_tag = false
+[upstream.recursive]
+stub_zone = "corp.example"
+stub_servers = ["10.0.0.53"]
+"#,
+    )
+    .err()
+    .unwrap_or_default();
+    for want in ["upstream[0].loop_tag", "upstream[1].loop_tag"] {
+        assert!(
+            errs.iter()
+                .any(|e| e.path == want && e.message.contains("recursive://")),
+            "{want} not refused; errors: {errs:?}"
+        );
+    }
+    assert_eq!(errs.len(), 2, "nothing else: {errs:?}");
+
+    let accepted = load_str(
+        r#"
+[[upstream]]
+name = "stamp"
+url = "sdns://AQMAAAAAAAAAETk0LjE0MC4xNC4xNDo1NDQzINErR_JS3PLCu_iZEIbq95zkSV2LFsigxDIuUso_OQhzIjIuZG5zY3J5cHQuZGVmYXVsdC5uczEuYWRndWFyZC5jb20"
+loop_tag = false
+[[upstream]]
+name = "socket"
+url = "unix:///run/magicdns.sock"
+loop_tag = false
+[[upstream]]
+name = "program"
+url = "exec:///usr/local/bin/consul-dns-plugin"
+loop_tag = false
+[[upstream]]
+name = "root"
+url = "recursive://"
+"#,
+    );
+    assert!(accepted.is_ok(), "{:?}", accepted.err());
 }
 
 /// REQ: OBS-038 (ADR-161) — anomaly mutes: a device or group and a kind each, names that exist
