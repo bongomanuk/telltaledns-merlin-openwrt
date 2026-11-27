@@ -10386,7 +10386,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The resulting configuration is invalid (e.g. an unknown group, or a match key another device has, named in the detail); nothing is stored. */
+            /** @description The resulting configuration is invalid (e.g. an unknown group, or a match key another device has: the hint names that device to whoever may read every device); nothing is stored. */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -1713,7 +1713,7 @@ fn json_of<T: serde::Serialize>(v: &T) -> String {
         (status = 200, body = ClientChange, description = "Applied (or, with dryRun, what would change)."),
         (status = 409, body = Problem, description = "Defined in the config files (or in the cluster version a promoted primary builds on), or an Idempotency-Key reused for another request; or the Idempotency-Key's first request is still running (`change_in_progress`, with `Retry-After`: retry shortly for its answer)."),
         (status = 412, body = Problem, description = "If-Match: the config changed since that version."),
-        (status = 422, body = Problem, description = "The resulting configuration is invalid (e.g. an unknown group, or a match key another device has, named in the detail); nothing is stored."),
+        (status = 422, body = Problem, description = "The resulting configuration is invalid (e.g. an unknown group, or a match key another device has: the hint names that device to whoever may read every device); nothing is stored."),
         (status = 503, body = Problem, description = "Too many configuration changes are running at once (`Retry-After`: retry shortly)."),
     ))]
 pub(crate) async fn put_client(
