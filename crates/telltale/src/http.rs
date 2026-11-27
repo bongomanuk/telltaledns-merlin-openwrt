@@ -637,7 +637,7 @@ pub(crate) fn render(src: &Sources) -> String {
     let state = src.pipeline.current();
     render_upstreams(&mut w, &state.router);
     render_upstream_quality(&mut w, &src.pipeline.quality, &state.router);
-    render_exported(&mut w, src, &state);
+    render_exported(&mut w, src);
     if let Some(l) = src.lists.load_full() {
         render_lists(&mut w, &l.fetcher, &src.config.load());
         render_filter(&mut w, &l);
@@ -1705,8 +1705,13 @@ fn render_groups(
     }
 }
 
-fn render_exported(w: &mut PromWriter, src: &Sources, state: &crate::pipeline::Dynamic) {
-    let ex = src.pipeline.telemetry.aggregates().exported.clone();
+fn render_exported(w: &mut PromWriter, src: &Sources) {
+    // REQ: OBS-005 (issue #108) — the rows and the group table they are numbered by, read
+    // together: a reload moves the rows and swaps the table under this lock.
+    let (ex, state) = {
+        let agg = src.pipeline.telemetry.aggregates();
+        (agg.exported.clone(), src.pipeline.current())
+    };
     w.family(
         "telltale_stage_duration_seconds",
         "histogram",

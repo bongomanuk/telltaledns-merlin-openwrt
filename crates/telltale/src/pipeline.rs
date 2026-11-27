@@ -798,7 +798,24 @@ impl Pipeline {
     /// Swaps in new routing/policy (OPS-009). In-flight queries finish with the state they
     /// started with; new queries see the new state immediately.
     pub(crate) fn reload(&self, router: Arc<Router>, policy: Policy) {
-        retire(self.state.swap(Arc::new(Dynamic { router, policy })));
+        // REQ: OBS-005 (issue #108) — the exported per-group counters move to their group's new
+        // index, by name, in one step with the swap: under the aggregates' lock, which a scrape
+        // holds while it reads them with the group table, so it sees both before or both after.
+        // Events already on their way (in the rings, up to one drain; held for a Kubernetes
+        // workload, up to `WORKLOAD_HOLD`; from queries that started before the swap and still
+        // wait for an upstream) carry the old index and count under its new owner: a handful
+        // of queries per reload, not a group's total. Nothing changes on the query path.
+        fn names(p: &Policy) -> Vec<&str> {
+            p.clients.groups().iter().map(|g| &*g.name).collect()
+        }
+        let old = {
+            let mut agg = self.telemetry.aggregates();
+            let current = self.state.load_full();
+            agg.exported
+                .regroup(&names(&current.policy), &names(&policy));
+            self.state.swap(Arc::new(Dynamic { router, policy }))
+        };
+        retire(old);
         // Group/client changes re-derive the per-client list masks for the current snapshot.
         self.set_filter(None);
     }

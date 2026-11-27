@@ -15,6 +15,8 @@ const N_BUCKET: usize = BUCKETS_US.len() + 1;
 const MAX_UPSTREAMS: usize = 256;
 /// (group, list) pairs tracked for `telltale_blocked_total`; beyond this, the rest share one.
 const MAX_BLOCK_PAIRS: usize = 4096;
+/// Rows of [`Exported::groups`]: one per group index, the last shared by every higher index.
+const GROUP_ROWS: usize = 64;
 
 /// `telltale_blocked_total{list}` keys that aren't list IDs. `Rule::list` names a filter list
 /// only for list rules: a quick rule carries its 16-bit reference, a schedule its reference,
@@ -110,7 +112,7 @@ pub struct Exported {
 
 impl Exported {
     pub(crate) fn add_query(&mut self, e: &QueryEvent) {
-        let g = usize::from(e.group).min(63);
+        let g = usize::from(e.group).min(GROUP_ROWS - 1);
         if self.groups.len() <= g {
             self.groups.resize(g + 1, [0; crate::N_STATUS]);
         }
@@ -151,6 +153,49 @@ impl Exported {
             u.failed += 1;
         }
         u.latency.record(u64::from(e.latency_us));
+    }
+
+    /// REQ: OBS-005 (issue #108) — for a reload that renumbers the groups (`old` and `new`: the
+    /// group names by index, before and after): moves each group's query and block counts to
+    /// its name's new index. `/metrics` names these rows from the group table in force, so a
+    /// group added in front of another (an implicit `default` is always last) would otherwise
+    /// show that group's count, and a removed one would hand its count to the next. A name that
+    /// is gone takes its counts along (its series end), and a new name starts at zero. A row
+    /// with no name in `old` is dropped; the last row still holds every index past it, under
+    /// the name it was shown with. The same table moves nothing. Reload path only: it
+    /// allocates, the query path never calls it.
+    pub fn regroup(&mut self, old: &[&str], new: &[&str]) {
+        if old == new {
+            return;
+        }
+        let mut index: HashMap<&str, usize> = HashMap::with_capacity(new.len());
+        for (i, name) in new.iter().enumerate() {
+            index.entry(*name).or_insert(i);
+        }
+        let to = |g: usize| old.get(g).and_then(|name| index.get(name)).copied();
+        let mut groups: Vec<[u64; crate::N_STATUS]> = Vec::new();
+        for (g, row) in self.groups.iter().enumerate() {
+            let Some(i) = to(g).map(|i| i.min(GROUP_ROWS - 1)) else {
+                continue;
+            };
+            if groups.len() <= i {
+                groups.resize(i + 1, [0; crate::N_STATUS]);
+            }
+            for (n, add) in groups[i].iter_mut().zip(row) {
+                *n = n.saturating_add(*add);
+            }
+        }
+        self.groups = groups;
+        // Moving keys never adds pairs, so the pair cap still holds; the blocks past it
+        // (`group="other"`) belong to no group and stay.
+        let blocked = std::mem::take(&mut self.blocked);
+        self.blocked.reserve(blocked.len());
+        for ((g, list), n) in blocked {
+            if let Some(i) = to(usize::from(g)).and_then(|i| u16::try_from(i).ok()) {
+                let total = self.blocked.entry((i, list)).or_insert(0);
+                *total = total.saturating_add(n);
+            }
+        }
     }
 }
 
@@ -255,5 +300,82 @@ mod tests {
         assert_eq!(blocked_label(LIST_ANSWER_IP, &lists), "answer_ip");
         assert_eq!(blocked_label(LIST_NONE, &lists), "none");
         assert_eq!(blocked_label(7, &lists), "unknown");
+    }
+
+    /// `n` queries of group index `group` (a block: list 3's).
+    fn add(x: &mut Exported, group: u16, status: Status, n: usize) {
+        let mut q = query(1, status, (status == Status::Blocked).then_some(3), 0);
+        q.group = group;
+        for _ in 0..n {
+            x.add_query(&q);
+        }
+    }
+
+    fn forwarded(x: &Exported, row: usize) -> u64 {
+        x.groups
+            .get(row)
+            .map_or(0, |r| r[Status::Forwarded as usize])
+    }
+
+    /// REQ: OBS-005 (issue #108) — `regroup` moves each row to its name's new index: the same
+    /// table moves nothing, a gone name and a row with no name are dropped, a new name starts at
+    /// zero, the blocks past the pair cap stay, and the last row still holds every index past
+    /// it (under the name it is shown with), also when names move past the cap.
+    #[test]
+    fn obs_005_regroup_moves_rows_by_name() {
+        let mut x = Exported::default();
+        add(&mut x, 0, Status::Forwarded, 1);
+        add(&mut x, 1, Status::Forwarded, 2);
+        add(&mut x, 1, Status::Blocked, 1);
+        add(&mut x, 5, Status::Forwarded, 7);
+        x.blocked_other = 9;
+        x.regroup(&["a", "b"], &["a", "b"]);
+        assert_eq!(forwarded(&x, 5), 7, "the same table moves nothing");
+        x.regroup(&["a", "b"], &["new", "b"]);
+        assert_eq!((forwarded(&x, 0), forwarded(&x, 1)), (0, 2));
+        assert_eq!(x.groups.len(), 2, "the row with no name is dropped");
+        assert_eq!(x.blocked.get(&(1, 3)), Some(&1));
+        x.regroup(&["new", "b"], &["b", "new"]);
+        assert_eq!((forwarded(&x, 0), forwarded(&x, 1)), (2, 0));
+        assert_eq!(x.groups[0][Status::Blocked as usize], 1);
+        assert_eq!(x.blocked.get(&(0, 3)), Some(&1));
+        assert_eq!(x.blocked.len(), 1);
+        assert_eq!(
+            x.blocked_other, 9,
+            "the blocks past the pair cap are no group's"
+        );
+
+        let names: Vec<String> = (0..70).map(|i| format!("g{i}")).collect();
+        let many: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut x = Exported::default();
+        add(&mut x, 62, Status::Forwarded, 1);
+        add(&mut x, 63, Status::Forwarded, 2);
+        add(&mut x, 69, Status::Forwarded, 4);
+        add(&mut x, 69, Status::Blocked, 1);
+        assert_eq!(forwarded(&x, 63), 6, "index 69 shares the last row");
+        let mut front = vec!["x0", "x1"];
+        front.extend_from_slice(&many);
+        x.regroup(&many, &front);
+        assert_eq!(x.groups.len(), GROUP_ROWS);
+        assert_eq!(
+            forwarded(&x, 63),
+            7,
+            "g62 moved past the cap: it joins the last row"
+        );
+        assert_eq!(
+            x.blocked.get(&(71, 3)),
+            Some(&1),
+            "block keys aren't capped"
+        );
+        // The last row is shown as the 64th name, now g61: it goes with that name.
+        x.regroup(&front, &["g61", "g69"]);
+        assert_eq!((forwarded(&x, 0), forwarded(&x, 1)), (7, 0));
+        assert_eq!(x.groups.len(), 1);
+        assert_eq!(
+            x.blocked.get(&(1, 3)),
+            Some(&1),
+            "g69's block, by its own index"
+        );
+        assert_eq!(x.blocked.len(), 1);
     }
 }

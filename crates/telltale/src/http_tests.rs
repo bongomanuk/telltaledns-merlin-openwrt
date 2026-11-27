@@ -634,3 +634,228 @@ fn flt_006_router_macs_metrics() {
         "the neighbor table is read whenever it is on, so 0 is no longer normal: {text}"
     );
 }
+
+/// REQ: OBS-005 (issue #108) — a query of group index `group` (the numbering of the policy it
+/// was answered under). A block is a quick rule's: its `list` label needs no filter snapshot.
+fn group_query(group: u16, status: Status) -> telltale_telemetry::QueryEvent {
+    let blocked = status == Status::Blocked;
+    telltale_telemetry::QueryEvent {
+        ts_us: 1_700_000_000_000_000,
+        client_ip: std::net::Ipv4Addr::new(10, 0, 0, 7)
+            .to_ipv6_mapped()
+            .octets(),
+        client_ref: 0,
+        group,
+        qtype: 1,
+        qclass: 1,
+        rcode: Some(if blocked { 3 } else { 0 }),
+        status,
+        proto: Proto::Udp,
+        flags: 0x8180,
+        rule: blocked.then_some(telltale_telemetry::event::Rule {
+            list: 0,
+            kind: telltale_telemetry::event::RuleKind::Quick,
+            allow: false,
+        }),
+        upstream: 0,
+        attempts: 0,
+        t_total_us: 100,
+        t_upstream_us: 0,
+        resp_size: 60,
+        answers: 0,
+    }
+}
+
+/// Folds `n` queries of the group named `group` (by its index in the current policy, as the
+/// query path numbers it) into the aggregates.
+fn fold_group(src: &Sources, group: &str, status: Status, n: usize) {
+    use telltale_telemetry::event::{Name, Record};
+    let g = src
+        .pipeline
+        .current()
+        .policy
+        .clients
+        .group_id(group)
+        .unwrap();
+    let mut agg = src.pipeline.telemetry.aggregates();
+    for _ in 0..n {
+        agg.record(&Record::Query(group_query(g, status), Name::default()));
+    }
+}
+
+/// Reloads `src`'s pipeline with the configuration `toml` (its groups).
+fn reload_groups(src: &Sources, toml: &str) {
+    let cfg = telltale_config::Loader::new()
+        .toml_str("t.toml", toml)
+        .env(Vec::<(String, String)>::new())
+        .load()
+        .unwrap()
+        .config;
+    src.pipeline.reload(
+        Arc::new(Router::default()),
+        crate::pipeline::Policy::from_config(&cfg, telltale_policy::LocalData::default()),
+    );
+}
+
+/// The value of `series` (its name and labels as `/metrics` writes them) in `text`.
+fn sample_value(text: &str, series: &str) -> Option<u64> {
+    text.lines()
+        .find_map(|l| l.strip_prefix(series)?.strip_prefix(' ')?.parse().ok())
+}
+
+/// REQ: OBS-005 (issue #108) — `telltale_group_queries_total` stays with its group's name across
+/// a reload. A group added while `default` is implicit takes `default`'s index (0; `default` moves
+/// to 1): it starts at zero, and `default` keeps its count and goes on from it.
+#[test]
+fn obs_005_group_counters_keep_their_name_across_a_reload() {
+    let src = sources();
+    let default = "telltale_group_queries_total{group=\"default\",status=\"forwarded\"}";
+    fold_group(&src, "default", Status::Forwarded, 5);
+    assert_eq!(sample_value(&render(&src), default), Some(5));
+    reload_groups(&src, "[[group]]\nname = \"aaa-test\"\n");
+    let names: Vec<String> = src
+        .pipeline
+        .current()
+        .policy
+        .clients
+        .groups()
+        .iter()
+        .map(|g| g.name.to_string())
+        .collect();
+    assert_eq!(
+        names,
+        ["aaa-test", "default"],
+        "the new group takes index 0"
+    );
+    let text = render(&src);
+    assert_eq!(sample_value(&text, default), Some(5), "{text}");
+    assert!(
+        !text.contains("telltale_group_queries_total{group=\"aaa-test\""),
+        "a new group starts at zero: {text}"
+    );
+    fold_group(&src, "default", Status::Forwarded, 1);
+    let text = render(&src);
+    assert_eq!(sample_value(&text, default), Some(6), "{text}");
+    assert!(
+        !text.contains("telltale_group_queries_total{group=\"aaa-test\""),
+        "{text}"
+    );
+}
+
+/// REQ: OBS-005 (issue #108) — a group a reload removes takes its counts with it: the groups
+/// after it keep their own (none gets another group's total), nothing is left under `other`,
+/// and a group of that name added back starts at zero.
+#[test]
+fn obs_005_a_removed_group_lends_no_count() {
+    let src = sources();
+    let q = |g: &str| format!("telltale_group_queries_total{{group=\"{g}\",status=\"forwarded\"}}");
+    reload_groups(
+        &src,
+        "[[group]]\nname = \"aaa\"\n[[group]]\nname = \"bbb\"\n",
+    );
+    fold_group(&src, "aaa", Status::Forwarded, 2);
+    fold_group(&src, "bbb", Status::Forwarded, 3);
+    fold_group(&src, "default", Status::Forwarded, 4);
+    reload_groups(&src, "[[group]]\nname = \"bbb\"\n");
+    let text = render(&src);
+    assert_eq!(sample_value(&text, &q("bbb")), Some(3), "{text}");
+    assert_eq!(sample_value(&text, &q("default")), Some(4), "{text}");
+    assert!(
+        !text.contains("telltale_group_queries_total{group=\"aaa\""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("telltale_group_queries_total{group=\"other\""),
+        "{text}"
+    );
+    fold_group(&src, "bbb", Status::Forwarded, 1);
+    reload_groups(
+        &src,
+        "[[group]]\nname = \"aaa\"\n[[group]]\nname = \"bbb\"\n",
+    );
+    let text = render(&src);
+    assert!(
+        !text.contains("telltale_group_queries_total{group=\"aaa\""),
+        "added back, it starts at zero: {text}"
+    );
+    assert_eq!(sample_value(&text, &q("bbb")), Some(4), "{text}");
+    assert_eq!(sample_value(&text, &q("default")), Some(4), "{text}");
+}
+
+/// REQ: OBS-005 (issue #108) — `telltale_blocked_total` (and the `blocked` status of
+/// `telltale_group_queries_total`) follows its group to its new index, and ends with a group
+/// a reload removes.
+#[test]
+fn obs_005_blocked_counters_follow_their_group() {
+    let src = sources();
+    let b = |g: &str| format!("telltale_blocked_total{{group=\"{g}\",list=\"quick\"}}");
+    let q = |g: &str| format!("telltale_group_queries_total{{group=\"{g}\",status=\"blocked\"}}");
+    reload_groups(&src, "[[group]]\nname = \"kids\"\n");
+    fold_group(&src, "kids", Status::Blocked, 2);
+    fold_group(&src, "default", Status::Blocked, 3);
+    reload_groups(
+        &src,
+        "[[group]]\nname = \"aaa-test\"\n[[group]]\nname = \"kids\"\n",
+    );
+    let text = render(&src);
+    assert_eq!(sample_value(&text, &b("kids")), Some(2), "{text}");
+    assert_eq!(sample_value(&text, &b("default")), Some(3), "{text}");
+    assert_eq!(sample_value(&text, &q("kids")), Some(2), "{text}");
+    assert_eq!(sample_value(&text, &q("default")), Some(3), "{text}");
+    assert!(
+        !text.contains("telltale_blocked_total{group=\"aaa-test\""),
+        "{text}"
+    );
+    fold_group(&src, "kids", Status::Blocked, 1);
+    assert_eq!(sample_value(&render(&src), &b("kids")), Some(3));
+    reload_groups(&src, "[[group]]\nname = \"aaa-test\"\n");
+    let text = render(&src);
+    assert!(
+        !text.contains("telltale_blocked_total{group=\"kids\""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("telltale_blocked_total{group=\"aaa-test\""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("telltale_blocked_total{group=\"unknown\""),
+        "{text}"
+    );
+    assert_eq!(sample_value(&text, &b("default")), Some(3), "{text}");
+}
+
+/// REQ: OBS-005 (issue #108) — a reload that keeps every group's name and place moves no
+/// counter, also when the groups' settings change.
+#[test]
+fn obs_005_unchanged_groups_keep_every_counter() {
+    let src = sources();
+    let groups = "[[group]]\nname = \"kids\"\n[[group]]\nname = \"default\"\n";
+    reload_groups(&src, groups);
+    fold_group(&src, "kids", Status::Forwarded, 2);
+    fold_group(&src, "kids", Status::Blocked, 1);
+    fold_group(&src, "default", Status::Forwarded, 3);
+    fold_group(&src, "default", Status::Blocked, 4);
+    let series = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| {
+                l.starts_with("telltale_group_queries_total{")
+                    || l.starts_with("telltale_blocked_total{")
+            })
+            .map(str::to_owned)
+            .collect()
+    };
+    let before = series(&render(&src));
+    assert_eq!(before.len(), 6, "{before:?}");
+    reload_groups(&src, groups);
+    assert_eq!(series(&render(&src)), before, "the same configuration");
+    reload_groups(
+        &src,
+        "[[group]]\nname = \"kids\"\nblock_mode = \"nxdomain\"\npriority = 10\n[[group]]\nname = \"default\"\n",
+    );
+    assert_eq!(
+        series(&render(&src)),
+        before,
+        "the same groups, other settings"
+    );
+}
