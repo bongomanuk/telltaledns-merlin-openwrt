@@ -2915,6 +2915,8 @@ Main metrics:
 
 Counters are kept per thread and summed on scrape, so recording never slows a query or allocates memory. The per-upstream, per-list, and per-client series are built by the analytics thread from query events, off the query path.
 
+The per-group series, `telltale_group_queries_total` and `telltale_blocked_total`, follow the group's name across a reload: a group you add starts at zero, the others keep their counts wherever the new configuration puts them, and a group you remove has its series end.
+
 ### Traffic map
 **Monitor → Traffic map** answers "what is the network reaching right now?" in one picture, which suits a wall screen:
 - Each tile is a service, a site, or a name, sized by how often it was looked up this hour (or the previous clock hour). Blue tiles were answered, red ones were blocked; a stronger colour means busier.
