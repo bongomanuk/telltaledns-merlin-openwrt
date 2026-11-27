@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import * as lib from '../../scripts/i18n-lib.mjs';
+import { materialize, readTemplate } from '../../src/lib/i18n/template';
 import { DATA, jsonStrings, makeCollides, makeRule, readPage } from './i18n-pseudo-rule';
 import { NOTE_RESTORED, cachingBrowser, howShown, noCache, restoresPages } from './bfcache';
 import { failOnPageErrors, listen } from './page-errors';
@@ -1121,6 +1122,58 @@ test('api_013 pack text never reaches a request or storage', async ({ browser })
   expect(r.sent.filter((x) => x.includes(MARK) || decoded(x).includes(MARK))).toEqual([]);
   expect((await r.stored()).filter((x) => !x.startsWith(`${KEY}=`) && x.includes(MARK))).toEqual([]);
   expect(await s.page.evaluate((m) => Object.keys(localStorage).filter((k) => k !== 'telltale.devpack' && (localStorage.getItem(k) ?? '').includes(m)), MARK)).toEqual([]);
+  await done(s);
+});
+
+test('api_013 api_005 a skeleton pack draws the dashboards and the cache with live data and no page error', async ({ browser }) => {
+  // The template a translator downloads, with one word translated: nearly every page shows English with a pack in use.
+  // The pages that draw lists from data that can repeat a value get such data: markers over 40 in a chart's window, names
+  // that read alike in the top lists, two cache nodes that show one name. Every list is drawn, the pack's banner stays,
+  // and no page error occurs (page-errors.ts).
+  test.setTimeout(90_000);
+  const FR_TAG = ['one', 'many', 'other'];
+  const skeleton = JSON.parse(materialize(readTemplate(lib.templateJson(lib.check(UI, { ratchets: false }))), FR_TAG)) as Record<string, unknown[][]>;
+  const settings = skeleton[SETTINGS.ctx].find((p) => p[0] === SETTINGS.english && p.length === 2);
+  if (!settings) throw new Error('the Settings pair is not in the template');
+  settings[1] = 'Réglages';
+  const translated = Object.values(skeleton).flat().filter((p) => (typeof p[1] === 'string' ? p[1] !== '' : Object.values(p[1] as object).some((v) => v !== ''))).length;
+  expect(translated, 'one translated pair in the skeleton').toBe(1);
+  const s = await fresh(browser);
+  const now = Math.floor(Date.now() / 1000);
+  const marks = Array.from({ length: 60 }, (_, i) => ({ tUnixMs: (now - 22 * 3600 + i * 1260) * 1000, kind: 'config.applied', summary: `change ${i + 1}`, seq: i + 1, node: null, nodes: [], actor: null, href: null }));
+  await s.page.route('**/api/v1/annotations?**', (r) => r.fulfill({ json: { items: marks, truncated: false, missingNodes: [] } }));
+  const top = (key: string, count: number) => ({ key, count, errorBound: 0 });
+  await s.page.route('**/api/v1/stats/top?**', (r) => {
+    const kind = new URL(r.request().url()).searchParams.get('kind');
+    const items = kind === 'domains' ? [top('a.b.example', 9), top('a.b.example', 8)] : kind === 'blocked' ? [top('ads.b.example', 3), top('ads.b.example', 2)] : [];
+    return r.fulfill({ json: { items, missingNodes: [] } });
+  });
+  const stat = (entries: number) => ({ answeredPercent: 80, bytes: 1e6, entries, evictions: 0, hitPercent: 70, hits: 900, inserts: 500, misses: 100, node: 'home', prefetches: 0, staleServed: 0, uncacheable: 0, settings: null, sizing: null, warmStart: null, history: [] });
+  const makeup = { nodata: 0, nxdomain: 0, positive: 3, servfail: 0, stale: 0, validated: 0 };
+  await s.page.route('**/api/v1/cache/stats', (r) => r.fulfill({ json: { items: [stat(100), stat(200)] } }));
+  await s.page.route('**/api/v1/cache/entries?**', (r) => r.fulfill({ json: { items: [{ node: 'home', makeup, entries: [] }, { node: 'home', makeup, entries: [] }], missingNodes: [] } }));
+  await storePack(s.page, JSON.stringify(skeleton, null, 2), { name: 'skeleton.json' });
+  const shows = async () => {
+    await expect(s.page.locator('html')).toHaveAttribute('lang', 'fr');
+    await expect(banner(s.page)).toContainText('Test language pack: skeleton.json');
+  };
+  await s.page.goto('/#/');
+  await shows();
+  await expect(s.page.getByRole('heading', { name: 'Dashboard' }).first()).toBeVisible();
+  await expect(s.page.locator('ol.tl a.dom', { hasText: /^a\.b\.example$/ })).toHaveCount(2);
+  await expect(s.page.getByTestId('chart-markers').first().locator('button.mk').first()).toBeAttached();
+  await s.page.goto('/#/?view=legacy');
+  await s.page.reload();
+  await shows();
+  await expect(s.page.locator('ol.bars').first().locator('a.name')).toHaveText(['a.b.example', 'a.b.example']);
+  await expect(s.page.locator('ol.bars').nth(1).locator('a.name')).toHaveText(['ads.b.example', 'ads.b.example']);
+  await expect(s.page.getByTestId('chart-markers').first().locator('button.mk').first()).toBeAttached();
+  await s.page.goto('/#/cache');
+  await shows();
+  await expect(s.page.getByTestId('cache-node').locator('h2')).toHaveText(['home', 'home']);
+  // The one word the pack translates.
+  await s.page.goto('/#/settings?tab=account');
+  await expect(s.page.getByRole('heading', { level: 1 })).toHaveText('Réglages');
   await done(s);
 });
 
