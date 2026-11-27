@@ -2915,7 +2915,9 @@ Main metrics:
 
 Counters are kept per thread and summed on scrape, so recording never slows a query or allocates memory. The per-upstream, per-list, and per-client series are built by the analytics thread from query events, off the query path.
 
-The per-group series, `telltale_group_queries_total` and `telltale_blocked_total`, follow the group's name across a reload: a group you add starts at zero, the others keep their counts wherever the new configuration puts them, and a group you remove has its series end. `telltale_upstream_duration_seconds` follows the upstream's name the same way.
+The per-group series, `telltale_group_queries_total` and `telltale_blocked_total`, follow the group's name across a reload: a group you add starts at zero, the others keep their counts wherever the new configuration puts them, and a group you remove has its series end (renaming a group removes one name and adds another). Two limits: a few queries answered at the moment of the reload can count under the previous numbering; and with more than 64 groups, the 64th and later share one row, shown under the 64th group's name, so a reload that moves groups across that line can move a whole total to another name. The built-in live views (the per-second and per-minute counts by group and upstream, the traffic flows, and each group's top lists for the hour) are still counted by position: after a reload that renumbers the groups or upstreams they can disagree with `/metrics` until those minutes and hours age out, and the stored minute that spans the reload is kept under the new names.
+
+`telltale_upstream_duration_seconds` follows the upstream's name the same way. The router's own per-upstream counters (`telltale_upstream_requests_total` and the others) start again from zero when a reload rebuilds the router, and an upstream that keeps its name but changes protocol carries its history into its new `protocol` series.
 
 ### Traffic map
 **Monitor → Traffic map** answers "what is the network reaching right now?" in one picture, which suits a wall screen:
