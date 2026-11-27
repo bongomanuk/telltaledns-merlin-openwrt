@@ -131,11 +131,13 @@ translation, and `npm run check:i18n` (in `ui/`, and in CI) checks that every tr
 placeholders, tags, web addresses, and numbers of its English. The Languages section of
 [`ui/README.md`](ui/README.md) explains the format and the tools.
 
-- **A new language** is added to `ui/src/locales/manifest.json` by a maintainer, with its owners:
-  the GitHub accounts of the people who answer for its content. Ask in an issue first.
-- **A translation pull request** changes that language's file and nothing else.
-  `node scripts/i18n.mjs sync <tag>`, run in `ui/`, writes the file with the empty translations to
-  fill in.
+- **A new language** has an entry in `ui/src/locales/manifest.json`, with its owners: the GitHub
+  accounts of the people who answer for its content, and `offered: false`. The translator adds the
+  entry or asks a maintainer to add it to the branch. Ask in an issue first.
+- **A translation pull request** changes only that language's file and, for a new language, its
+  manifest entry (the check fails either one alone). An update to a language already in the manifest
+  changes its pack only. `node scripts/i18n.mjs sync <tag>`, run in `ui/`, writes the file with the
+  empty translations to fill in.
 - **Each language has an owner.** The checks and the review look at a translation's structure; the
   language's owner reads the translation itself and approves it.
 
