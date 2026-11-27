@@ -134,16 +134,21 @@ a sentence with an expression, an inline element or a block inside, words cut by
 text (a colour key, an icon: class `split`; one message for the whole run), `<pre>`, script strings, plural
 ternaries (`tn()` takes the `one` form for -1), labels used as keys, canvas text and `Intl` calls.
 
-**Add a language.** A maintainer adds the tag to `src/locales/manifest.json` (`owners`: the GitHub
-logins of the people who answer for its content; `dir`; `offered: false` until a release turns it
-on; `since`), and the language to `src/locales/plurals.json` if it is not there (`node
+**Add a language.** A new language's pull request carries two things: its pack,
+`src/locales/<tag>.json`, and its entry in `src/locales/manifest.json` (`owners`: the GitHub logins
+of the people who answer for its content; `dir`; `offered: false` until a release turns it on;
+`since`). The check fails either one alone (a pack with no entry is `stray`, an entry with no pack
+is `... is missing`), so the translator adds the entry or asks a maintainer to add it to the
+branch. If the language is not in `src/locales/plurals.json`, a maintainer adds it (`node
 scripts/i18n.mjs plurals` writes it from CLDR; review the diff). A tag names the script where the
 language has several (`zh-Hans`, `sr-Latn`); there is no `en-*` catalog (English is built in). The
-translator then runs `node scripts/i18n.mjs sync <tag>`, fills in the empty translations of
+translator runs `node scripts/i18n.mjs sync <tag>`, fills in the empty translations of
 `src/locales/<tag>.json` (pairs of English and translation; a plural lists the language's
-categories), and opens a pull request with that one file. A plural form other than `other` may
-leave out `{n}`, but in some languages it is used for more than one number: Russian, Ukrainian and
-Croatian `one` also for 21, 31 or 101, Latvian `zero` also for 10 to 20. Keep `{n}` in those forms.
+categories), and opens the pull request. A pull request that updates a language already in the
+manifest changes only its pack. A plural form other than `other` may
+leave out `{n}`, but in some languages it is used for more than one number: Russian, Ukrainian,
+Croatian and Serbian `one` also for 21, 31 or 101, Latvian `zero` also for 10 to 20, 30 and so on.
+Keep `{n}` in those forms.
 After an English edit that keeps the meaning, a maintainer runs `node scripts/i18n.mjs carry
 <context> --from "<old>" --to "<new>"`; otherwise the old pair is reported as left over and English
 is shown until the language's owner confirms the new text.
@@ -179,8 +184,9 @@ two rules for a catalog the build shipped, and does for any other.
 
 **Review a catalog pull request by structure.** You do not need to read the language:
 
-1. The pull request changes that language's file only (and its owners in the manifest, if the
-   owner says so).
+1. The pull request changes only that language's pack, and for a new language adds its manifest
+   entry (`owners`, `dir`, `offered: false`, `since`). An update to a language already in the
+   manifest changes its pack only.
 2. `npm run check:i18n` is green: every translation keeps the placeholders, tags and web addresses
    of its English, every structural token (a URL, a path, `[x]`, `=`, `_`, `$`, `|`, a host and port,
    an IP address, a glossary term), every number, and every word `src/locales/verbatim.json` lists
