@@ -61,6 +61,11 @@ pub(crate) struct Sources {
     pub(crate) config: ArcSwap<telltale_config::Config>,
     /// The config files alone (what the API's entries are merged onto; ADR-040).
     pub(crate) file_config: ArcSwap<telltale_config::Config>,
+    /// REQ: API-002, API-010, CLU-003 (ADR-040, ADR-051; GitHub issue #113) — what the last
+    /// reload merged the API's entries onto when that isn't `file_config` alone: on a primary
+    /// promoted from replica, the files plus the cluster version it last applied. The write
+    /// checks validate a change against that same merge. `None`: the files alone.
+    pub(crate) managed_base: ArcSwapOption<telltale_config::Config>,
     /// REQ: OBS-010 (ADR-179) — the files couldn't be read at start-up, so `file_config` holds
     /// the running configuration instead, until a reload reads them: nothing in it counts as this
     /// node's own when alert destinations' credential files are checked.
@@ -108,6 +113,15 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
+    /// REQ: OBS-010 (ADR-179), API-002, API-010, CLU-003 (ADR-040, ADR-051; GitHub issue #113) —
+    /// keeps the config files a reload read, and what it merged the API's entries onto with them
+    /// ([`crate::replication::managed_base`]).
+    pub(crate) fn store_files(&self, file: telltale_config::Config) {
+        self.managed_base
+            .store(crate::replication::managed_base(&file).map(Arc::new));
+        self.file_config.store(Arc::new(file));
+    }
+
     /// REQ: OPS-003 — whether client IPs appear masked in the latest 10-minute window.
     pub(crate) fn masked_clients(&self) -> Option<crate::masking::Masked> {
         let now = std::time::SystemTime::now()
