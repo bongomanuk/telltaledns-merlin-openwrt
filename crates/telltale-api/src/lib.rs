@@ -1692,6 +1692,7 @@ async fn queries_stream(
     Query(p): Query<TailParams>,
 ) -> Result<Response, Problem> {
     use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures_util::StreamExt as _;
     check_scope(p.scope.as_deref())?;
     if p.rate.is_some_and(|r| !(1..=2000).contains(&r)) {
         return Err(Problem::invalid("`rate`: 1 to 2000 events per second"));
@@ -1721,7 +1722,6 @@ async fn queries_stream(
     });
     // Firefox fires `open` only once a byte arrives, and an idle log can stay silent until the
     // 15 s keep-alive: say hello at once, so the Live view reads "streaming" in every browser.
-    use futures_util::StreamExt as _;
     let hello = futures_util::stream::once(async {
         Ok::<_, std::convert::Infallible>(Event::default().comment("connected"))
     });
