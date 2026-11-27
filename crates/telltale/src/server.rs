@@ -653,15 +653,17 @@ fn bind_error(l: &Listener, e: &io::Error, own_port: bool) -> io::Error {
 
 fn bind_hint(l: &Listener, kind: io::ErrorKind, own_port: bool) -> Option<String> {
     let port = l.addr.port();
-    let docs = "see \"Port 53 already in use\" in docs/running.md";
+    // The way the importers' notes name a docs section.
+    let docs = "`docs/running.md`, Port 53 already in use";
     match kind {
         // On Linux a program listening on any one address of the machine blocks the wildcard
         // address on that port (systemd-resolved's stub, a dnsmasq such as libvirt's, ...).
+        // `sudo`: without it, `ss -p` doesn't name another user's process.
         io::ErrorKind::AddrInUse if !own_port => {
             let ss = if l.proto.is_tcp_based() {
-                "ss -ltnp"
+                "sudo ss -ltnp"
             } else {
-                "ss -lunp"
+                "sudo ss -lunp"
             };
             Some(if l.addr.ip().is_unspecified() {
                 let any = if l.addr.is_ipv4() { "0.0.0.0" } else { "[::]" };
@@ -684,12 +686,27 @@ fn bind_hint(l: &Listener, kind: io::ErrorKind, own_port: bool) -> Option<String
         {
             Some(format!(
                 "ports below 1024 need root or the CAP_NET_BIND_SERVICE capability, or the host \
-                 setting net.ipv4.ip_unprivileged_port_start at {port} or lower (see \"Container \
-                 image\" in docs/running.md)"
+                 setting net.ipv4.ip_unprivileged_port_start at {port} or lower (`docs/running.md`, \
+                 Container image)"
             ))
         }
         _ => None,
     }
+}
+
+/// REQ: OPS-004 — whether this server's listener `held` (its protocol and bound address) takes
+/// the port `l` wants: the same transport (UDP or TCP), the same port, and addresses that
+/// overlap (the same one, or either a wildcard). Plain UDP and TCP on IPv6 are V6ONLY, so the
+/// families stay apart for them; DoQ and DoH3 are bound by quinn without it, so on `[::]` (with
+/// the usual `net.ipv6.bindv6only = 0`) either side being one of those takes the IPv4 port too.
+fn takes_port(held: ListenProto, at: SocketAddr, l: &Listener) -> bool {
+    let dual = |p: ListenProto, a: SocketAddr| {
+        matches!(p, ListenProto::Doq | ListenProto::Doh3) && a.is_ipv6() && a.ip().is_unspecified()
+    };
+    held.is_tcp_based() == l.proto.is_tcp_based()
+        && at.port() == l.addr.port()
+        && (at.is_ipv4() == l.addr.is_ipv4() || dual(held, at) || dual(l.proto, l.addr))
+        && (at.ip().is_unspecified() || l.addr.ip().is_unspecified() || at.ip() == l.addr.ip())
 }
 
 impl Listeners {
@@ -760,22 +777,19 @@ impl Listeners {
         Ok(())
     }
 
-    /// REQ: OPS-004 — whether one of this server's own listeners holds `l`'s port on the same
-    /// transport (UDP or TCP) and address family. `apply` binds additions before it closes
-    /// removals, so a reload that moves a listener between the wildcard address and one address
-    /// on the same port finds the port busy with its own listener: the hint about another
-    /// program would be wrong there. Start-up and reload only.
+    /// REQ: OPS-004 — whether one of this server's own listeners takes `l`'s port (`takes_port`).
+    /// `apply` binds additions before it closes removals, so a reload that moves a listener
+    /// between the wildcard address and one address on the same port finds the port busy with
+    /// its own listener: the hint about another program would be wrong there. Start-up and
+    /// reload only.
     fn holds_port_of(&self, l: &Listener) -> bool {
-        let clash = |tcp: bool, a: SocketAddr| {
-            tcp == l.proto.is_tcp_based()
-                && a.port() == l.addr.port()
-                && a.is_ipv4() == l.addr.is_ipv4()
-        };
-        self.udp.iter().any(|(_, u)| clash(false, u.local_addr()))
+        self.udp
+            .iter()
+            .any(|(_, u)| takes_port(ListenProto::Udp, u.local_addr(), l))
             || self
                 .streams
                 .iter()
-                .any(|(c, s)| clash(c.proto.is_tcp_based(), s.local_addr()))
+                .any(|(c, s)| takes_port(c.proto, s.local_addr(), l))
     }
 
     fn bind_stream(&self, l: &Listener, alt_svc: Option<&str>) -> io::Result<Stream> {
@@ -2328,12 +2342,12 @@ mod tests {
             (
                 ListenProto::Udp,
                 udp.local_addr().unwrap().port(),
-                "ss -lunp",
+                "sudo ss -lunp",
             ),
             (
                 ListenProto::Tcp,
                 tcp.local_addr().unwrap().port(),
-                "ss -ltnp",
+                "sudo ss -ltnp",
             ),
         ];
         for (proto, port, ss) in cases {
@@ -2364,7 +2378,7 @@ mod tests {
                 format!("{ss} 'sport = :{port}'"),
                 "[[listen]]".to_owned(),
                 "this machine's own address".to_owned(),
-                "\"Port 53 already in use\" in docs/running.md".to_owned(),
+                "(`docs/running.md`, Port 53 already in use)".to_owned(),
             ] {
                 assert!(msg.contains(&want), "{proto:?}: no `{want}` in: {msg}");
             }
@@ -2396,6 +2410,55 @@ mod tests {
         assert_eq!(ls.streams.len(), 1, "the wildcard listener still serves");
         for (_, s) in ls.streams.drain(..) {
             s.shutdown().await;
+        }
+    }
+
+    // REQ: OPS-004 — with `[[listen]]` on two addresses, this server holding the port on the
+    // first says nothing about the second: another program that holds the second still gets
+    // the hint. Every address in 127.0.0.0/8 is local on Linux, so 127.0.0.2 always exists.
+    #[tokio::test]
+    async fn ops_004_busy_port_on_another_address_still_hints() {
+        let udp = std::net::UdpSocket::bind("127.0.0.2:0").unwrap();
+        let tcp = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
+        let cases = [
+            (ListenProto::Udp, udp.local_addr().unwrap().port()),
+            (ListenProto::Tcp, tcp.local_addr().unwrap().port()),
+        ];
+        for (proto, port) in cases {
+            let mine = SocketAddr::from(([127, 0, 0, 1], port));
+            let theirs = SocketAddr::from(([127, 0, 0, 2], port));
+            let os = if proto == ListenProto::Udp {
+                std::net::UdpSocket::bind(theirs).map(drop)
+            } else {
+                std::net::TcpListener::bind(theirs).map(drop)
+            }
+            .unwrap_err();
+            let mut ls = ops_listeners();
+            let e = ls
+                .apply(&[listener(proto, mine), listener(proto, theirs)])
+                .await
+                .unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::AddrInUse, "{proto:?}: {e}");
+            let msg = e.to_string();
+            assert!(
+                msg.starts_with(&format!("{proto:?} {theirs}: {os}; ")),
+                "{proto:?}: the old text, then the hint: {msg}"
+            );
+            assert!(
+                msg.contains(&format!("already uses port {port} on this address")),
+                "{proto:?}: {msg}"
+            );
+            assert_eq!(
+                ls.udp.len() + ls.streams.len(),
+                1,
+                "{proto:?}: the first address is bound"
+            );
+            for (_, u) in ls.udp.drain(..) {
+                u.shutdown();
+            }
+            for (_, s) in ls.streams.drain(..) {
+                s.shutdown().await;
+            }
         }
     }
 
@@ -2474,15 +2537,78 @@ mod tests {
             assert_eq!(msg(proto, addr, kind, false), want);
         }
         let m = msg(ListenProto::Udp, "192.168.1.5:53", busy, false);
-        assert!(m.contains("ss -lunp 'sport = :53'"), "{m}");
+        assert!(m.contains("sudo ss -lunp 'sport = :53'"), "{m}");
         assert!(!m.contains("[[listen]]"), "already one address: {m}");
         let m = msg(ListenProto::Doq, "[::]:853", busy, false);
-        for want in ["ss -lunp 'sport = :853'", "for [::]", "[[listen]]"] {
+        for want in ["sudo ss -lunp 'sport = :853'", "for [::]", "[[listen]]"] {
             assert!(m.contains(want), "no `{want}` in: {m}");
         }
         let m = msg(ListenProto::Dot, "0.0.0.0:853", busy, false);
-        assert!(m.contains("ss -ltnp 'sport = :853'"), "{m}");
+        assert!(m.contains("sudo ss -ltnp 'sport = :853'"), "{m}");
         let m = msg(ListenProto::Tcp, "127.0.0.1:53", busy, true);
         assert_eq!(m, format!("Tcp 127.0.0.1:53: {}", io::Error::from(busy)));
+        let m = msg(ListenProto::Udp, "0.0.0.0:53", denied, false);
+        assert!(m.ends_with("(`docs/running.md`, Container image)"), "{m}");
+    }
+
+    /// Whether this server's `held` listener on `at` takes the port `want` asks for.
+    fn takes(held: ListenProto, at: &str, want: ListenProto, addr: &str) -> bool {
+        takes_port(
+            held,
+            at.parse().unwrap(),
+            &listener(want, addr.parse().unwrap()),
+        )
+    }
+
+    // REQ: OPS-004 — this server's own listener takes a port only where the addresses overlap:
+    // the same address, or either one a wildcard. Another address on the same port is someone
+    // else's, so its failure keeps the hint. Transport and port must match; plain UDP and TCP
+    // on IPv6 are V6ONLY, so IPv4 and IPv6 stay apart for them.
+    #[test]
+    fn ops_004_own_port_needs_overlapping_addresses() {
+        use ListenProto::{Dot, Tcp, Udp};
+        for (held, at, want, addr) in [
+            (Tcp, "0.0.0.0:53", Tcp, "192.168.1.2:53"),
+            (Tcp, "192.168.1.2:53", Tcp, "0.0.0.0:53"),
+            (Tcp, "192.168.1.2:53", Dot, "192.168.1.2:53"),
+            (Udp, "[::]:53", Udp, "[fd00::2]:53"),
+        ] {
+            assert!(takes(held, at, want, addr), "{held:?} {at} takes {addr}");
+        }
+        for (held, at, want, addr) in [
+            (Tcp, "192.168.1.2:53", Tcp, "10.8.0.1:53"),
+            (Udp, "127.0.0.1:53", Udp, "127.0.0.2:53"),
+            (Tcp, "0.0.0.0:53", Udp, "0.0.0.0:53"),
+            (Tcp, "0.0.0.0:53", Tcp, "0.0.0.0:5353"),
+            (Tcp, "[::]:53", Tcp, "0.0.0.0:53"),
+            (Udp, "0.0.0.0:53", Udp, "[::]:53"),
+        ] {
+            assert!(!takes(held, at, want, addr), "{held:?} {at} leaves {addr}");
+        }
+    }
+
+    // REQ: OPS-004 — DoQ and DoH3 bind through quinn without V6ONLY, so one on `[::]` is
+    // dual-stack and takes the IPv4 port too (a config with DoQ on both `[::]:853` and
+    // `0.0.0.0:853` fails on its own socket, and the hint about another program would be
+    // wrong). Either side counts; plain UDP and TCP on `[::]` don't. A pure rule: binding a
+    // real `[::]` socket depends on the machine having IPv6.
+    #[test]
+    fn ops_004_quic_on_the_ipv6_wildcard_takes_both_families() {
+        use ListenProto::{Doh3, Doq, Tcp, Udp};
+        for (held, at, want, addr) in [
+            (Doq, "[::]:853", Doq, "0.0.0.0:853"),
+            (Doh3, "[::]:443", Udp, "192.168.1.2:443"),
+            (Udp, "0.0.0.0:853", Doq, "[::]:853"),
+            (Doq, "0.0.0.0:853", Doh3, "[::]:853"),
+        ] {
+            assert!(takes(held, at, want, addr), "{held:?} {at} takes {addr}");
+        }
+        for (held, at, want, addr) in [
+            (Udp, "[::]:853", Doq, "0.0.0.0:853"),
+            (Doq, "[fd00::2]:853", Doq, "0.0.0.0:853"),
+            (Doq, "[::]:853", Tcp, "0.0.0.0:853"),
+        ] {
+            assert!(!takes(held, at, want, addr), "{held:?} {at} leaves {addr}");
+        }
     }
 }
