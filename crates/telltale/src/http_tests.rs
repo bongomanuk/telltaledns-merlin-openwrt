@@ -825,6 +825,87 @@ fn obs_005_blocked_counters_follow_their_group() {
     assert_eq!(sample_value(&text, &b("default")), Some(3), "{text}");
 }
 
+/// REQ: OBS-005 (issue #108) — `telltale_upstream_duration_seconds` stays with its upstream's
+/// name when a reload renumbers the upstreams (an ID is the upstream's place in the
+/// configuration, from 1): one added in front starts empty, the others keep their histograms,
+/// and one removed takes its histogram along.
+#[test]
+fn obs_005_upstream_histograms_keep_their_name_across_a_reload() {
+    use telltale_telemetry::event::{Record, UpstreamEvent};
+    let src = sources();
+    let reload = |names: &[&str]| {
+        let upstreams: Vec<String> = names
+            .iter()
+            .map(|n| format!("[[upstream]]\nname = \"{n}\"\nurl = \"udp://192.0.2.1:53\"\n"))
+            .collect();
+        let members: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+        let toml = format!(
+            "{}[[upstream_group]]\nname = \"default\"\nmembers = [{}]\n",
+            upstreams.concat(),
+            members.join(", ")
+        );
+        let cfg = telltale_config::Loader::new()
+            .toml_str("t.toml", &toml)
+            .env(Vec::<(String, String)>::new())
+            .load()
+            .unwrap()
+            .config;
+        src.pipeline.reload(
+            Arc::new(Router::from_config(&cfg).unwrap()),
+            crate::pipeline::Policy::from_config(&cfg, telltale_policy::LocalData::default()),
+        );
+    };
+    let fold = |name: &str, n: usize| {
+        let id = src
+            .pipeline
+            .current()
+            .router
+            .upstreams()
+            .iter()
+            .find(|u| u.name == name)
+            .unwrap()
+            .id;
+        let mut agg = src.pipeline.telemetry.aggregates();
+        for _ in 0..n {
+            agg.record(&Record::Upstream(UpstreamEvent {
+                ts_us: 1_700_000_000_000_000,
+                upstream: id,
+                latency_us: 1_500,
+                ok: true,
+                attempts: 1,
+            }));
+        }
+    };
+    let count = |text: &str, u: &str| {
+        sample_value(
+            text,
+            &format!(
+                "telltale_upstream_duration_seconds_count{{upstream=\"{u}\",protocol=\"udp\"}}"
+            ),
+        )
+    };
+    reload(&["a", "b"]);
+    fold("a", 2);
+    fold("b", 3);
+    assert_eq!(count(&render(&src), "a"), Some(2));
+    reload(&["c", "a", "b"]);
+    let text = render(&src);
+    assert_eq!(count(&text, "a"), Some(2), "{text}");
+    assert_eq!(count(&text, "b"), Some(3), "{text}");
+    assert_eq!(
+        count(&text, "c").unwrap_or(0),
+        0,
+        "a new upstream starts empty: {text}"
+    );
+    reload(&["c", "b"]);
+    let text = render(&src);
+    assert_eq!(count(&text, "a"), None, "{text}");
+    assert_eq!(count(&text, "b"), Some(3), "{text}");
+    assert_eq!(count(&text, "c").unwrap_or(0), 0, "{text}");
+    fold("b", 1);
+    assert_eq!(count(&render(&src), "b"), Some(4));
+}
+
 /// REQ: OBS-005 (issue #108) — a reload that keeps every group's name and place moves no
 /// counter, also when the groups' settings change.
 #[test]

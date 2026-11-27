@@ -808,11 +808,23 @@ impl Pipeline {
         fn names(p: &Policy) -> Vec<&str> {
             p.clients.groups().iter().map(|g| &*g.name).collect()
         }
+        fn upstreams(r: &Router) -> Vec<(u16, &str)> {
+            r.upstreams()
+                .iter()
+                .map(|u| (u.id, u.name.as_str()))
+                .collect()
+        }
         let old = {
             let mut agg = self.telemetry.aggregates();
             let current = self.state.load_full();
             agg.exported
                 .regroup(&names(&current.policy), &names(&policy));
+            // The same for the upstream histograms, by upstream ID (an upstream's place in the
+            // configuration), when the reload builds a new router.
+            if !Arc::ptr_eq(&current.router, &router) {
+                agg.exported
+                    .reupstream(&upstreams(&current.router), &upstreams(&router));
+            }
             self.state.swap(Arc::new(Dynamic { router, policy }))
         };
         retire(old);

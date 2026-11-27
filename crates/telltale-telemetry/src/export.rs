@@ -79,6 +79,14 @@ impl Buckets {
     pub fn count(&self) -> u64 {
         self.counts.iter().sum()
     }
+
+    /// Adds `other`'s counts (two rows that become one).
+    fn merge(&mut self, other: &Self) {
+        for (n, add) in self.counts.iter_mut().zip(&other.counts) {
+            *n = n.saturating_add(*add);
+        }
+        self.sum_us = self.sum_us.saturating_add(other.sum_us);
+    }
 }
 
 /// One upstream's exchanges.
@@ -87,6 +95,14 @@ pub struct UpstreamTotals {
     pub ok: u64,
     pub failed: u64,
     pub latency: Buckets,
+}
+
+impl UpstreamTotals {
+    fn merge(&mut self, other: &Self) {
+        self.ok = self.ok.saturating_add(other.ok);
+        self.failed = self.failed.saturating_add(other.failed);
+        self.latency.merge(&other.latency);
+    }
 }
 
 /// Everything [`crate::Aggregates`] exports cumulatively.
@@ -196,6 +212,47 @@ impl Exported {
                 *total = total.saturating_add(n);
             }
         }
+    }
+
+    /// REQ: OBS-005 (issue #108) — [`Self::regroup`] for upstream IDs (an upstream's place in
+    /// the configuration, from 1), for a reload that builds a new router (`old` and `new`: each
+    /// upstream's ID and name, before and after): moves each upstream's exchange totals and
+    /// latency histogram to the ID its name has now. A name that is gone takes its row along, a
+    /// new one starts empty, and ID 0 (every attempt failed: no upstream's) stays. A row no
+    /// upstream had is dropped; the last row still holds every ID past it, under the upstream
+    /// it was shown with. The same table moves nothing. Reload path only.
+    pub fn reupstream(&mut self, old: &[(u16, &str)], new: &[(u16, &str)]) {
+        if old == new {
+            return;
+        }
+        let mut index: HashMap<&str, u16> = HashMap::with_capacity(new.len());
+        for (id, name) in new {
+            index.entry(*name).or_insert(*id);
+        }
+        let mut name_of: HashMap<u16, &str> = HashMap::with_capacity(old.len());
+        for (id, name) in old {
+            name_of.entry(*id).or_insert(*name);
+        }
+        let mut upstreams: Vec<UpstreamTotals> = Vec::new();
+        for (row, totals) in self.upstreams.iter().enumerate() {
+            let to = if row == 0 {
+                Some(0)
+            } else {
+                u16::try_from(row)
+                    .ok()
+                    .and_then(|id| name_of.get(&id))
+                    .and_then(|name| index.get(name))
+                    .map(|&id| usize::from(id).min(MAX_UPSTREAMS - 1))
+            };
+            let Some(i) = to else {
+                continue;
+            };
+            if upstreams.len() <= i {
+                upstreams.resize(i + 1, UpstreamTotals::default());
+            }
+            upstreams[i].merge(totals);
+        }
+        self.upstreams = upstreams;
     }
 }
 
@@ -377,5 +434,65 @@ mod tests {
             "g69's block, by its own index"
         );
         assert_eq!(x.blocked.len(), 1);
+    }
+
+    /// `n` exchanges with upstream ID `id`.
+    fn exchange(x: &mut Exported, id: u16, n: usize) {
+        for _ in 0..n {
+            x.add_upstream(&UpstreamEvent {
+                upstream: id,
+                latency_us: 1_500,
+                ok: true,
+                ts_us: 0,
+                attempts: 1,
+            });
+        }
+    }
+
+    fn exchanges(x: &Exported, id: usize) -> u64 {
+        x.upstreams.get(id).map_or(0, |u| u.latency.count())
+    }
+
+    /// REQ: OBS-005 (issue #108) — `reupstream` moves each row to its name's new ID: the same
+    /// table moves nothing, ID 0 stays, a gone name and a row no upstream had are dropped, a new
+    /// one starts empty, and the last row still holds every ID past it.
+    #[test]
+    fn obs_005_reupstream_moves_histograms_by_name() {
+        let mut x = Exported::default();
+        exchange(&mut x, 0, 1);
+        exchange(&mut x, 1, 2);
+        exchange(&mut x, 2, 3);
+        exchange(&mut x, 7, 4);
+        let ab = [(1, "a"), (2, "b")];
+        x.reupstream(&ab, &ab);
+        assert_eq!(exchanges(&x, 7), 4, "the same table moves nothing");
+        x.reupstream(&ab, &[(1, "c"), (2, "b"), (3, "a")]);
+        assert_eq!(
+            (0..4).map(|i| exchanges(&x, i)).collect::<Vec<_>>(),
+            [1, 0, 3, 2]
+        );
+        assert_eq!(x.upstreams.len(), 4, "the row no upstream had is dropped");
+        assert_eq!((x.upstreams[3].ok, x.upstreams[3].failed), (2, 0));
+        x.reupstream(&[(1, "c"), (2, "b"), (3, "a")], &[(1, "b")]);
+        assert_eq!((exchanges(&x, 0), exchanges(&x, 1)), (1, 3));
+        assert_eq!(x.upstreams.len(), 2);
+
+        let mut x = Exported::default();
+        exchange(&mut x, 255, 1);
+        exchange(&mut x, 300, 2);
+        assert_eq!(exchanges(&x, 255), 3, "ID 300 shares the last row");
+        x.reupstream(&[(255, "u255"), (300, "u300")], &[(1, "u300"), (2, "u255")]);
+        assert_eq!(
+            (exchanges(&x, 1), exchanges(&x, 2)),
+            (0, 3),
+            "the last row goes with the upstream it was shown with"
+        );
+        x.reupstream(&[(2, "u255")], &[(400, "u255")]);
+        assert_eq!(x.upstreams.len(), MAX_UPSTREAMS);
+        assert_eq!(
+            exchanges(&x, MAX_UPSTREAMS - 1),
+            3,
+            "past the cap: the last row"
+        );
     }
 }
