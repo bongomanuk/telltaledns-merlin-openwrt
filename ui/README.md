@@ -146,9 +146,11 @@ translator runs `node scripts/i18n.mjs sync <tag>`, fills in the empty translati
 `src/locales/<tag>.json` (pairs of English and translation; a plural lists the language's
 categories), and opens the pull request. A pull request that updates a language already in the
 manifest changes only its pack. A plural form other than `other` may
-leave out `{n}`, but in some languages it is used for more than one number: Russian, Ukrainian,
-Croatian and Serbian `one` also for 21, 31 or 101, Latvian `zero` also for 10 to 20, 30 and so on.
-Keep `{n}` in those forms.
+leave out `{n}` only where it is used for exactly one number. Many forms are used for more: French
+and Portuguese `one` is 0 and 1, Russian `one` is 1, 21, 31 and 101, Latvian `zero` is 0, 10 to 20,
+30 and so on. Keep `{n}` in a form unless you know that it covers exactly one number in your
+language. The CLDR plural rules for the language list what each form covers
+(https://www.unicode.org/cldr/charts/latest/supplemental/language_plural_rules.html).
 After an English edit that keeps the meaning, a maintainer runs `node scripts/i18n.mjs carry
 <context> --from "<old>" --to "<new>"`; otherwise the old pair is reported as left over and English
 is shown until the language's owner confirms the new text.
