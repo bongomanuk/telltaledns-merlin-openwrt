@@ -61,6 +61,11 @@ pub(crate) struct Sources {
     pub(crate) config: ArcSwap<telltale_config::Config>,
     /// The config files alone (what the API's entries are merged onto; ADR-040).
     pub(crate) file_config: ArcSwap<telltale_config::Config>,
+    /// REQ: API-002, API-010, CLU-003 (ADR-040, ADR-051; GitHub issue #113) — what the last
+    /// reload merged the API's entries onto when that isn't `file_config` alone: on a primary
+    /// promoted from replica, the files plus the cluster version it last applied. The write
+    /// checks validate a change against that same merge. `None`: the files alone.
+    pub(crate) managed_base: ArcSwapOption<telltale_config::Config>,
     /// REQ: OBS-010 (ADR-179) — the files couldn't be read at start-up, so `file_config` holds
     /// the running configuration instead, until a reload reads them: nothing in it counts as this
     /// node's own when alert destinations' credential files are checked.
@@ -108,6 +113,15 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
+    /// REQ: OBS-010 (ADR-179), API-002, API-010, CLU-003 (ADR-040, ADR-051; GitHub issue #113) —
+    /// keeps the config files a reload read, and what it merged the API's entries onto with them
+    /// ([`crate::replication::managed_base`]).
+    pub(crate) fn store_files(&self, file: telltale_config::Config) {
+        self.managed_base
+            .store(crate::replication::managed_base(&file).map(Arc::new));
+        self.file_config.store(Arc::new(file));
+    }
+
     /// REQ: OPS-003 — whether client IPs appear masked in the latest 10-minute window.
     pub(crate) fn masked_clients(&self) -> Option<crate::masking::Masked> {
         let now = std::time::SystemTime::now()
@@ -646,7 +660,7 @@ pub(crate) fn render(src: &Sources) -> String {
     let state = src.pipeline.current();
     render_upstreams(&mut w, &state.router);
     render_upstream_quality(&mut w, &src.pipeline.quality, &state.router);
-    render_exported(&mut w, src, &state);
+    render_exported(&mut w, src);
     if let Some(l) = src.lists.load_full() {
         render_lists(&mut w, &l.fetcher, &src.config.load());
         render_filter(&mut w, &l);
@@ -1714,8 +1728,13 @@ fn render_groups(
     }
 }
 
-fn render_exported(w: &mut PromWriter, src: &Sources, state: &crate::pipeline::Dynamic) {
-    let ex = src.pipeline.telemetry.aggregates().exported.clone();
+fn render_exported(w: &mut PromWriter, src: &Sources) {
+    // REQ: OBS-005 (issue #108) — the rows and the group table they are numbered by, read
+    // together: a reload moves the rows and swaps the table under this lock.
+    let (ex, state) = {
+        let agg = src.pipeline.telemetry.aggregates();
+        (agg.exported.clone(), src.pipeline.current())
+    };
     w.family(
         "telltale_stage_duration_seconds",
         "histogram",

@@ -223,6 +223,39 @@ impl ScheduleNow {
                 .collect(),
         }
     }
+
+    /// REQ: FLT-010 — a schedule follows its group across a reload that renumbers the groups
+    /// (`old` and `new`: the group names by index, before and after): each group's entries
+    /// move to its name's new index, and a new group has none until the ticker's next pass.
+    pub(crate) fn regroup(&self, old: &[&str], new: &[&str]) -> Self {
+        let at = |name: &str| old.iter().position(|n| *n == name);
+        let block_all: Vec<_> = new
+            .iter()
+            .map(|n| at(n).and_then(|i| self.block_all.get(i).cloned().flatten()))
+            .collect();
+        let extras: Vec<Vec<String>> = new
+            .iter()
+            .map(|n| {
+                at(n)
+                    .and_then(|i| self.extras.get(i).cloned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        Self {
+            block_all: if block_all.iter().any(Option::is_some) {
+                block_all
+            } else {
+                Vec::new()
+            },
+            extras: if extras.iter().any(|e| !e.is_empty()) {
+                extras
+            } else {
+                Vec::new()
+            },
+            scheduled: self.scheduled.clone(),
+            names: self.names.clone(),
+        }
+    }
 }
 
 /// The active filter (`spec/03` §3 step 6): a matcher plus, per client, which lists apply.
@@ -802,7 +835,46 @@ impl Pipeline {
     /// Swaps in new routing/policy (OPS-009). In-flight queries finish with the state they
     /// started with; new queries see the new state immediately.
     pub(crate) fn reload(&self, router: Arc<Router>, policy: Policy) {
-        retire(self.state.swap(Arc::new(Dynamic { router, policy })));
+        // REQ: OBS-005 (issue #108) — the exported per-group counters move to their group's new
+        // index, by name, in one step with the swap: under the aggregates' lock, which a scrape
+        // holds while it reads them with the group table, so it sees both before or both after.
+        // Events already on their way (in the rings, up to one drain; held for a Kubernetes
+        // workload, up to `WORKLOAD_HOLD`; from queries that started before the swap and still
+        // wait for an upstream) carry the old index and count under its new owner: a handful
+        // of queries per reload, not a group's total. Nothing changes on the query path.
+        fn names(p: &Policy) -> Vec<&str> {
+            p.clients.groups().iter().map(|g| &*g.name).collect()
+        }
+        fn upstreams(r: &Router) -> Vec<(u16, &str)> {
+            r.upstreams()
+                .iter()
+                .map(|u| (u.id, u.name.as_str()))
+                .collect()
+        }
+        let old = {
+            let mut agg = self.telemetry.aggregates();
+            let current = self.state.load_full();
+            let groups = (names(&current.policy), names(&policy));
+            agg.exported.regroup(&groups.0, &groups.1);
+            // REQ: FLT-010 — a schedule follows its group across a reload: the schedule state is
+            // by group index too (the ticker recomputes it every 15 s), so it moves with the
+            // names, before the masks below are rebuilt from it.
+            let schedules =
+                (groups.0 != groups.1).then(|| self.schedules.load().regroup(&groups.0, &groups.1));
+            drop(groups);
+            // The same for the upstream histograms, by upstream ID (an upstream's place in the
+            // configuration), when the reload builds a new router.
+            if !Arc::ptr_eq(&current.router, &router) {
+                agg.exported
+                    .reupstream(&upstreams(&current.router), &upstreams(&router));
+            }
+            let old = self.state.swap(Arc::new(Dynamic { router, policy }));
+            if let Some(s) = schedules {
+                self.schedules.store(Arc::new(s));
+            }
+            old
+        };
+        retire(old);
         // Group/client changes re-derive the per-client list masks for the current snapshot.
         self.set_filter(None);
     }
@@ -3179,6 +3251,129 @@ groups = ["kids"]
         assert!(
             !blocked(&ask("10.0.1.5:1000", "game.example.com")),
             "only for its own group"
+        );
+    }
+
+    /// REQ: FLT-010 (T7.10) — a schedule follows its group across a reload that renumbers the
+    /// groups, before the schedule ticker's next pass: a block-everything schedule stays with
+    /// its group, and so does a list a schedule turns on. The schedule state is computed once,
+    /// at fixed instants; the reload reads no clock.
+    #[test]
+    #[allow(clippy::too_many_lines)] // two reloads, each checked from three groups
+    fn flt_010_a_reload_that_renumbers_groups_keeps_each_schedule_with_its_group() {
+        let schedules = r#"
+[[list]]
+name = "games"
+rules = ["||game.example.com^"]
+
+[[schedule]]
+name = "bedtime"
+action = "block_all"
+tz = "UTC"
+window = [{ days = ["daily"], start = "21:00", end = "07:00" }]
+
+[[schedule]]
+name = "weekend-games"
+action = "enable_lists"
+lists = ["games"]
+tz = "UTC"
+window = [{ days = ["weekends"], start = "12:00", end = "18:00" }]
+"#;
+        let groups = r#"
+[[group]]
+name = "default"
+schedules = ["weekend-games"]
+
+[[group]]
+name = "kids"
+networks = ["10.0.1.0/24"]
+schedules = ["bedtime"]
+"#;
+        // The same groups, with one added in front: `default` moves from 0 to 1, `kids` to 2.
+        let renumbered =
+            format!("[[group]]\nname = \"aaa\"\nnetworks = [\"10.0.2.0/24\"]\n{groups}");
+        let load = |groups: &str| -> telltale_config::Config {
+            telltale_config::Loader::new()
+                .toml_str("t.toml", format!("{schedules}{groups}"))
+                .env(Vec::<(String, String)>::new())
+                .load()
+                .unwrap()
+                .config
+        };
+        let policy = |cfg: &telltale_config::Config| {
+            let clients = Arc::new(ClientTable::from_config(cfg));
+            Policy {
+                quick: Arc::new(telltale_policy::QuickRules::from_config(cfg, &clients)),
+                clients,
+                ..Policy::open()
+            }
+        };
+        let (before, after) = (load(groups), load(&renumbered));
+        let p = Pipeline::new(
+            Settings::default(),
+            Arc::new(Cache::new(CachePolicy::default())),
+            Arc::new(Router::default()),
+            policy(&before),
+        );
+        install_lists(&p, &[("games", "||game.example.com^\n")]);
+        // The ticker's pass at `now` for `cfg`'s groups (as numbered now).
+        let tick = |cfg: &telltale_config::Config, now: i64| {
+            let clients = Arc::clone(&p.current().policy.clients);
+            p.schedules.store(Arc::new(ScheduleNow::compute(
+                cfg,
+                &telltale_config::schedule::compile(cfg),
+                clients.groups(),
+                now,
+            )));
+            p.set_filter(None);
+        };
+        let ask = |peer: &str, name: &str| {
+            let mut out = [0u8; 4096];
+            let meta = RequestMeta {
+                peer: peer.parse().unwrap(),
+                local: None,
+                transport: Transport::Udp,
+                client_id: None,
+            };
+            match Handler(Arc::clone(&p)).handle(&query(name, rtype::A, true), &meta, &mut out) {
+                Response::Ready(len) => out[..len].to_vec(),
+                _ => Vec::new(),
+            }
+        };
+        let blocked =
+            |r: &[u8]| summarize(r).is_ok_and(|s| s.rcode == rcode::NOERROR && s.answers == 1);
+        let (kid, other, new) = ("10.0.1.5:1000", "10.0.0.9:1000", "10.0.2.5:1000");
+        // Monday 2026-10-05 22:00 UTC: bedtime is on for `kids`.
+        let monday_2200: i64 = 1_791_237_600;
+        tick(&before, monday_2200);
+        assert!(blocked(&ask(kid, "www.example.org")), "bedtime blocks kids");
+        assert!(!blocked(&ask(other, "www.example.org")));
+        p.reload(Arc::new(Router::default()), policy(&after));
+        assert!(
+            blocked(&ask(kid, "www.example.org")),
+            "bedtime still blocks kids after the reload"
+        );
+        assert!(
+            !blocked(&ask(other, "www.example.org")),
+            "and not default, now at kids' old index"
+        );
+        assert!(!blocked(&ask(new, "www.example.org")), "nor the new group");
+        // Saturday 13:00 UTC: the weekend games list is on for `default` (index 1 now); a
+        // reload back to the first table puts `default` at 0 and `kids` at 1.
+        tick(&after, monday_2200 + 4 * 86_400 + 15 * 3600);
+        assert!(
+            blocked(&ask(other, "game.example.com")),
+            "games on for default"
+        );
+        assert!(!blocked(&ask(new, "game.example.com")));
+        p.reload(Arc::new(Router::default()), policy(&before));
+        assert!(
+            blocked(&ask(other, "game.example.com")),
+            "the games list stays with default after the reload"
+        );
+        assert!(
+            !blocked(&ask(kid, "game.example.com")),
+            "and not kids, now at default's old index"
         );
     }
 

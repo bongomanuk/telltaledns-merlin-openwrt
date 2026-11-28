@@ -3,10 +3,14 @@
 // nothing. Expects the state 1-ui.spec.ts leaves (the admin `admin`, some queries in the log), as
 // 2-shots.spec.ts does. (The parts that need no browser are 7-i18n.spec.ts.)
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { failOnPageErrors, listen } from './page-errors';
 
 // REQ: API-005 — a page error fails the test, as in 1-ui.spec.ts.
 failOnPageErrors(test);
+
+const UI = resolve(import.meta.dirname, '../..');
 
 const ADMIN = { user: 'admin', pass: 'correct horse battery' };
 // The core: files directly under /assets/, of these kinds. No subfolder (assets/locales/), no JSON.
@@ -62,10 +66,22 @@ test('api_012 lang parameter applies to one page load and stores nothing', async
   expect(await page.locator('table.log').innerText()).not.toContain('š');
   expect(await storage()).toEqual(before);
   // A language that has no catalog: English, and nothing stored either.
-  await page.goto('/?lang=zh-Hans#/queries');
+  await page.goto('/?lang=de#/queries');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(rows.first()).toBeVisible();
   expect(await storage()).toEqual(before);
+  // A language that is shipped but not offered (the manifest says `offered: false`) is reachable the same way,
+  // for one page load: its own lang and text, and nothing stored either.
+  const shipped = Object.keys(JSON.parse(readFileSync(join(UI, 'src/locales/manifest.json'), 'utf8')) as Record<string, unknown>);
+  for (const tag of shipped) {
+    await page.goto(`/?lang=${tag}#/queries`);
+    await expect(page.locator('html')).toHaveAttribute('lang', tag);
+    await expect(rows.first()).toBeVisible();
+    expect(await storage()).toEqual(before);
+    await page.goto('/#/queries');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    expect(await storage()).toEqual(before);
+  }
 });
 
 // A count of 0, 1 and 2 on pages whose text comes from tn(): the English plural rule gives `0 answers`,

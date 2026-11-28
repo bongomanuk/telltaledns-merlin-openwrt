@@ -19,6 +19,7 @@
   <p class="lede">Short answers, each with a link to the details. Missing yours? <a href="https://github.com/paimonsoror/telltaledns/issues">Open an issue</a> and it may end up here.</p>
   <ul class="toc">
     <li><a href="#fit">Is it right for me?</a></li>
+    <li><a href="#running">Installing and running</a></li>
     <li><a href="#resolving">Resolving names</a></li>
     <li><a href="#blocking">Blocking</a></li>
     <li><a href="#devices">Devices and encrypted DNS</a></li>
@@ -65,6 +66,26 @@
     <dd>
       <p>One maintainer builds it and runs it at home. It is free and open source, under either the Apache 2.0 or the MIT license, and the aim is community-driven development as it grows. Issues, pull requests, and ideas are welcome, and everyone who contributes is credited in the <a href="https://github.com/paimonsoror/telltaledns#contributors">README</a>.</p>
       <p>It is developed with Claude Code, and every commit it worked on carries a <code>Co-Authored-By: Claude</code> line. The README says so under <a href="https://github.com/paimonsoror/telltaledns#built-with-claude">Built with Claude</a>.</p>
+    </dd>
+  </dl>
+</section>
+
+<section id="running">
+  <h2>Installing and running</h2>
+  <dl class="faq">
+    <dt id="q-port53">The container exits at start with "Address already in use". What now?</dt>
+    <dd>
+      <p>Another program already listens on port 53. TelltaleDNS listens on every address by default (<code>0.0.0.0</code> and <code>[::]</code>), and on Linux a program that listens on port 53 on just one address of the machine is enough to block that. The error names the listener and the port, and says on the same line what to do: <code>telltale: Udp 0.0.0.0:53: Address already in use (os error 98); another program on this machine already uses port 53 …</code></p>
+      <p>See which program it is, on the machine itself: <code>sudo ss -lunp 'sport = :53'</code> for UDP and <code>sudo ss -ltnp 'sport = :53'</code> for TCP. The usual ones are systemd-resolved's stub listener on <code>127.0.0.53</code>, <code>dnsmasq</code> (including the one libvirt starts for its virtual machine network, often on <code>192.168.122.1</code>), another resolver or ad blocker, and the built-in DNS service of a NAS or router. Stop it if TelltaleDNS replaces it. To run beside it with host networking (the Compose bundle) or a native install, listen on this machine's own address: put these in the <code>telltale.toml</code> that TelltaleDNS reads (the Compose bundle's file has them commented out), then start it again.</p>
+<pre><code>[[listen]]
+proto = "udp"
+addr = "192.168.1.2:53"   # this machine's LAN address
+
+[[listen]]
+proto = "tcp"
+addr = "192.168.1.2:53"</code></pre>
+      <p>Only the listed addresses answer then. The machine itself on <code>127.0.0.1</code>, and a device that reaches the machine on another of its addresses, such as a virtual machine network, get no answer, so list every address that should answer. The address must exist when TelltaleDNS starts (a static address, or a DHCP reservation in your router).</p>
+      <p>With published ports (<code>docker run -p</code>) instead of host networking, that address doesn't exist inside the container: leave <code>[[listen]]</code> as it is and publish on the one address instead, <code>-p 192.168.1.2:53:53/udp -p 192.168.1.2:53:53/tcp</code>. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#raspberry-pi-and-linux">Details</a>.</p>
     </dd>
   </dl>
 </section>
@@ -222,7 +243,7 @@ upstream_group = "lan"</code></pre>
 
     <dt id="q-hang">What if the service says it's running but nothing answers?</dt>
     <dd>
-      <p>A built-in <b>watchdog</b> looks for exactly that. Every 5 seconds a thread of its own checks that the node can still run a task and that its own listener answers a probe question. If neither has worked for a minute, it writes a <b>dump</b> (which check failed, every thread and what it waits on, where each one is stuck, and the last log lines) under <code>&lt;data_dir&gt;/watchdog/</code> and ends the process, so systemd, Docker, or Kubernetes starts it again. That's a restart of a few seconds instead of an outage until someone notices. It has limits: it restarts a node at most six times an hour (after that a node that is still stuck stays stuck, and the watchdog says so in its dump and its log: <code>restart cap reached; not restarting</code>), it doesn't see a partial stall where one worker is blocked and the rest still run, and it takes about a minute to act.</p>
+      <p>A built-in <b>watchdog</b> looks for exactly that. Every 5 seconds a thread of its own checks that the node can still run a task and that its own listener answers a probe question. If either one hasn't worked for a minute (<code>[watchdog] stall_secs</code>, 60 seconds by default), it writes a <b>dump</b> (which check failed, every thread and what it waits on, where each one is stuck, and the last log lines) under <code>&lt;data_dir&gt;/watchdog/</code> and ends the process, so systemd, Docker, or Kubernetes starts it again. That's a restart of a few seconds instead of an outage until someone notices. It has limits: it restarts a node at most six times an hour (after that a node that is still stuck stays stuck, and the watchdog says so in its dump and its log: <code>restart cap reached; not restarting</code>), it doesn't see a partial stall where one worker is blocked and the rest still run, and it takes about a minute to act.</p>
       <p>The dump holds no client data. Every release publishes the matching debug file, so the stacks in it can be turned into function names. Attach the dump, or a support package (which includes it), to an issue. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#when-a-node-stops-answering-the-watchdog">Details</a>.</p>
     </dd>
 

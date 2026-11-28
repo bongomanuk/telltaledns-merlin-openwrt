@@ -98,7 +98,24 @@ docker compose exec telltale telltale auth setup-token     # then open http://<h
 ```
 The container uses the host network, a read-only root filesystem, and only `NET_BIND_SERVICE`, as root inside the container by default. To run it as the image's unprivileged user, set `net.ipv4.ip_unprivileged_port_start=53` on the host (`echo net.ipv4.ip_unprivileged_port_start=53 | sudo tee /etc/sysctl.d/50-telltale.conf && sudo sysctl --system`) and switch `user:` in `compose.yaml`. Updates: `docker compose pull && docker compose up -d`. Reload the config without a restart: `docker compose kill -s HUP`.
 
-**Port 53 already in use:** on Ubuntu and some Debian setups, systemd-resolved's stub listener holds `127.0.0.53:53`. `install.sh` turns it off with the recommended settings of a new install in a terminal, asks in the walk-through (step 5), and asks `[Y/n]` on a re-run or with `--yes` in a terminal; without a terminal it leaves it as it is, unless `--interactive` feeds the answers of a new install; `--disable-resolved-stub` turns it off without asking (the walk-through still asks, and its answer wins). The machine then resolves through TelltaleDNS. After turning it off the installer waits up to 15 seconds for port 53 to be free before it starts the service; if something still holds it, the installer prints what (the `ss` line, with the process) and the next step; for Compose, add `DNSStubListener=no` under `[Resolve]` in `/etc/systemd/resolved.conf.d/telltale.conf` and `sudo systemctl restart systemd-resolved`. Alternatively listen on the LAN address only with `[[listen]]`. Pi-hole or another resolver on the same machine must be stopped first.
+**Port 53 already in use:** the default listeners are on `0.0.0.0` and `[::]`, and on Linux a program that listens on port 53 on any one address of the machine is enough to block them (always for TCP; for UDP, a program that also sets `SO_REUSEPORT` and runs as the same user doesn't block the bind, and then shares the port with TelltaleDNS). The start then stops with, for example, `telltale: Udp 0.0.0.0:53: Address already in use (os error 98)`, followed on the same line by what to do. To see which program holds the port (`sudo` shows the processes of every user):
+```sh
+sudo ss -lunp 'sport = :53'    # UDP
+sudo ss -ltnp 'sport = :53'    # TCP
+```
+The usual ones are systemd-resolved's stub listener on `127.0.0.53` (below), `dnsmasq` (including the one libvirt starts for its virtual machine network, on the bridge's address, often `192.168.122.1` on `virbr0`), another resolver or ad blocker, and the built-in DNS service of a NAS or router. Stop the program if TelltaleDNS replaces it. To run beside it with a native install or host networking (the Compose bundle), listen on this machine's own address instead of on every address:
+```toml
+[[listen]]
+proto = "udp"
+addr = "192.168.1.2:53"   # this machine's LAN address
+
+[[listen]]
+proto = "tcp"
+addr = "192.168.1.2:53"
+```
+With Docker Compose this goes into the bundle's `telltale.toml`, which `compose.yaml` mounts as `/etc/telltale/telltale.toml` and which has this example commented out. With `[[listen]]` set, only the listed addresses answer: the machine itself on `127.0.0.1` and a device that reaches the machine on another of its addresses (a second network, a VPN, a virtual machine network) get no answer, so list every address that should answer, IPv6 ones included. Each listed address must exist when TelltaleDNS starts (a static address, or a DHCP reservation in the router); if it isn't there yet, the start fails and systemd (`Restart=on-failure`) or Docker (`restart: unless-stopped`) tries again. With published ports (`docker run -p`, as in "Container image") the address doesn't exist inside the container, so leave `[[listen]]` as it is and publish on the one address instead: `-p 192.168.1.2:53:53/udp -p 192.168.1.2:53:53/tcp`. A reload applies listener changes, binding the new listeners before it closes the old ones; a listener other than plain UDP (tcp, dot, doh, doq, doh3) that moves between the wildcard address and one address on the same port therefore needs a restart, because the old listener still holds the port. After a failed start, a restart is the simplest way anyway (`sudo systemctl restart telltale`, `docker compose restart`).
+
+On Ubuntu and some Debian setups, systemd-resolved's stub listener holds `127.0.0.53:53`. `install.sh` turns it off with the recommended settings of a new install in a terminal, asks in the walk-through (step 5), and asks `[Y/n]` on a re-run or with `--yes` in a terminal; without a terminal it leaves it as it is, unless `--interactive` feeds the answers of a new install; `--disable-resolved-stub` turns it off without asking (the walk-through still asks, and its answer wins). The machine then resolves through TelltaleDNS. After turning it off the installer waits up to 15 seconds for port 53 to be free before it starts the service; if something still holds it, the installer prints what (the `ss` line, with the process) and the next step; for Compose, add `DNSStubListener=no` under `[Resolve]` in `/etc/systemd/resolved.conf.d/telltale.conf` and `sudo systemctl restart systemd-resolved`.
 
 **Small Pis and SD cards:** the query log writes continuously; keep `[telemetry.qlog] retention_days` short (the starter config uses 7) or put `/var/lib/telltale` on a USB SSD. On a Pi Zero 2 W (512 MB) also set `[node] workers = 2` and `[cache] max_bytes = "16MiB"`, and prefer smaller blocklists.
 
@@ -712,6 +729,40 @@ ecs = "client"                    # each client's /24 (IPv4) or /56 (IPv6)
 - Answers from an upstream group with a `"client"` member are cached per subnet, so one subnet's answer never reaches another. They're also left out of the cache file kept across restarts.
 - The subnet comes from the client's address (after PROXY protocol, if enabled). ECS options your clients send are still never forwarded.
 
+### Forwarding loops
+Every query TelltaleDNS forwards to an upstream carries an EDNS option (code 65429, from the range RFC 6891 keeps for local use) with a random tag the node picks when it starts. A query that arrives with the node's own tag has come back through an upstream that forwards to TelltaleDNS: it's dropped and an error is logged (`forwarding loop detected`), so it doesn't go round until it times out. If the log reports one, fix the upstream that sends queries back.
+
+A few resolvers drop every query that carries an EDNS option they don't know (RFC 6891 asks them to ignore it), so every query to them times out (over DoH, fails with an HTTP error) and their breaker stays open, while `dig` from the same host gets answers. Leave the option out for such an upstream:
+```toml
+[[upstream]]
+name = "strict-resolver"
+url = "udp://198.51.100.53"
+loop_tag = false                  # default: true
+```
+- Its queries and health checks go without the option, and so do the lookups of its host name through its own `bootstrap` servers. The system resolvers that look up host names for upstreams without `bootstrap` are shared, and keep it: if they drop it too, give the upstream its own `bootstrap`.
+- **`loop_tag = false` doesn't fix a loop, it hides one**: a query that comes back is no longer dropped, and goes round. Keep the option on for any upstream that can reach this node: a router or another resolver that forwards to TelltaleDNS, or this node's own address. Don't turn it off to quiet `forwarding loop detected`.
+- The configuration refuses `loop_tag = false` toward this node, as far as it can tell, when a URL or a `bootstrap` server is:
+  - a loopback address (127.0.0.0/8, `::1`, or one mapped into IPv6);
+  - an unspecified address (`0.0.0.0`, `::`);
+  - the name `localhost`, or a name under it;
+  - or an address a `[[listen]]` entry uses, **on any port**, so a forwarder on another port of this host (say `127.0.0.1:5353`) is refused too.
+
+  It's also refused on a `recursive://` upstream, which never sends the option.
+- It still accepts, because it doesn't check them:
+  - a DNS stamp (`sdns://`) whose address is this node;
+  - this node's `[api]`, `[metrics]` and `[cluster]` addresses;
+  - the machine's other addresses (a node listening on `0.0.0.0` doesn't name its LAN address, and nothing reads them from the host);
+  - another name for this node;
+  - a resolver that forwards back.
+
+  **Test it** (`POST /api/v1/checks/upstream`) asks a draft without these checks, so it can say "Works" for an upstream that saving refuses. In a cluster each node checks against its own listeners: see [Setting `loop_tag` in a cluster](#setting-loop_tag-in-a-cluster).
+- A domain forwarded in the UI or the API keeps the option. To forward a domain to such a resolver, define an `[[upstream]]` with `loop_tag = false`, an `[[upstream_group]]` for it, and a `[[route]]` with its `match_suffix`.
+
+#### Setting `loop_tag` in a cluster
+- **Upgrade every node before you set `loop_tag` on a shared upstream.** A node on an earlier version can't read a shared configuration that has the key (only `false` is written there). It refuses that version and keeps serving the configuration it has. It refuses every later version too while the key is in it, so it stops following the cluster's changes until it's upgraded or the key is removed. An earlier build also refuses the key in its own file, so don't write it, `true` or `false`, in a file such a build reads. An upstream that doesn't set the key is shared exactly as before.
+- **Each node checks the shared upstreams against its own listeners.** The primary accepts `loop_tag = false` on an upstream at a replica's `[[listen]]` address. That replica refuses the version in the same way, and every later one while the upstream stays.
+- **A node that refuses a version** logs `cluster configuration not applied`, shows the error in its sync status, and adds a `sync_failed` event to the cluster's timeline. After setting the key, check on [the Cluster page](#clusters) that every node is on the new version.
+
 ### Through a proxy (Tor)
 Send an upstream's traffic through a SOCKS5 or HTTP proxy, for example Tor, so the resolver never sees your address:
 ```toml
@@ -786,7 +837,7 @@ flowchart LR
   These answers have the status `refreshed`, so `stale` keeps meaning "upstreams failed or were slow" (or the resolver was too busy to start the refresh). They cost about as much as a fresh cache hit. The trade-off is that a name whose address changed within the hour is answered once with the old address (for 30 s) while the new one is fetched. `[cache]` is per node: set it on every node of a cluster.
 - **What the dashboard counts:** the **Cache hits** tile is every answer given from the cache: fresh, `refreshed`, or `stale`, out of the answers that weren't blocked or local. In the Advanced view its second line splits it ("41% fresh · 22% refreshed") and the status chart shows `refreshed` on its own. The Cache page's "Answered from the cache" is the same number per node, with the fresh share beside it. Prometheus counts a refreshed or stale answer as a cache miss plus one `telltale_cache_stale_served_total`; the Grafana dashboard's **Answered from cache** panel shows both lines.
 - **Privacy:** queries to upstreams carry a fresh random ID and source port, and none of the client's EDNS options (no client subnet, cookies, or MAC addresses are forwarded).
-- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever.
+- **Loop protection:** outbound queries carry a random per-process tag. If one comes back to us (an upstream that forwards to TelltaleDNS), it's dropped and an error is logged instead of looping forever. An upstream that drops queries carrying it can go without it: see [Forwarding loops](#forwarding-loops).
 
 ## Local records
 Names on your network, answered by TelltaleDNS itself (authoritatively, before cache and upstreams):
@@ -1398,6 +1449,8 @@ Click a device's address anywhere (the dashboard's top clients, the query log, t
 
 Devices named this way are stored in `state.db` (next to users and the audit log) and merged with `[[client]]` entries from the config files. The files win: a device defined in a file is read-only in the UI, and the UI can't reuse its name. If a stored device stops being valid (say its group was removed from the file), TelltaleDNS logs why and runs with the file config alone until it's fixed. Operators and admins can name devices; viewers see the names.
 
+A change is checked against the configuration this node applies: its config files (on a primary promoted after a failover, the cluster version it continues from: see [Clusters](#clusters)), everything stored in the UI, and the change. One that would stop the stored devices from applying, such as a rename that keeps an address another device still has, is refused with the reason, and nothing is stored. A stored device that isn't in effect (the files have a device of its name, or the stored devices don't apply until something is fixed) can still be deleted, with `DELETE /api/v1/clients/{name}`, and one that a device of the files hides can be renamed to a free name and address; while the stored devices don't apply, a delete is the one change accepted that doesn't fix them, and its answer says what still stops them.
+
 **Recognize it by its MAC address, or by this address.** When the node knows the MAC address of the address you clicked (from your router, or from its own neighbor table), the dialog asks how to recognize the device:
 - **Its MAC address** follows the device when its address changes: its name, groups and rules stay with it, for as long as your router (or, for a MAC only this server sees, its neighbor table) keeps reporting that MAC at one address. A router's MAC is followed for IPv4 addresses only; a MAC that is shared by several addresses, or that changes, or a router that has gone silent, is not followed, and the device falls back to its address, network or `default`. The dialog offers a router's MAC only while that router has been read within the last 15 minutes: while a device is named by its MAC the router is read at least every 10 minutes, but before any device is named by a MAC, with `interval_secs` above 900, the first naming may have to wait for a fresh read (the dialog offers the address until then). The device is saved with the MAC address alone, not the address it has now: an address key would name whoever gets that address next. For a new device it is what the dialog starts with when the MAC comes from a router (every node that hears it can use it) and isn't shared.
 - **This address** stops matching if the device gets another address (a DHCP reservation in your router keeps it). It is what the dialog starts with for a device that already exists (re-saving it to change a group must not strip its address: the MAC is offered, not preselected), when only this node's own neighbor table knows the MAC (other servers in a cluster, or one in Docker or Kubernetes, won't recognize the device by it), or when the MAC is at more than one address (a range extender or bridge may share it, so it can't tell those devices apart: the router's list, or this server's neighbor table, says so). The dialog says which, and the MAC is still offered.
@@ -1807,8 +1860,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   In `permissive` mode each bogus answer is also logged at INFO with its name, type, and
   EDE code (`DNSSEC: bogus answer served (permissive mode)`), so a trial shows which names
   `validate` would refuse.
-- **Indeterminate** (validation couldn't finish, such as the validator's depth limit): the
-  answer is fetched again without validation and served without AD, in both modes.
+- **Indeterminate** (validation couldn't finish, such as the validator's depth limit, or an
+  answer that doesn't reach its question, below): served without AD, in both modes; when
+  validation left nothing to serve, the answer is fetched again without validation.
 - **Unsigned zones:** before refusing an answer, TelltaleDNS proves whether its zone is
   simply unsigned, and if so serves it as insecure. The proof is the parent's signed denial
   of the zone's DS, made only of records of the parent zone (or of an unsigned top-level
@@ -1816,8 +1870,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   NS and neither SOA nor DS; or, in an NSEC3 Opt-Out zone such as `.com` or `.org`, the
   record of the name's parent (which must not itself be a delegation) and an Opt-Out record
   covering the name. This corrects the validation library's verdict on CNAME chains in
-  unsigned zones (`www.netflix.com`, `www.amazon.com`) and on names below parked domains
-  whose servers answer an SOA for every name (`www.smithsonianmag.org`). From v0.3.0 to
+  unsigned zones (`www.netflix.com`, `www.amazon.com`). Names below parked domains whose
+  servers answer an SOA for every name (`www.smithsonianmag.org`) were corrected the same
+  way; since hickory-net 0.26.4 the library judges them insecure itself. From v0.3.0 to
   v0.7.0 the proof didn't succeed under NSEC3 Opt-Out parents. Proven zones are remembered
   per upstream group, as long as the proof's records' TTL allows and at most 15 minutes
   (ADR-098, ADR-184). A name queried while TelltaleDNS hasn't cached its parent zone's keys
@@ -1829,6 +1884,9 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   at most 8 proofs run at once, and a name that couldn't be proven isn't tried again for a
   minute: when it can't be proven, the answer stays bogus (or, with no answer at all, stale
   or SERVFAIL as for any upstream failure).
+- **Memory:** each upstream group's validation cache keeps at most 8,192 record-set proofs,
+  about 13 MiB at most; the least recently used go first (ADR-196). A record set validated
+  again while its proof is still kept costs no key lookups.
 - **Denials behind a CNAME:** the validation library checks a "no such record" or "no such
   name" proof against the name that was asked, but after a CNAME the proof is about the chain's
   last name (`www.paypal.com AAAA`). Before refusing such an answer, TelltaleDNS validates it
@@ -1840,6 +1898,13 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   validations at once, within the same deadline. A link that doesn't validate, or gets no
   answer in time, leaves the answer bogus, and that question isn't validated this way again
   for a minute (ADR-188).
+- **Answers that reach their question:** an answer with records is secure only when it holds
+  the asked type at the name, or at the end of its CNAME chain, or a signed proof that that
+  name has none (for a CNAME, DS or ANY question: a CNAME, a DS or CNAME, or any record at the
+  name); otherwise it's served as it came, without AD, counted as indeterminate, and kept 300 s
+  at most (its answer records' TTLs are lowered to 300 s; `[cache] min_ttl` above that, or
+  serving stale answers, can keep it longer), in both modes. When validating link by link, a
+  last link that holds neither leaves the answer bogus (ADR-195).
 - **Wildcard answers:** every wildcard answer in a zone signed with NSEC is checked against
   RFC 4035 §5.3.4 before it is served: the zone's signed NSEC must show that no closer name
   exists, otherwise the answer is bogus and handled as any bogus answer (the unsigned-zone
@@ -1850,7 +1915,10 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed
   that isn't verified (during a key or algorithm rollover) is served without AD, as elsewhere.
   The check reads only the answer itself, on cache misses, in both modes. Zones signed with
   NSEC3 are left to the validation library: the check is skipped only beside a verified NSEC3
-  record of the zone that signed the answer (ADR-188).
+  record of the zone that signed the answer (ADR-188). In every zone, an answer with a record
+  of another name made from a wildcard is validated link by link, each name for its own
+  question; in a zone signed with NSEC3, a wildcard's record set at the name needs the zone's
+  NSEC3 record covering its own next closer name, otherwise the answer is bogus (ADR-195).
 - **Before switching to `validate`:** run `permissive` for a while and read the log; only
   names that are really broken (like `dnssec-failed.org`) should show up.
 - **Non-existent names answered locally** (RFC 8198, `aggressive_nsec`, on by default): a validated "no such name" from a zone signed with NSEC proves a whole range of names absent. A later question inside a proven range is answered from it: NXDOMAIN (or NODATA for a missing type), signed, with AD, and without asking upstream. A typical win is a home network's stray queries for made-up top-level names (`printer.lan`, `wpad.home`), which the root zone's NSEC records cover. Only proofs that validated as secure are used, only for as long as their TTL and the zone's negative TTL allow, and never below a delegation. Zones signed with NSEC3 (hashed names) still ask upstream. Counted in `telltale_dnssec_synthesized_total`; `[dnssec] aggressive_nsec = false` turns it off.
@@ -2060,7 +2128,15 @@ what was added in its UI or API. Each node keeps its own `[node]`, `[[listen]]`,
 - **What happens:**
   - the node takes a new *epoch* and continues from the last version it applied;
   - every node follows it;
-  - an old primary that comes back steps down by itself when it sees the newer epoch.
+  - an old primary that comes back steps down by itself when it sees the newer epoch;
+  - for changes made in the UI or the API, the version it continues from counts as its config
+    files: its devices, local names, forwarded domains and quick rules are read-only there (409),
+    and every change is checked against that version plus what the UI stored, and refused with
+    the reason when the result wouldn't apply (a renamed device that keeps an address the version
+    still gives another device, say). A device stored on this node before (made in the UI while it
+    was primary earlier) that the version also has isn't in effect, the version's is:
+    `DELETE /api/v1/clients/{name}` removes the stored copy, or rename it to a free name and
+    address to keep it as a device of its own.
 - **Changes the old primary made in the meantime aren't applied anywhere.** They're listed under
   **Conflicts** on that node's Cluster page, with the settings they touched, so you can make them
   again on the current primary.
@@ -2915,6 +2991,10 @@ Main metrics:
 
 Counters are kept per thread and summed on scrape, so recording never slows a query or allocates memory. The per-upstream, per-list, and per-client series are built by the analytics thread from query events, off the query path.
 
+The per-group series, `telltale_group_queries_total` and `telltale_blocked_total`, follow the group's name across a reload: a group you add starts at zero, the others keep their counts wherever the new configuration puts them, and a group you remove has its series end (renaming a group removes one name and adds another). Two limits: a few queries answered at the moment of the reload can count under the previous numbering; and with more than 64 groups, the 64th and later share one row, shown under the 64th group's name, so a reload that moves groups across that line can move a whole total to another name. The built-in live views (the per-second and per-minute counts by group and upstream, the traffic flows, and each group's top lists for the hour) are still counted by position: after a reload that renumbers the groups or upstreams they can disagree with `/metrics` until those minutes and hours age out, and the stored minute that spans the reload is kept under the new names.
+
+`telltale_upstream_duration_seconds` follows the upstream's name the same way. The router's own per-upstream counters (`telltale_upstream_requests_total` and the others) start again from zero when a reload rebuilds the router, and an upstream that keeps its name but changes protocol carries its history into its new `protocol` series.
+
 ### Traffic map
 **Monitor → Traffic map** answers "what is the network reaching right now?" in one picture, which suits a wall screen:
 - Each tile is a service, a site, or a name, sized by how often it was looked up this hour (or the previous clock hour). Blue tiles were answered, red ones were blocked; a stronger colour means busier.
@@ -3429,7 +3509,7 @@ The Upstreams page (servers and upstream groups), the Lists page, and the Groups
 | overrides the file | the UI's version replaces the file's entry of that name; **Revert to the file** brings the file's version back |
 | hidden | the file's entry is left out; **Revert to the file** brings it back |
 
-Each change is checked first: **Check** shows what it will do and any warnings (an upstream group that would lose its last member, a list no group uses), and nothing is saved until **Apply**. For upstreams and lists, **Test it** also tries the draft from this node: an upstream is asked for the root's NS records (it shows the answer and the time, or the error: a bad URL, a TLS name that doesn't match, a timeout), and a list is downloaded and parsed (how many rules, and the first lines it can't use). The API calls are `POST /api/v1/checks/upstream` and `POST /api/v1/checks/list`, with the same body as saving; agents use the MCP tools `check_upstream` and `check_list`. An agent's list check says how many lines couldn't be used and why, but not their text, since that is whatever the URL served; people see the lines in the UI. When a TLS file an upstream draft names (`tls_ca`, `tls_client_cert`, `tls_client_key`) can't be used, an administrator is told why and anyone else only that it couldn't be, not what the file holds or why (the node's log has the detail). A valid certificate file builds, so the check then answers as for any upstream. A change that would leave the configuration invalid is refused with the reason. Operators and admins can make changes; every change is audited and reaches every node in a cluster.
+Each change is checked first: **Check** shows what it will do and any warnings (an upstream group that would lose its last member, a list no group uses), and nothing is saved until **Apply**. For upstreams and lists, **Test it** also tries the draft from this node: an upstream is asked for the root's NS records (it shows the answer and the time, or the error: a bad URL, a TLS name that doesn't match, a timeout), and a list is downloaded and parsed (how many rules, and the first lines it can't use). The API calls are `POST /api/v1/checks/upstream` and `POST /api/v1/checks/list`, with the same body as saving; agents use the MCP tools `check_upstream` and `check_list`. An agent's list check says how many lines couldn't be used and why, but not their text, since that is whatever the URL served; people see the lines in the UI. When a TLS file an upstream draft names (`tls_ca`, `tls_client_cert`, `tls_client_key`) can't be used, an administrator is told why and anyone else only that it couldn't be, not what the file holds or why (the node's log has the detail). A valid certificate file builds, so the check then answers as for any upstream. A change that would leave the configuration invalid is refused with the reason, and nothing is saved: it is checked against the configuration this node applies, its config files (on a primary promoted after a failover, the cluster version it continues from) plus everything made in the UI, with the change. Operators and admins can make changes; every change is audited and reaches every node in a cluster.
 
 Changes are stored in `state.db`, next to named devices and local names. **The config files are never rewritten**: what's in the files stays as written, and `telltale config check` on the files alone still shows the file configuration. Simple view shows the common fields; switch to Advanced for timeouts, TLS names, refresh intervals, blocked-answer modes, priorities, and colors.
 
@@ -3773,7 +3853,7 @@ Keep the `head` hash somewhere else from time to time: a later `verify` with a d
 ## Reload without restarting
 Edit the config file, then send `SIGHUP` (`kill -HUP <pid>`, or `docker kill -s HUP telltale`). A `SIGHUP` sent while the node is still starting is kept, and the reload runs once it is up:
 - The whole config is validated first. If anything is wrong, the errors are logged and the **previous configuration keeps serving**.
-- Applied immediately, with no dropped queries: upstreams, groups, routes, local records and hosts files, `[access]`, `[ratelimit]`, `[special]`, and `[[listen]]` (new listeners are bound before removed ones are closed).
+- Applied immediately, with no dropped queries: upstreams, groups, routes, local records and hosts files, `[access]`, `[ratelimit]`, `[special]`, and `[[listen]]` (new listeners are bound before removed ones are closed, so a listener other than plain UDP (tcp, dot, doh, doq, doh3) that moves between the wildcard address and one address on the same port needs a restart; see "Port 53 already in use").
 - Applied at the next restart (a warning names them): `[cache]`, `[telemetry]`, `[node]`. The cache is kept across reloads, so warm answers aren't lost.
 - Upstream health starts fresh after a reload and is re-learned within a few queries.
 

@@ -135,6 +135,10 @@ url = "sdns://AQMAAAAAAAAAETk0LjE0MC4xNC4xNDo1NDQzINErR_JS3PLCu_iZEIbq95zkSV2LFs
       <p>Your devices' subnets are never sent. <code>ecs = "203.0.113.0/24"</code> sends a subnet you choose, for better CDN answers; <code>ecs = "client"</code> suits clients on public addresses. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#client-subnet-ecs">Details</a>.</p>
     </div>
     <div class="card">
+      <h3>Forwarding loops</h3>
+      <p>Queries forwarded to upstreams carry a loop-detection option, so a query that comes back to TelltaleDNS is dropped instead of going round. For a resolver that drops every query with an option it doesn't know, set <code>loop_tag = false</code> on it. Turning it off hides a loop, it doesn't fix one: keep it on for any upstream that can reach TelltaleDNS. It's refused toward a loopback or unspecified address, <code>localhost</code>, or a <code>[[listen]]</code> address on any port; the configuration doesn't check a DNS stamp's address, the node's API, metrics or cluster addresses, or other names and addresses of the machine, and <b>Test it</b> doesn't check it at all. In a cluster, upgrade every node first: a node that can't read the key stops following the cluster's changes (<a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#setting-loop_tag-in-a-cluster">in a cluster</a>). <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#forwarding-loops">Details</a>.</p>
+    </div>
+    <div class="card">
       <h3>Through a proxy (Tor)</h3>
       <p><code>proxy = "socks5://127.0.0.1:9050"</code> sends an upstream's traffic through SOCKS5 or HTTP, so the resolver never sees your address. Use <code>tcp://</code> or <code>tls://</code> with Tor. <a href="https://github.com/paimonsoror/telltaledns/blob/main/docs/running.md#through-a-proxy-tor">Details</a>.</p>
     </div>
@@ -377,7 +381,8 @@ negative_trust_anchors = ["corp.example"]   # internal zones that aren't signed<
       <tr><td>A Tor or HTTP proxy upstream doesn't answer</td><td>They don't carry UDP: use <code>tcp://</code> or <code>tls://</code>.</td></tr>
       <tr><td>Encrypted connections refused behind a load balancer</td><td>If the balancer hides client addresses, every client looks like the balancer: raise <code>max_connections_per_address</code> or set it to <code>0</code>, or use <code>proxy_protocol</code> if the balancer sends it.</td></tr>
       <tr><td>A renewed certificate isn't used</td><td>A broken renewal keeps the old certificate and logs a warning. Check the log and the new files.</td></tr>
-      <tr><td>The log reports a loop</td><td>An upstream forwards back to TelltaleDNS. Point it somewhere else.</td></tr>
+      <tr><td>The log reports a loop</td><td>An upstream forwards back to TelltaleDNS. Point it somewhere else. Don't set <code>loop_tag = false</code> on it: that hides the loop instead of fixing it, and the queries go round.</td></tr>
+      <tr><td>An upstream times out on every query (over DoH, fails with an HTTP error), while <code>dig</code> from the same host gets answers</td><td>It may drop queries that carry an EDNS option it doesn't know. Set <code>loop_tag = false</code> on it (see <a href="#encrypt-upstreams">Forwarding loops</a>).</td></tr>
     </tbody>
   </table></div>
 </section>

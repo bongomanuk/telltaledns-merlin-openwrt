@@ -557,6 +557,21 @@ pub struct Upstream {
     /// (IPv4) or /56 (IPv6), for public clients only, with answers cached per subnet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecs: Option<SafeString>,
+    /// REQ: UPS-009 (ADR-192) — send the loop-detection EDNS option (code 65429, with this node's
+    /// random tag) in every query forwarded to this upstream and to its own `bootstrap` servers,
+    /// so a query that comes back to this node is dropped instead of going round. On by default.
+    /// `false` leaves it out, for a resolver that drops every query carrying an EDNS option it
+    /// doesn't know. It doesn't fix a loop, it hides one: keep it on for any upstream that can
+    /// send queries back to this node. `false` is refused on a `recursive://` upstream (which
+    /// never sends the option) and toward this node, as far as the configuration tells: a
+    /// loopback or unspecified address, `localhost` or a name under it, or a `[[listen]]`
+    /// address on any port, in the URL or in `bootstrap`. Validation reads no host, so it
+    /// doesn't see the machine's other addresses or names, a DNS stamp's address, or a resolver
+    /// that forwards back. Not written while it is on. Don't write this key until every node
+    /// runs this version: an older node refuses it in its own file, and in a shared
+    /// configuration (where only `false` is written) it stops converging.
+    #[serde(default = "default_true", skip_serializing_if = "is_default_loop_tag")]
+    pub loop_tag: bool,
     /// Free-form labels.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<SafeString>,
@@ -572,6 +587,13 @@ pub struct Upstream {
     /// node can reach, like a Kubernetes cluster's `CoreDNS`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub node_only: bool,
+}
+
+// REQ: UPS-009, CLU-010 (ADR-192) — not written while it is on, so a node that doesn't know the
+// key (a rolling upgrade; `[[upstream]]` refuses unknown fields) still reads the shared config.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` takes a reference
+const fn is_default_loop_tag(on: &bool) -> bool {
+    *on
 }
 
 /// Options for a `recursive://` upstream (`spec/03` §6).
@@ -1999,7 +2021,7 @@ impl Default for SupportConfig {
 
 /// REQ: OPS-012 (ADR-163, GitHub issue #7) — the watchdog. A thread outside the runtime checks
 /// every 5 s that the runtime runs a task and that this node's own UDP listener answers; when
-/// neither has passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with
+/// either one hasn't passed for `stall_secs` it writes a dump under `<data_dir>/watchdog/` and, with
 /// `action = "restart"`, exits (status 70) so the supervisor (systemd, Compose, Kubernetes)
 /// starts the node again. Restart-only. Node-local.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
